@@ -1353,8 +1353,7 @@ public:
                        wetype_config::DefaultLanguage::English;
     current->traditional = false;
     ic->statusArea().addAction(StatusGroup::InputMethod, &settingsAction_);
-    if (ic->capabilityFlags().test(CapabilityFlag::Password) ||
-        ic->capabilityFlags().test(CapabilityFlag::Sensitive))
+    if (ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     send(ic, "open");
   }
@@ -1388,13 +1387,10 @@ public:
     if (!list || index >= unsigned(list->totalSize()))
       return;
     send(ic, "select", "", index, revision);
-    auto *s = state(ic);
-    s->vMode = false;
-    s->preedit.clear();
-    s->cursor = 0;
-    clearDisplayState(s);
-    ic->inputPanel().setCandidateList(nullptr);
-    panel(ic, s);
+    // Keep the current client preedit until the asynchronous select response
+    // commits the chosen text.  Clearing it here races React/contenteditable
+    // clients (notably Perplexity) and can overwrite the later commit.
+    // receive() will apply the response's empty preedit and refresh the panel.
   }
   void keyEvent(const InputMethodEntry &, KeyEvent &e) override {
     auto key = e.key();
@@ -1508,8 +1504,7 @@ public:
     if (key.states().test(KeyState::Ctrl) || key.states().test(KeyState::Alt) ||
         key.states().test(KeyState::Super))
       return;
-    if (ic->capabilityFlags().test(CapabilityFlag::Password) ||
-        ic->capabilityFlags().test(CapabilityFlag::Sensitive))
+    if (ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     if (networkEnabled_ && !s->vMode && s->preedit.empty() &&
         *config_.shortcuts->aiAssistant &&
