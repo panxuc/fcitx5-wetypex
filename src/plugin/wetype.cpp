@@ -1353,8 +1353,7 @@ public:
                        wetype_config::DefaultLanguage::English;
     current->traditional = false;
     ic->statusArea().addAction(StatusGroup::InputMethod, &settingsAction_);
-    if (ic->capabilityFlags().test(CapabilityFlag::Password) ||
-        ic->capabilityFlags().test(CapabilityFlag::Sensitive))
+    if (ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     send(ic, "open");
   }
@@ -1505,8 +1504,7 @@ public:
     if (key.states().test(KeyState::Ctrl) || key.states().test(KeyState::Alt) ||
         key.states().test(KeyState::Super))
       return;
-    if (ic->capabilityFlags().test(CapabilityFlag::Password) ||
-        ic->capabilityFlags().test(CapabilityFlag::Sensitive))
+    if (ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     if (networkEnabled_ && !s->vMode && s->preedit.empty() &&
         *config_.shortcuts->aiAssistant &&
