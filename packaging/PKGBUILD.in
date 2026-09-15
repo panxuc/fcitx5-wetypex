@@ -1,6 +1,6 @@
 pkgname=fcitx5-wetypex
 pkgver=2.2.3.657
-pkgrel=2
+pkgrel=3
 pkgdesc='WeTypeX native Linux input method for Fcitx5'
 url='https://github.com/panxuc/fcitx5-wetypex'
 arch=('x86_64')
