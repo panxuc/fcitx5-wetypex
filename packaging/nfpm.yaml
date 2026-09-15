@@ -39,7 +39,7 @@ overrides:
       - ffmpeg
       - wl-clipboard
       - libnotify-bin
-      - policykit-1
+      - polkitd
   rpm:
     depends:
       - glibc
