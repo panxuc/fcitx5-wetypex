@@ -198,6 +198,7 @@ struct State : InputContextProperty {
   bool doubleQuoteLeft = true, singleQuoteLeft = true;
   bool english = false, fullWidth = false, traditional = false,
        englishPunctuation = false, vMode = false;
+  bool selectionPending = false;
   KeySym modifierCandidate = FcitxKey_None;
   TrackableObjectReference<InputContext> ic;
   State(uint64_t n, InputContext &context) : id(n), ic(context.watch()) {}
@@ -945,6 +946,7 @@ class WeType : public InputMethodEngine {
         auto *s = state(ic);
         ++s->epoch;
         s->seq = s->applied = 0;
+        s->selectionPending = false;
         s->preedit.clear();
         s->cursor = 0;
         clearDisplayState(s);
@@ -1049,7 +1051,7 @@ class WeType : public InputMethodEngine {
     if (writer_)
       writer_->setEnabled(!outbound_.empty());
   }
-  void send(InputContext *ic, const char *op, const std::string &key = "",
+  bool send(InputContext *ic, const char *op, const std::string &key = "",
             int index = 0, int64_t revision = -1, int64_t cursor = -1,
             const std::string &mapped = {}, int pairCursor = -1) {
     auto *s = state(ic);
@@ -1059,11 +1061,13 @@ class WeType : public InputMethodEngine {
     // candidate, as on the native Windows/macOS clients.
     if (std::string_view(op) != "poll")
       s->candidatePage = s->candidateCursor = 0;
+    if (std::string_view(op) != "select" && std::string_view(op) != "poll")
+      s->selectionPending = false;
     if (child_ <= 0 && !start()) {
       failed_ = true;
       scheduleRestart();
       panel(ic, s);
-      return;
+      return false;
     }
     auto json = wire::object();
     wire::put(json.get(), "session", int64_t(s->id));
@@ -1126,10 +1130,11 @@ class WeType : public InputMethodEngine {
     outbound_ += wire::dump(json.get()) + '\n';
     if (outbound_.size() > 262144) {
       fail();
-      return;
+      return false;
     }
     activity_ = now(CLOCK_MONOTONIC);
     flush();
+    return true;
   }
   void receive(const std::string &line) {
     auto j = wire::parse(line);
@@ -1145,8 +1150,7 @@ class WeType : public InputMethodEngine {
         for (auto &[id, ref] : contexts_)
           if (auto *ic = ref.get();
               ic && ic->hasFocus() &&
-              !ic->capabilityFlags().test(CapabilityFlag::Password) &&
-              !ic->capabilityFlags().test(CapabilityFlag::Sensitive))
+              !ic->capabilityFlags().test(CapabilityFlag::Password))
             send(ic, "open");
       }
       return;
@@ -1183,6 +1187,7 @@ class WeType : public InputMethodEngine {
       commitStringAtCursor(ic, cursorCommit, size_t(cursorCommitPosition));
     if (seq != s->seq)
       return;
+    s->selectionPending = false;
     s->preedit = wire::str(j.get(), "preedit");
     s->cursor =
         std::min<size_t>(std::max<int64_t>(0, wire::number(j.get(), "cursor",
@@ -1382,15 +1387,24 @@ public:
       send(e.inputContext(), "close");
   }
   void select(InputContext *ic, unsigned index, int64_t revision = -1) {
+    auto *s = state(ic);
+    if (s->selectionPending)
+      return;
     auto *list = dynamic_cast<CommonCandidateList *>(
         ic->inputPanel().candidateList().get());
     if (!list || index >= unsigned(list->totalSize()))
       return;
-    send(ic, "select", "", index, revision);
+    if (!send(ic, "select", "", index, revision))
+      return;
+    s->selectionPending = true;
+    s->vMode = false;
+    ic->inputPanel().setCandidateList(nullptr);
     // Keep the current client preedit until the asynchronous select response
     // commits the chosen text.  Clearing it here races React/contenteditable
     // clients (notably Perplexity) and can overwrite the later commit.
-    // receive() will apply the response's empty preedit and refresh the panel.
+    // Hide the stale candidate list immediately; receive() will apply the
+    // response's empty preedit and refresh the panel.
+    panel(ic, s);
   }
   void keyEvent(const InputMethodEntry &, KeyEvent &e) override {
     auto key = e.key();
