@@ -52,7 +52,9 @@ last_group_id = int(runtime.get("group_id", 0))
 last_remote_version = int(runtime.get("remote_version", 0))
 last_local_kind = str(runtime.get("local_kind", ""))
 last_local_digest = str(runtime.get("local_digest", ""))
-needs_local_baseline = "local_digest" not in runtime
+last_clipboard_enabled = bool(runtime.get("clipboard_enabled", False))
+baseline_pending = bool(
+    runtime.get("clipboard_baseline_pending", not last_clipboard_enabled))
 once = "--once" in sys.argv
 clipboard_owner = None
 wl_copy = shutil.which("wl-copy") if os.environ.get("WAYLAND_DISPLAY") else None
@@ -149,22 +151,19 @@ for obsolete in (state_dir / "clipboard-inbox.json",
 while True:
     helper_environment = os.environ.copy()
     helper_environment["QT_IM_MODULE"] = "none"
-    before_fetch = local_clipboard(helper_environment)
+    # wl-paste may create a visible temporary toplevel on compositors without
+    # data-control support (notably GNOME/Mutter). Do not touch the system
+    # clipboard unless the paired device group currently has clipboard sync on.
+    before_fetch = (local_clipboard(helper_environment)
+                    if last_clipboard_enabled else None)
     group = call("group-info", str(last_remote_version))
     if group.get("ok"):
         atomic_json(state_dir / "sync-state.json", group)
         group_id = int(group.get("group_id", 0))
         functions = int(group.get("func_switch", 0))
-        after_fetch = local_clipboard(helper_environment)
-        local = after_fetch if after_fetch is not None else before_fetch
-        local_kind = local[0] if local else ""
-        local_digest = local[2] if local else ""
-        if needs_local_baseline:
-            # Migrate from the old per-format digest state without interpreting
-            # the clipboard present during package upgrade as a fresh copy.
-            last_local_kind = local_kind
-            last_local_digest = local_digest
-            needs_local_baseline = False
+        clipboard_enabled = bool(group_id and functions & 1)
+        same_group = group_id == last_group_id
+        was_clipboard_enabled = last_clipboard_enabled and same_group
 
         # Clipboard version counters are scoped to a device group. On first
         # start, re-pairing, or disabled sync, establish a local baseline and
@@ -172,12 +171,26 @@ while True:
         if group_id != last_group_id:
             last_group_id = group_id
             last_remote_version = 0
-            last_local_kind = local_kind
-            last_local_digest = local_digest
-        elif not group_id or not functions & 1:
-            last_local_kind = local_kind
-            last_local_digest = local_digest
-        if group_id and functions & 1:
+            baseline_pending = True
+        if not clipboard_enabled:
+            baseline_pending = True
+        elif not was_clipboard_enabled:
+            baseline_pending = True
+
+        local = None
+        if clipboard_enabled:
+            after_fetch = local_clipboard(helper_environment)
+            local = after_fetch if after_fetch is not None else before_fetch
+            local_kind = local[0] if local else ""
+            local_digest = local[2] if local else ""
+            if baseline_pending and local is not None:
+                # Starting or re-enabling sync establishes a baseline. Do not
+                # upload the clipboard contents that already existed then.
+                last_local_kind = local[0]
+                last_local_digest = local[2]
+                baseline_pending = False
+
+        if clipboard_enabled:
             version = int(group.get("clipboard_version", 0))
             remote = str(group.get("clipboard", ""))
             remote_type = int(group.get("clipboard_type", 0))
@@ -190,9 +203,9 @@ while True:
             expired = bool(expire_at and expire_at <= int(time.time() * 1000))
 
             local_changed = bool(
-                local and (not last_local_digest or
-                           local_kind != last_local_kind or
-                           local_digest != last_local_digest))
+                local is not None and not baseline_pending and
+                (not last_local_digest or local_kind != last_local_kind or
+                 local_digest != last_local_digest))
             if local_changed:
                 if local_kind == "empty":
                     # Empty clipboard is local state, but the service has no
@@ -259,7 +272,10 @@ while True:
         atomic_json(runtime_path, {"group_id": last_group_id,
                                    "remote_version": last_remote_version,
                                    "local_kind": last_local_kind,
-                                   "local_digest": last_local_digest})
+                                   "local_digest": last_local_digest,
+                                   "clipboard_enabled": clipboard_enabled,
+                                   "clipboard_baseline_pending": baseline_pending})
+        last_clipboard_enabled = clipboard_enabled
     if once:
         break
     time.sleep(3 if group.get("ok") else 10)

@@ -138,7 +138,7 @@ def validate_runtime(target):
     with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
         command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
                  '--ro-bind','/usr','/usr','--symlink','usr/lib','/lib',
-                 '--symlink','usr/lib','/lib64','--symlink','usr/bin','/bin',
+                 '--ro-bind','/lib64','/lib64','--symlink','usr/bin','/bin',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp',
                  '--ro-bind',str(target),'/input','--ro-bind',str(support),'/support',
                  '--bind',work,'/work','--chdir','/work','--clearenv',
