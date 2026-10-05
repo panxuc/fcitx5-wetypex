@@ -72,8 +72,107 @@ def clipboard_command(arguments, environment, input=None):
     except (OSError, subprocess.TimeoutExpired):
         return None
 
+def _compositor_needs_visible_surface(environment):
+    """Report whether reading the clipboard would create a visible window.
+
+    wl-clipboard only maps a toplevel when the compositor offers neither
+    wlr-data-control nor ext-data-control. Ask the compositor directly instead
+    of guessing from the desktop name, so other compositors are covered too.
+
+    The probe itself only maps a window on a compositor that already lacks
+    data-control, and the callers below short-circuit the known desktop, so
+    the probe normally runs only where wl-clipboard would not flash anyway.
+    """
+    if not wl_paste:
+        return False
+    probe_environment = dict(environment)
+    probe_environment["WAYLAND_DEBUG"] = "1"
+    try:
+        probe = subprocess.run([wl_paste, "--list-types"], capture_output=True,
+                               timeout=4, env=probe_environment)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if probe.returncode != 0:
+        return False
+    return "data_control" not in probe.stderr.decode("utf-8", "replace")
+
+def _detect_visible_surface(environment):
+    """Decide once whether clipboard access needs a visible window."""
+    # Mutation is a known compositor without data-control, so answer without
+    # probing: a probe here would map the very window being avoided.
+    if "GNOME" in environment.get("XDG_CURRENT_DESKTOP", "").upper():
+        return True
+    return _compositor_needs_visible_surface(environment)
+
+_x11_environment_cache = None
+_x11_environment_probed = False
+_needs_visible_surface = None
+
+def surface_required(environment):
+    """Whether wl-clipboard (both directions) would map a visible window."""
+    global _needs_visible_surface
+    if _needs_visible_surface is None:
+        _needs_visible_surface = (_detect_visible_surface(environment)
+                                  if wl_paste or wl_copy else False)
+    return _needs_visible_surface
+
+def _x11_environment(environment):
+    """Environment that puts the Qt helper on X11, or None when unusable.
+
+    Reading a selection over XWayland needs no Wayland surface, so it never
+    creates a window. An unusable X11 connection aborts the helper instead of
+    returning an error, so the route is probed once and then remembered.
+    """
+    global _x11_environment_cache, _x11_environment_probed
+    if _x11_environment_probed:
+        return _x11_environment_cache
+    _x11_environment_probed = True
+    if not environment.get("DISPLAY"):
+        return None
+    xauthority = environment.get("XAUTHORITY")
+    if not xauthority or not os.access(xauthority, os.R_OK):
+        return None
+    candidate = dict(environment)
+    candidate["QT_QPA_PLATFORM"] = "xcb"
+    probe = clipboard_command([clipboard_helper, "--read-image"], candidate)
+    # 0 means an image was read, 1 means the clipboard held no image; both
+    # prove the platform plugin connected. Anything else means it aborted.
+    if probe is None or probe.returncode not in (0, 1):
+        return None
+    _x11_environment_cache = candidate
+    return _x11_environment_cache
+
+def _local_clipboard_silently(environment):
+    """Read the clipboard through Qt without creating a Wayland window."""
+    x11 = _x11_environment(environment)
+    if x11 is None:
+        return None
+    # A native pasteboard holds one logical item. Prefer its image
+    # representation, like the original macOS ClipboardMonitor, then text.
+    image = clipboard_command([clipboard_helper, "--read-image"], x11)
+    if image and image.returncode == 0 and 0 < len(image.stdout) <= 8388608:
+        return "image", image.stdout, hashlib.sha256(image.stdout).hexdigest()
+    if image is None or image.returncode not in (0, 1):
+        return None
+    text = clipboard_command([clipboard_helper, "--read-text"], x11)
+    if text and text.returncode == 0 and 0 < len(text.stdout) <= 16384:
+        try:
+            text.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return "text", text.stdout, hashlib.sha256(text.stdout).hexdigest()
+    if text is None or text.returncode not in (0, 1):
+        return None
+    return "empty", b"", hashlib.sha256(b"").hexdigest()
+
 def local_clipboard(environment):
     """Return the one native clipboard item, not independent text/image slots."""
+    if surface_required(environment):
+        # wl-clipboard would pop a window and steal focus on every poll, which
+        # cancels an in-progress composition. Read through XWayland instead.
+        silent = _local_clipboard_silently(environment)
+        if silent is not None:
+            return silent
     if wl_paste:
         advertised = clipboard_command([wl_paste, "--list-types"], environment)
         if not advertised or advertised.returncode != 0:
