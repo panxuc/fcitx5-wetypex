@@ -91,9 +91,11 @@ def _compositor_needs_visible_surface(environment):
         probe = subprocess.run([wl_paste, "--list-types"], capture_output=True,
                                timeout=4, env=probe_environment)
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
     if probe.returncode != 0:
-        return False
+        # An empty clipboard or a transient connection error says nothing
+        # about protocol support. Retry once a later poll can complete.
+        return None
     return "data_control" not in probe.stderr.decode("utf-8", "replace")
 
 def _detect_visible_surface(environment):
@@ -109,7 +111,7 @@ _x11_environment_probed = False
 _needs_visible_surface = None
 
 def surface_required(environment):
-    """Whether wl-clipboard (both directions) would map a visible window."""
+    """Cache known protocol support; retry when the probe is inconclusive."""
     global _needs_visible_surface
     if _needs_visible_surface is None:
         _needs_visible_surface = (_detect_visible_surface(environment)
@@ -161,7 +163,7 @@ def _local_clipboard_silently(environment):
         except UnicodeDecodeError:
             return None
         return "text", text.stdout, hashlib.sha256(text.stdout).hexdigest()
-    if text is None or text.returncode not in (0, 1):
+    if text is None or text.returncode != 1:
         return None
     return "empty", b"", hashlib.sha256(b"").hexdigest()
 
