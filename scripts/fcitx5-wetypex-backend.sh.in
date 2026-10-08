@@ -13,6 +13,7 @@ exec 9>"$state/backend.lock"
 flock -w 5 -E 73 9
 # The core owns its persistent caches and synchronization state. Keep them
 # across restarts so learned data and cloud/dictionary cursors can survive.
+rm -f "$state/user/persistent_data/user_dict_clean_up.bin"
 if [ "${WETYPE_DEBUG:-0}" != 1 ]; then exec 2>/dev/null; fi
 
 standalone=0
