@@ -73,7 +73,7 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 从 [GitHub Releases](https://github.com/panxuc/fcitx5-wetypex/releases/latest) 下载软件包：
 
 ```bash
-sudo pacman -U ./fcitx5-wetypex-2.2.3.657-6-x86_64.pkg.tar.zst
+sudo pacman -U ./fcitx5-wetypex-2.2.3.657-7-x86_64.pkg.tar.zst
 ```
 
 也可以从 AUR 安装：
@@ -89,7 +89,7 @@ paru -S fcitx5-wetypex
 ### Debian 与 Ubuntu
 
 ```bash
-sudo apt install ./fcitx5-wetypex_2.2.3.657-6_amd64.deb
+sudo apt install ./fcitx5-wetypex_2.2.3.657-7_amd64.deb
 ```
 
 从修订 `6` 起，deb 以 Ubuntu 24.04 LTS（Noble）的 Qt 6.4、Fcitx5 5.1.7 和 glibc 2.39 为构建基线，可用于 Ubuntu 24.04 及后续版本和 Debian 13。输入插件与 Qt5/Qt6 配置插件安装到发行版的 Fcitx5 多架构目录。修订 `5` 及此前的 deb 在 Debian Trixie 构建，需要 Qt 6.8，不能直接用于 Noble。
@@ -97,7 +97,7 @@ sudo apt install ./fcitx5-wetypex_2.2.3.657-6_amd64.deb
 ### Fedora 与兼容的 RPM 发行版
 
 ```bash
-sudo dnf install ./fcitx5-wetypex-2.2.3.657-6.x86_64.rpm
+sudo dnf install ./fcitx5-wetypex-2.2.3.657-7.x86_64.rpm
 ```
 
 FFmpeg 及部分桌面依赖可能来自发行版启用的附加软件仓库。
