@@ -59,6 +59,8 @@ Ubuntu 20.04 使用 legacy 包，且必须先具备稳定版 Fcitx5 5.0.14+、fc
 
 ## 语音没有识别结果
 
+Ubuntu 20.04 自带 PipeWire 0.2，语音录制需要升级到提供 `pw-record` 的新版 PipeWire。文字输入和账户网络功能可独立使用。
+
 先验证默认输入设备：
 
 ```bash

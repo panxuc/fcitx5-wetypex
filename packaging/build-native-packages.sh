@@ -66,6 +66,7 @@ sed -e "s|@WETYPEX_VERSION@|$version|g" \
     -e 's/libc6 (>= 2.35)/libc6 (>= 2.31)/' \
     -e 's/libstdc++6 (>= 11)/libstdc++6 (>= 9)/' \
     -e 's/libssl3 | libssl3t64/libssl1.1/' \
+    -e 's/libjson-c5/libjson-c4/' \
     "$project_root/packaging/nfpm.yaml" >"$output/nfpm-ubuntu20.yaml"
 nfpm package --config "$output/nfpm-ubuntu20.yaml" --packager deb \
     --target "$output/ubuntu20/fcitx5-wetypex-legacy_${version}-${revision}_amd64.deb"

@@ -94,7 +94,7 @@ sudo apt install ./fcitx5-wetypex_2.2.3.657-8_amd64.deb
 
 从修订 `8` 起，标准 deb 使用 Ubuntu 22.04 的 glibc 2.35、Qt5 和稳定版 Fcitx5 构建，可用于 Ubuntu 22.04、24.04、26.04 及 Debian 12/13。LLVM unwinder 已显式列入依赖，Ubuntu 26.04 会安装 `llvm-libunwind1`，避免核心因缺少 `libunwind.so.1` 无法启动。
 
-Ubuntu 20.04 和 glibc 2.31 的系统使用独立的 `fcitx5-wetypex-legacy_..._amd64.deb`。安装前需要稳定版 Fcitx5 5.0.14+、fcitx5-qt 5.0.10+ 与 LibIME 1.0.11+；20.04 原生仓库中的 `0.0~git` 预览版使用不同 ABI，不能直接加载此插件。可按 [Fcitx 上游安装说明](https://fcitx-im.org/wiki/Install_Fcitx_5) 安装稳定框架。旧系统包私有静态包含 OpenSSL 3，不替换系统的 OpenSSL 1.1。
+Ubuntu 20.04 和 glibc 2.31 的系统使用独立的 `fcitx5-wetypex-legacy_..._amd64.deb`。安装前需要稳定版 Fcitx5 5.0.14+、fcitx5-qt 5.0.10+ 与 LibIME 1.0.11+；20.04 原生仓库中的 `0.0~git` 预览版使用不同 ABI，不能直接加载此插件。可按 [Fcitx 上游安装说明](https://fcitx-im.org/wiki/Install_Fcitx_5) 安装稳定框架。旧系统包私有静态包含 OpenSSL 3，不替换系统的 OpenSSL 1.1。语音录制还需要提供 `pw-record` 的新版 PipeWire；20.04 原生的 PipeWire 0.2 不包含此工具。
 
 源码构建支持 CMake 3.16、C++17、Python 3.8、Qt5.12+，也可自动使用完整的 Qt6 开发环境。用 `-DWETYPE_QT_VERSION=5` 或 `6` 指定界面工具链。配置插件采用发行版的 Fcitx5 安装目录；不同 Qt ABI 的配置入口按构建环境提供。完整设置始终可通过 `fcitx5-wetypex-settings` 打开。
 

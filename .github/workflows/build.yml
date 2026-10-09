@@ -143,6 +143,7 @@ jobs:
             -e 's/libc6 (>= 2.35)/libc6 (>= 2.31)/' \
             -e 's/libstdc++6 (>= 11)/libstdc++6 (>= 9)/' \
             -e 's/libssl3 | libssl3t64/libssl1.1/' \
+            -e 's/libjson-c5/libjson-c4/' \
             packaging/nfpm.yaml > dist/nfpm-focal.yaml
           "$(go env GOPATH)/bin/nfpm" package --config dist/nfpm-focal.yaml --packager deb \
             --target "dist/ubuntu20/fcitx5-wetypex-legacy_${version}-${revision}_amd64.deb"

@@ -38,11 +38,11 @@ overrides:
       - bubblewrap
       - util-linux
       - python3
-      - pipewire-bin
+      - pipewire-bin | pipewire
       - ffmpeg
       - wl-clipboard
       - libnotify-bin
-      - pkexec
+      - pkexec | policykit-1
   rpm:
     depends:
       - glibc
