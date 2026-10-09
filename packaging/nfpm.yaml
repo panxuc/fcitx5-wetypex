@@ -2,14 +2,14 @@ name: fcitx5-wetypex
 arch: amd64
 platform: linux
 version: "@WETYPEX_VERSION@"
-release: "7"
+release: "8"
 section: utils
 priority: optional
 maintainer: WeTypeX contributors <https://github.com/panxuc/fcitx5-wetypex>
 description: WeTypeX native Linux input method for Fcitx5
 vendor: WeTypeX contributors
 homepage: https://github.com/panxuc/fcitx5-wetypex
-license: MIT AND curl AND ISC AND BSD-2-Clause
+license: MIT AND curl AND ISC AND BSD-2-Clause AND Apache-2.0
 scripts:
   postinstall: "@WETYPEX_PROJECT_ROOT@/packaging/post-install.sh"
 contents:
@@ -19,22 +19,22 @@ contents:
 overrides:
   deb:
     depends:
-      - libc6 (>= 2.39)
-      - libstdc++6 (>= 13.1)
+      - libc6 (>= 2.35)
+      - libstdc++6 (>= 11)
       - libc++1
-      - libssl3t64
+      - llvm-libunwind1 | libunwind-x.y
+      - libssl3 | libssl3t64
       - ca-certificates
       - libjson-c5
-      - fcitx5 (>= 5.1.7)
-      - libfcitx5-qt1
-      - libfcitx5-qt6-1
-      - libimecore0
-      - libimepinyin0
-      - libqt6widgets6
-      - libqt6network6
-      - libqt6dbus6
-      - libqt6svg6
-      - libqt6webenginewidgets6
+      - fcitx5 (>= 5.0.14)
+      - libfcitx5-qt1 (>= 5.0.10)
+      - libimecore0 (>= 1.0.11)
+      - libimepinyin0 (>= 1.0.11)
+      - libqt5widgets5
+      - libqt5network5
+      - libqt5dbus5
+      - libqt5svg5
+      - libqt5webenginewidgets5
       - bubblewrap
       - util-linux
       - python3
@@ -60,7 +60,7 @@ overrides:
       - util-linux
       - python3
       - pipewire-utils
-      - ffmpeg
+      - /usr/bin/ffmpeg
       - wl-clipboard
       - libnotify
       - polkit

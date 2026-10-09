@@ -13,7 +13,7 @@ with archive.open('wb') as raw,gzip.GzipFile(fileobj=raw,mode='wb',mtime=0,filen
         if path.suffix in ['.apk','.exe','.dll','.dylib','.deb','.zip','.pyc','.so']:raise ValueError('Unexpected binary in source release: '+str(path))
         info=tar.gettarinfo(str(path),f'fcitx5-wetypex-{version}/'+str(path.relative_to(root)));info.uid=info.gid=0;info.uname=info.gname='';info.mtime=0
         with path.open('rb') as source:tar.addfile(info,source)
-with archive.open('rb') as f:digest=hashlib.file_digest(f,'sha256').hexdigest()
+digest=hashlib.sha256(archive.read_bytes()).hexdigest()
 (output/'PKGBUILD').write_text((root/'packaging/PKGBUILD.in').read_text().replace('@SOURCE_SHA256@',digest))
 (output/'fcitx5-wetypex.install').write_text((root/'packaging/aur/fcitx5-wetypex.install').read_text())
 print(archive);print('SHA256 '+digest)

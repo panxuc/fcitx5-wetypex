@@ -199,14 +199,14 @@ public:
 
 protected:
   void mousePressEvent(QMouseEvent *event) override {
-    if (event->position().y() <= 31 && event->button() == Qt::LeftButton) {
-      dragOffset_ = event->globalPosition().toPoint() - frameGeometry().topLeft();
+    if (wetype::mousePosition(event).y() <= 31 && event->button() == Qt::LeftButton) {
+      dragOffset_ = wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
       dragging_ = true;
     }
   }
   void mouseMoveEvent(QMouseEvent *event) override {
     if (dragging_ && event->buttons().testFlag(Qt::LeftButton))
-      move(event->globalPosition().toPoint() - dragOffset_);
+      move(wetype::mouseGlobalPosition(event) - dragOffset_);
   }
   void mouseReleaseEvent(QMouseEvent *) override { dragging_ = false; }
 

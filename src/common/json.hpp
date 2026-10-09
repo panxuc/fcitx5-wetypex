@@ -15,16 +15,54 @@ struct Deleter {
 };
 using Json = std::unique_ptr<json_object, Deleter>;
 inline Json object() { return Json(json_object_new_object()); }
+#ifndef JSON_TOKENER_VALIDATE_UTF8
+inline bool validUtf8(const std::string &text) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    const auto first = static_cast<unsigned char>(text[i]);
+    if (first < 0x80)
+      continue;
+    if (first < 0xc2 || first > 0xf4)
+      return false;
+    const size_t tails = first < 0xe0 ? 1 : first < 0xf0 ? 2 : 3;
+    if (tails >= text.size() - i)
+      return false;
+    const auto second = static_cast<unsigned char>(text[i + 1]);
+    if ((first == 0xe0 && second < 0xa0) ||
+        (first == 0xed && second >= 0xa0) ||
+        (first == 0xf0 && second < 0x90) ||
+        (first == 0xf4 && second >= 0x90))
+      return false;
+    for (size_t j = 1; j <= tails; ++j)
+      if ((static_cast<unsigned char>(text[i + j]) & 0xc0) != 0x80)
+        return false;
+    i += tails;
+  }
+  return true;
+}
+#endif
 inline Json parse(const std::string &s) {
   if (s.size() >= INT_MAX)
     return {};
   json_tokener *t = json_tokener_new();
   if (!t)
     return {};
+#ifdef JSON_TOKENER_VALIDATE_UTF8
   json_tokener_set_flags(t, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+#else
+  if (!validUtf8(s)) {
+    json_tokener_free(t);
+    return {};
+  }
+  json_tokener_set_flags(t, JSON_TOKENER_STRICT);
+#endif
   auto *p = json_tokener_parse_ex(t, s.c_str(), s.size() + 1);
   bool ok = json_tokener_get_error(t) == json_tokener_success;
-  for (size_t end = json_tokener_get_parse_end(t); end < s.size(); ++end)
+#ifdef JSON_TOKENER_VALIDATE_UTF8
+  const size_t consumed = json_tokener_get_parse_end(t);
+#else
+  const size_t consumed = t->char_offset;
+#endif
+  for (size_t end = consumed; end < s.size(); ++end)
     if (!std::isspace(static_cast<unsigned char>(s[end])))
       ok = false;
   json_tokener_free(t);

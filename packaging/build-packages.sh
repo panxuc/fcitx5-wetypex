@@ -7,12 +7,13 @@ output="$project_root/dist"
 stage="$output/root"
 
 mkdir -p "$output"
-find "$output" "$output/arch" "$output/debian" "$output/fedora" \
+find "$output" "$output/arch" "$output/debian" "$output/fedora" "$output/ubuntu20" \
     -maxdepth 1 -type f \
     \( -name 'fcitx5-wetypex-*.tar.gz' -o \
        -name 'fcitx5-wetypex-*.tar.zst' -o \
        -name 'fcitx5-wetypex-*.rpm' -o \
        -name 'fcitx5-wetypex_*.deb' -o \
+       -name 'fcitx5-wetypex-legacy_*.deb' -o \
        -name 'fcitx5-wetypex-*.pkg.tar.zst' \) \
     -delete 2>/dev/null || true
 rm -rf "$stage"
@@ -39,11 +40,12 @@ fi
     while IFS= read -r -d '' file; do
         digest=$(sha256sum "$file" | cut -d' ' -f1)
         printf '%s  %s\n' "$digest" "$(basename "$file")"
-    done < <(find . ./arch ./debian ./fedora -maxdepth 1 -type f \
+    done < <(find . ./arch ./debian ./fedora ./ubuntu20 -maxdepth 1 -type f \
         \( -name 'fcitx5-wetypex-*.tar.gz' -o \
            -name 'fcitx5-wetypex-*.tar.zst' -o \
            -name 'fcitx5-wetypex-*.rpm' -o \
            -name 'fcitx5-wetypex_*.deb' -o \
+           -name 'fcitx5-wetypex-legacy_*.deb' -o \
            -name 'fcitx5-wetypex-*.pkg.tar.zst' \) \
         -print0 | sort -z)
 ) >"$output/SHA256SUMS"

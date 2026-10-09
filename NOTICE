@@ -6,6 +6,6 @@ WeTypeX 是独立的非官方兼容项目，与腾讯没有隶属、授权或背
 
 libkqueue 由其上游作者提供并使用上游许可证。打包时会将许可证安装到 `/usr/share/licenses/fcitx5-wetypex/`。
 
-默认网络桥接静态包含 curl 项目提供的 libcurl，适用 curl 上游许可证，许可证安装为 `/usr/share/licenses/fcitx5-wetypex/curl-COPYING`。TLS 使用发行版的 OpenSSL 与系统证书存储。
+默认网络桥接静态包含 curl 项目提供的 libcurl，适用 curl 上游许可证，许可证安装为 `/usr/share/licenses/fcitx5-wetypex/curl-COPYING`。TLS 使用发行版的 OpenSSL 与系统证书存储；系统 OpenSSL 低于 3 时，桥接私有静态包含固定版本 OpenSSL 3，其 Apache-2.0 许可证安装为 `openssl-LICENSE.txt`，继续使用系统证书存储。
 
 MIT 许可证只适用于本项目自行编写的适配器与工具代码。腾讯程序、词典、模型和界面资源不随本项目分发，也不受本项目许可证覆盖；libkqueue 与 libcurl 适用其各自的上游许可证。

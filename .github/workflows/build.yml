@@ -49,7 +49,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  ubuntu-noble-deb:
+  ubuntu-jammy-deb:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -59,17 +59,15 @@ jobs:
           cache: false
       - name: 安装 nFPM
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
-      - name: 在 Ubuntu 24.04 构建
+      - name: 在 Ubuntu 22.04 构建
         run: |
           mkdir -p dist/debian
-          docker build -f packaging/docker/debian.Dockerfile -t wetypex-build-noble .
+          docker build -f packaging/docker/debian.Dockerfile -t wetypex-build-jammy .
           docker run --rm --user "$(id -u):$(id -g)" \
             -e WETYPEX_BUILD_JOBS=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
-            wetypex-build-noble /src/packaging/container-stage.sh /out/debian-root lib
-          for abi in qt5 qt6; do
-            test -f "dist/debian-root/usr/lib/x86_64-linux-gnu/fcitx5/$abi/libwetypexconfig.so"
-          done
+            wetypex-build-jammy /src/packaging/container-stage.sh /out/debian-root lib
+          test -f dist/debian-root/usr/lib/x86_64-linux-gnu/fcitx5/qt5/libwetypexconfig.so
       - name: 生成 deb 与校验和
         run: |
           version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
@@ -81,12 +79,78 @@ jobs:
             --packager deb --target dist/debian/
           cd dist/debian
           sha256sum fcitx5-wetypex_*.deb > SHA256SUMS
-      - name: 保存 Ubuntu 24.04 测试包
+      - name: 保存兼容旧系统的 deb
         uses: actions/upload-artifact@v7
         with:
-          name: fcitx5-wetypex-noble-deb
+          name: fcitx5-wetypex-jammy-deb
           path: |
             dist/debian/fcitx5-wetypex_*.deb
             dist/debian/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+  deb-runtime:
+    needs: ubuntu-jammy-deb
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:bookworm-slim", "debian:trixie-slim"]
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: fcitx5-wetypex-jammy-deb
+          path: packages
+      - name: 安装软件包并启动网络诊断
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ./packages/*.deb
+          fcitx5-wetypex-account network-info
+      - name: 启动设置窗口
+        run: |
+          status=0
+          QT_QPA_PLATFORM=offscreen timeout 3 fcitx5-wetypex-settings || status=$?
+          test "$status" -eq 124
+
+  ubuntu-focal-legacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: 安装 nFPM
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+      - name: 在 Ubuntu 20.04 与固定稳定框架 SDK 构建
+        run: |
+          mkdir -p dist/ubuntu20
+          docker build -f packaging/docker/ubuntu20.Dockerfile -t wetypex-build-focal .
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -e WETYPEX_BUILD_JOBS=2 -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            wetypex-build-focal /src/packaging/container-stage.sh /out/ubuntu20-root lib
+          docker run --rm -v "$PWD/dist:/out:ro" wetypex-build-focal \
+            env WETYPE_SUPPORT_DIR=/out/ubuntu20-root/usr/lib/fcitx5-wetypex \
+            /out/ubuntu20-root/usr/bin/fcitx5-wetypex-account network-info
+      - name: 生成 legacy deb
+        run: |
+          version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          revision=$(sed -n 's/^pkgrel=//p' packaging/PKGBUILD.in)
+          sed -e "s|@WETYPEX_VERSION@|$version|g" \
+            -e "s|@WETYPEX_STAGE@|$PWD/dist/ubuntu20-root|g" \
+            -e "s|@WETYPEX_PROJECT_ROOT@|$PWD|g" \
+            -e 's/libc6 (>= 2.35)/libc6 (>= 2.31)/' \
+            -e 's/libstdc++6 (>= 11)/libstdc++6 (>= 9)/' \
+            -e 's/libssl3 | libssl3t64/libssl1.1/' \
+            packaging/nfpm.yaml > dist/nfpm-focal.yaml
+          "$(go env GOPATH)/bin/nfpm" package --config dist/nfpm-focal.yaml --packager deb \
+            --target "dist/ubuntu20/fcitx5-wetypex-legacy_${version}-${revision}_amd64.deb"
+          cd dist/ubuntu20
+          sha256sum *.deb > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcitx5-wetypex-focal-legacy
+          path: dist/ubuntu20/
           if-no-files-found: error
           retention-days: 30

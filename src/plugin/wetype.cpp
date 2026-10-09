@@ -35,6 +35,8 @@
 #include <spawn.h>
 #include <string>
 #include <string_view>
+#include <type_traits>
+#include <utility>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -43,6 +45,14 @@
 extern char **environ;
 namespace {
 using namespace fcitx;
+template <typename Context, typename Flag, typename = void>
+struct HasCursorCommit : std::false_type {};
+template <typename Context, typename Flag>
+struct HasCursorCommit<Context, Flag,
+    std::void_t<decltype(Flag::CommitStringWithCursor),
+                decltype(std::declval<Context &>().commitStringWithCursor(
+                    std::declval<const std::string &>(), size_t{}))>>
+    : std::true_type {};
 struct PunctuationEntry {
   char ascii;
   const char *full;
@@ -345,13 +355,16 @@ class WeType : public InputMethodEngine {
       return entry->englishHalf;
     return entry->normal;
   }
-  static void commitStringAtCursor(InputContext *ic, const std::string &text,
+  template <typename Context, typename Flag = CapabilityFlag>
+  static void commitStringAtCursor(Context *ic, const std::string &text,
                                    size_t cursor) {
     const auto length = utf8::length(text);
     cursor = std::min(cursor, length);
-    if (ic->capabilityFlags().test(CapabilityFlag::CommitStringWithCursor)) {
-      ic->commitStringWithCursor(text, cursor);
-      return;
+    if constexpr (HasCursorCommit<Context, Flag>::value) {
+      if (ic->capabilityFlags().test(Flag::CommitStringWithCursor)) {
+        ic->commitStringWithCursor(text, cursor);
+        return;
+      }
     }
 
     // XIM and some Wayland text-input clients cannot express a cursor inside
@@ -752,7 +765,7 @@ class WeType : public InputMethodEngine {
     for (auto &[key, value] : values) {
       bool found = false;
       for (auto &existing : lines)
-        if (existing.starts_with(key + "=")) {
+        if (existing.rfind(key + "=", 0) == 0) {
           existing = key + "=" + value;
           found = true;
           break;

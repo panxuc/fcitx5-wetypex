@@ -6,6 +6,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDBusInterface>
+#include <QDBusPendingCall>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDialog>
@@ -785,7 +786,13 @@ int main(int argc, char **argv) {
   input.body->addWidget(rowsCard(
       {radioRow(pinyin), radioRow(doublePinyin, doubleScheme),
        radioRow(wubi, wubiScheme), row("五笔功能", {}, wubiSetup, 44)}));
-  QObject::connect(inputGroup, &QButtonGroup::idClicked, [=](int id) {
+  QObject::connect(inputGroup,
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+                   &QButtonGroup::idClicked,
+#else
+                   qOverload<int>(&QButtonGroup::buttonClicked),
+#endif
+                   [=](int id) {
     writeSetting("input_mode", id == 5   ? "wubi"
                                : id == 1 ? "double_pinyin"
                                          : "pinyin");
@@ -793,9 +800,9 @@ int main(int argc, char **argv) {
     doubleScheme->setEnabled(id == 1);
   });
   QObject::connect(
-      doubleScheme, &QComboBox::currentIndexChanged,
+      doubleScheme, qOverload<int>(&QComboBox::currentIndexChanged),
       [](int value) { writeSetting("double_pinyin_scheme", value); });
-  QObject::connect(wubiScheme, &QComboBox::currentIndexChanged,
+  QObject::connect(wubiScheme, qOverload<int>(&QComboBox::currentIndexChanged),
                    [](int value) { writeSetting("wubi_solution", value); });
   auto *emojiSetup = new QPushButton("设置...");
   QObject::connect(emojiSetup, &QPushButton::clicked, [&window] {
@@ -899,7 +906,7 @@ int main(int argc, char **argv) {
   auto *microphone = new QComboBox;
   microphone->addItem("自动检测");
   QProcess pipewire;
-  pipewire.start("pw-dump", {});
+  pipewire.start(QStringLiteral("pw-dump"), QStringList{});
   if (pipewire.waitForFinished(2000)) {
     const auto nodes =
         QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
@@ -922,7 +929,7 @@ int main(int argc, char **argv) {
       microphone->setCurrentIndex(index);
   }
   QObject::connect(
-      microphone, &QComboBox::currentIndexChanged, [microphone](int index) {
+      microphone, qOverload<int>(&QComboBox::currentIndexChanged), [microphone](int index) {
         writeSetting("voice_microphone",
                      index > 0
                          ? QJsonValue::fromVariant(microphone->itemData(index))
@@ -1106,7 +1113,7 @@ int main(int argc, char **argv) {
                       appearanceStatus);
   };
   QObject::connect(candidateSize, &QSlider::sliderReleased, applyVisual);
-  QObject::connect(theme, &QComboBox::currentIndexChanged,
+  QObject::connect(theme, qOverload<int>(&QComboBox::currentIndexChanged),
                    [=](int) { applyVisual(); });
   pages->addWidget(visual.widget);
 
@@ -1192,7 +1199,7 @@ int main(int argc, char **argv) {
   const auto syncState = readJsonObject(
       QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
       "/fcitx5-wetypex/state/sync-state.json");
-  const qint64 syncGroup = syncState.value("group_id").toInteger();
+  const qint64 syncGroup = wetype::jsonInteger(syncState.value("group_id"));
   const int syncFunctions = syncState.value("func_switch").toInt();
   const bool syncAvailable =
       syncGroup > 0 &&

@@ -73,7 +73,7 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 从 [GitHub Releases](https://github.com/panxuc/fcitx5-wetypex/releases/latest) 下载软件包：
 
 ```bash
-sudo pacman -U ./fcitx5-wetypex-2.2.3.657-7-x86_64.pkg.tar.zst
+sudo pacman -U ./fcitx5-wetypex-2.2.3.657-8-x86_64.pkg.tar.zst
 ```
 
 也可以从 AUR 安装：
@@ -89,18 +89,24 @@ paru -S fcitx5-wetypex
 ### Debian 与 Ubuntu
 
 ```bash
-sudo apt install ./fcitx5-wetypex_2.2.3.657-7_amd64.deb
+sudo apt install ./fcitx5-wetypex_2.2.3.657-8_amd64.deb
 ```
 
-从修订 `6` 起，deb 以 Ubuntu 24.04 LTS（Noble）的 Qt 6.4、Fcitx5 5.1.7 和 glibc 2.39 为构建基线，可用于 Ubuntu 24.04 及后续版本和 Debian 13。输入插件与 Qt5/Qt6 配置插件安装到发行版的 Fcitx5 多架构目录。修订 `5` 及此前的 deb 在 Debian Trixie 构建，需要 Qt 6.8，不能直接用于 Noble。
+从修订 `8` 起，标准 deb 使用 Ubuntu 22.04 的 glibc 2.35、Qt5 和稳定版 Fcitx5 构建，可用于 Ubuntu 22.04、24.04、26.04 及 Debian 12/13。LLVM unwinder 已显式列入依赖，Ubuntu 26.04 会安装 `llvm-libunwind1`，避免核心因缺少 `libunwind.so.1` 无法启动。
+
+Ubuntu 20.04 和 glibc 2.31 的系统使用独立的 `fcitx5-wetypex-legacy_..._amd64.deb`。安装前需要稳定版 Fcitx5 5.0.14+、fcitx5-qt 5.0.10+ 与 LibIME 1.0.11+；20.04 原生仓库中的 `0.0~git` 预览版使用不同 ABI，不能直接加载此插件。可按 [Fcitx 上游安装说明](https://fcitx-im.org/wiki/Install_Fcitx_5) 安装稳定框架。旧系统包私有静态包含 OpenSSL 3，不替换系统的 OpenSSL 1.1。
+
+源码构建支持 CMake 3.16、C++17、Python 3.8、Qt5.12+，也可自动使用完整的 Qt6 开发环境。用 `-DWETYPE_QT_VERSION=5` 或 `6` 指定界面工具链。配置插件采用发行版的 Fcitx5 安装目录；不同 Qt ABI 的配置入口按构建环境提供。完整设置始终可通过 `fcitx5-wetypex-settings` 打开。
 
 ### Fedora 与兼容的 RPM 发行版
 
 ```bash
-sudo dnf install ./fcitx5-wetypex-2.2.3.657-7.x86_64.rpm
+sudo dnf install ./fcitx5-wetypex-2.2.3.657-8.x86_64.rpm
 ```
 
 FFmpeg 及部分桌面依赖可能来自发行版启用的附加软件仓库。
+
+RPM 以 Fedora 40 为构建基线。Arch 是滚动发行版，发布包跟随当前仓库；旧系统应保持库版本一致或在对应环境从源码构建。
 
 ### 便携归档
 

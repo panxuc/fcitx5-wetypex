@@ -82,6 +82,13 @@ def select_asset(assets, family):
         "fedora": re.compile(r"^fcitx5-wetypex-[^-]+-\d+\.x86_64\.rpm$"),
     }
     pattern = patterns.get(family)
+    if family == "debian":
+        try:
+            glibc = tuple(int(part) for part in os.confstr("CS_GNU_LIBC_VERSION").split()[-1].split("."))
+        except (OSError, ValueError, AttributeError):
+            glibc = ()
+        if glibc and glibc < (2, 35):
+            pattern = re.compile(r"^fcitx5-wetypex-legacy_[^_]+_amd64\.deb$")
     if not pattern:
         return None
     return next(

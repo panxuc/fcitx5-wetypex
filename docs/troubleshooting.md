@@ -41,7 +41,11 @@ fcitx5-wetypex-setup --archive /path/to/WeType_2.2.3_657.zip
 
 ## Ubuntu 24.04 设置窗口无法启动
 
-若出现 `Qt_6.8 not found`，请使用修订 `6` 起的 Noble 构建包。修订 `5` 的 deb 不能通过重装 Noble 的 Qt 6.4 修复。不要把 Qt6 插件软链到 Qt5 配置工具目录；修复包分别安装 `qt5/libwetypexconfig.so` 与 `qt6/libwetypexconfig.so`，并沿用发行版的 Fcitx5 多架构目录。
+若出现 `Qt_6.8 not found`，请升级兼容构建包。修订 `6/7` 的 deb 以 Noble 构建，修订 `8` 的标准 deb 以 Jammy/Qt5 构建。修订 `5` 的 deb 不能通过重装 Noble 的 Qt 6.4 修复。不要把 Qt6 插件软链到 Qt5 配置工具目录；构建按可用 SDK 提供对应 ABI 的配置入口，并沿用发行版的 Fcitx5 多架构目录。完整设置可直接运行 `fcitx5-wetypex-settings`。
+
+若日志提示 `libunwind.so.1` 缺失，Ubuntu 26.04 可安装 `llvm-libunwind1` 后重启 Fcitx5；修订 `8` 的 deb 已声明 LLVM unwinder 依赖。GNU 的 `libunwind8` 提供不同 SONAME，不要靠手动软链替代。核心无法加载时，中英文切换看似失效或只能输出英文字母；先运行 `fcitx5-wetypex-account network-info` 和 `fcitx5-wetypex-setup --check` 恢复核心，再检查切换快捷键。
+
+Ubuntu 20.04 使用 legacy 包，且必须先具备稳定版 Fcitx5 5.0.14+、fcitx5-qt 5.0.10+、LibIME 1.0.11+。系统仓库的 `0.0~git` 预览框架 ABI 不兼容；不能使用 `--force-depends` 绕过要求。自动更新器按 glibc 基线区分标准包与 legacy 包。
 
 ## 个人词库与常用语同步
 

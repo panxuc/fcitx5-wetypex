@@ -88,7 +88,7 @@ QString localAddress() {
 bool readVarint(const QByteArray &data, qsizetype &offset, quint64 &value) {
   value = 0;
   for (unsigned shift = 0; shift < 64 && offset < data.size(); shift += 7) {
-    const quint8 byte = quint8(data[offset++]);
+    const quint8 byte = quint8(data.at(offset++));
     value |= quint64(byte & 0x7f) << shift;
     if (!(byte & 0x80))
       return true;
@@ -355,12 +355,12 @@ public:
           [this, myDevices](const QJsonObject &result) {
             QMenu menu(this);
             const qint64 self =
-                result.value(QStringLiteral("self_uin")).toInteger();
+                wetype::jsonInteger(result.value(QStringLiteral("self_uin")));
             for (const auto &value :
                  result.value(QStringLiteral("devices")).toArray()) {
               const auto device = value.toObject();
               const qint64 uin =
-                  device.value(QStringLiteral("uin")).toInteger();
+                  wetype::jsonInteger(device.value(QStringLiteral("uin")));
               if (uin <= 0 || uin == self)
                 continue;
               const int platform =
@@ -572,8 +572,8 @@ private:
           poll_.start();
       } else if (type.endsWith(QStringLiteral("_progress"))) {
         const qint64 done =
-            event.value(QStringLiteral("transferred")).toInteger();
-        const qint64 total = event.value(QStringLiteral("total")).toInteger();
+            wetype::jsonInteger(event.value(QStringLiteral("transferred")));
+        const qint64 total = wetype::jsonInteger(event.value(QStringLiteral("total")));
         progress_->show();
         progress_->setValue(total > 0 ? int(done * 1000 / total) : 0);
         status_->setText(type.startsWith(QStringLiteral("upload"))

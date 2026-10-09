@@ -86,11 +86,12 @@ jobs:
             while IFS= read -r -d '' file; do
               digest=$(sha256sum "$file" | cut -d' ' -f1)
               printf '%s  %s\n' "$digest" "$(basename "$file")"
-            done < <(find arch debian fedora . -maxdepth 1 -type f \
+            done < <(find arch debian fedora ubuntu20 . -maxdepth 1 -type f \
               \( -name 'fcitx5-wetypex-*.tar.gz' -o \
                  -name 'fcitx5-wetypex-*.tar.zst' -o \
                  -name 'fcitx5-wetypex-*.rpm' -o \
                  -name 'fcitx5-wetypex_*.deb' -o \
+                 -name 'fcitx5-wetypex-legacy_*.deb' -o \
                  -name 'fcitx5-wetypex-*.pkg.tar.zst' \) \
               -print0 | sort -z)
           ) > dist/SHA256SUMS
@@ -103,6 +104,7 @@ jobs:
             dist/arch/fcitx5-wetypex-*.pkg.tar.zst
             dist/arch/fcitx5-wetypex-*.tar.gz
             dist/debian/fcitx5-wetypex_*.deb
+            dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
             dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
             dist/SHA256SUMS
@@ -116,6 +118,7 @@ jobs:
             dist/arch/fcitx5-wetypex-*.pkg.tar.zst
             dist/arch/fcitx5-wetypex-*.tar.gz
             dist/debian/fcitx5-wetypex_*.deb
+            dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
             dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
             dist/SHA256SUMS

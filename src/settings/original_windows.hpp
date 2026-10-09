@@ -1,4 +1,5 @@
 #pragma once
+#include "../common/qt_helpers.hpp"
 
 #include <QAbstractButton>
 #include <QBoxLayout>
@@ -154,7 +155,11 @@ protected:
     if (underMouse())
       painter.fillRect(rect(), QColor(0, 0, 0, 12));
   }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   void enterEvent(QEnterEvent *event) override {
+#else
+  void enterEvent(QEvent *event) override {
+#endif
     QAbstractButton::enterEvent(event);
     update();
   }
@@ -207,15 +212,15 @@ public:
 
 protected:
   void mousePressEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton && event->position().y() < 58) {
+    if (event->button() == Qt::LeftButton && wetype::mousePosition(event).y() < 58) {
       dragOffset_ =
-          event->globalPosition().toPoint() - frameGeometry().topLeft();
+          wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
       event->accept();
     }
   }
   void mouseMoveEvent(QMouseEvent *event) override {
     if (event->buttons().testFlag(Qt::LeftButton) && !dragOffset_.isNull()) {
-      move(event->globalPosition().toPoint() - dragOffset_);
+      move(wetype::mouseGlobalPosition(event) - dragOffset_);
       event->accept();
     }
   }

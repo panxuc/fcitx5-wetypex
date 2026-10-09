@@ -33,7 +33,9 @@ class ServiceTransport {
   void dropPeer(int fd) {
     close(fd);
     peers_.erase(fd);
-    std::erase_if(ready_, [fd](const auto &item) { return item.first == fd; });
+    ready_.erase(std::remove_if(ready_.begin(), ready_.end(),
+                               [fd](const auto &item) { return item.first == fd; }),
+                 ready_.end());
   }
   bool collect(int fd, std::string &buffer) {
     size_t end;

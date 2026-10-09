@@ -121,8 +121,14 @@ def install_ui_resources(archive, data):
             path=data/relative;path.parent.mkdir(parents=True,exist_ok=True)
             temporary=path.with_suffix(path.suffix+'.tmp');temporary.write_bytes(z.read(member));temporary.replace(path)
 
+def stream_digest(stream, algorithm):
+    result=hashlib.new(algorithm)
+    for block in iter(lambda: stream.read(1024*1024), b''):
+        result.update(block)
+    return result.hexdigest()
+
 def digest(path):
-    with path.open('rb') as stream:return hashlib.file_digest(stream,'sha256').hexdigest()
+    with path.open('rb') as stream:return stream_digest(stream,'sha256')
 
 def validate_runtime(target):
     support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','/usr/lib/fcitx5-wetypex'))
@@ -300,7 +306,7 @@ def main():
             name=row['name']
             if pathlib.Path(name).name!=name:raise ValueError('Invalid dictionary path')
             with (resources/name).open('rb') as f:
-                if hashlib.file_digest(f,'md5').hexdigest()!=row['md5']:raise ValueError('Dictionary digest mismatch: '+name)
+                if stream_digest(f,'md5')!=row['md5']:raise ValueError('Dictionary digest mismatch: '+name)
         (runtime/'dicts.txt').write_text('\n'.join(f"{r['type']} {r['version']} {r['name']}" for r in rows if not r['is_cell'])+'\n')
         (runtime/'runtime.json').write_text(json.dumps({'version':UPSTREAM_VERSION,'engine_sha256':ENGINE_SHA,'archive_sha256':ARCHIVE_SHA,'source':URL,'protocol':1},indent=2)+'\n')
         if target.exists():
