@@ -1,5 +1,6 @@
 #include "common/qt_helpers.hpp"
 #include <QApplication>
+#include <QCloseEvent>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -10,12 +11,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLockFile>
 #include <QLocalSocket>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QScrollArea>
 #include <QStandardPaths>
 #include <QTabWidget>
+#include <QTabBar>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -42,19 +45,54 @@ static void clearLayout(QLayout *layout) {
     delete item;
   }
 }
-static void sendAction(quint64 session, const QString &action,
-                       const QString &text = {}) {
+static bool sendAction(quint64 session, quint64 epoch, const QString &token,
+                       const QString &action, const QString &text = {}) {
   QDir().mkpath(stateDir());
   QSaveFile file(stateDir() + "/vmode-action.json");
   if (!file.open(QIODevice::WriteOnly))
-    return;
+    return false;
   QJsonObject value{{"version", QDateTime::currentMSecsSinceEpoch()},
                     {"session", static_cast<qint64>(session)},
+                    {"epoch", static_cast<qint64>(epoch)},
+                    {"token", token},
                     {"action", action},
                     {"text", text}};
-  file.write(QJsonDocument(value).toJson(QJsonDocument::Compact));
-  file.commit();
+  const auto bytes = QJsonDocument(value).toJson(QJsonDocument::Compact);
+  if (file.write(bytes) != bytes.size())
+    return false;
+  file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+  return file.commit();
 }
+class VModeWindow : public QWidget {
+  quint64 session_, epoch_;
+  QString token_;
+  bool actionSent_ = false;
+
+public:
+  VModeWindow(quint64 session, quint64 epoch, QString token)
+      : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint |
+                             Qt::WindowStaysOnTopHint |
+                             Qt::WindowDoesNotAcceptFocus),
+        session_(session), epoch_(epoch), token_(std::move(token)) {
+    setAttribute(Qt::WA_ShowWithoutActivating);
+    setFocusPolicy(Qt::NoFocus);
+  }
+  void finish(const QString &action, const QString &text = {}) {
+    if (sendAction(session_, epoch_, token_, action, text)) {
+      actionSent_ = true;
+      close();
+    }
+  }
+
+protected:
+  void closeEvent(QCloseEvent *event) override {
+    if (!actionSent_)
+      sendAction(session_, epoch_, token_, "cancel");
+    QWidget::closeEvent(event);
+    // Tool windows do not necessarily trigger quitOnLastWindowClosed.
+    QCoreApplication::quit();
+  }
+};
 static QJsonArray hotwords() {
   QLocalSocket socket;
   socket.connectToServer(stateDir() + "/control.sock");
@@ -70,6 +108,7 @@ static QJsonArray hotwords() {
 }
 static QPushButton *menuButton(const QString &title, const QString &icon) {
   auto *button = new QPushButton(title);
+  button->setFocusPolicy(Qt::NoFocus);
   button->setIcon(QIcon(candidateIcon(icon)));
   button->setIconSize({22, 22});
   button->setFixedSize(96, 58);
@@ -78,21 +117,40 @@ static QPushButton *menuButton(const QString &title, const QString &icon) {
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
   app.setApplicationName("fcitx5-wetypex-vmode");
+  QDir().mkpath(stateDir());
+  QLockFile lock(stateDir() + "/vmode.lock");
+  lock.setStaleLockTime(0);
+  if (!lock.tryLock())
+    return 0;
   quint64 session =
       argc > 1 ? QString::fromLocal8Bit(argv[1]).toULongLong() : 0;
   int x = argc > 2 ? QString::fromLocal8Bit(argv[2]).toInt() : 0;
   int y = argc > 3 ? QString::fromLocal8Bit(argv[3]).toInt() : 0;
-  QWidget window(nullptr,
-                 Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
+  const auto epoch = argc > 4 ? QString::fromLocal8Bit(argv[4]).toULongLong() : 0;
+  const auto token = argc > 5 ? QString::fromLocal8Bit(argv[5]) : QString();
+  VModeWindow window(session, epoch, token);
+  window.setWindowTitle("WeTypeX 快捷工具");
   window.setStyleSheet(
       "QWidget{background:#f7f7f7;color:#202124;font:14px 'Noto Sans CJK SC';}"
       "QPushButton{background:white;border:1px solid "
       "#e7e7e7;border-radius:8px;padding:6px;}"
       "QPushButton:hover{border-color:#23c891;background:#f2fffa;}"
       "QTabWidget::pane{border:0;} QTabBar::tab:selected{color:#23c891;}");
-  auto *root = new QVBoxLayout(&window);
-  root->setContentsMargins(8, 8, 8, 8);
-  root->setSpacing(6);
+  auto *outer = new QVBoxLayout(&window);
+  outer->setContentsMargins(8, 8, 8, 8);
+  outer->setSpacing(6);
+  auto *header = new QHBoxLayout;
+  header->addWidget(new QLabel("快捷工具"));
+  header->addStretch();
+  auto *close = new QPushButton("关闭");
+  close->setFocusPolicy(Qt::NoFocus);
+  QObject::connect(close, &QPushButton::clicked, &window, &QWidget::close);
+  header->addWidget(close);
+  outer->addLayout(header);
+  auto *body = new QWidget;
+  auto *root = new QVBoxLayout(body);
+  root->setContentsMargins(0, 0, 0, 0);
+  outer->addWidget(body);
   auto showList = [&](const QString &title,
                       const QList<QPair<QString, QString>> &items) {
     clearLayout(root);
@@ -103,14 +161,15 @@ int main(int argc, char **argv) {
     layout->setContentsMargins(0, 0, 0, 0);
     for (const auto &[label, text] : items) {
       auto *button = new QPushButton(label);
+      button->setFocusPolicy(Qt::NoFocus);
       QObject::connect(button, &QPushButton::clicked, &window, [&, text] {
-        sendAction(session, "commit", text);
-        window.close();
+        window.finish("commit", text);
       });
       layout->addWidget(button);
     }
     layout->addStretch();
     auto *scroll = new QScrollArea;
+    scroll->setFocusPolicy(Qt::NoFocus);
     scroll->setWidgetResizable(true);
     scroll->setWidget(list);
     root->addWidget(scroll);
@@ -125,8 +184,7 @@ int main(int argc, char **argv) {
     menu->addWidget(button);
   root->addLayout(menu);
   QObject::connect(calculator, &QPushButton::clicked, &window, [&] {
-    sendAction(session, "calculator");
-    window.close();
+    window.finish("calculator");
   });
   QObject::connect(clipboard, &QPushButton::clicked, &window, [&] {
     QList<QPair<QString, QString>> items;
@@ -151,6 +209,8 @@ int main(int argc, char **argv) {
     if (!file.open(QIODevice::ReadOnly))
       return;
     auto *tabs = new QTabWidget;
+    tabs->setFocusPolicy(Qt::NoFocus);
+    tabs->tabBar()->setFocusPolicy(Qt::NoFocus);
     for (const auto &groupValue :
          QJsonDocument::fromJson(file.readAll()).array()) {
       auto group = groupValue.toObject();
@@ -163,15 +223,16 @@ int main(int argc, char **argv) {
           for (const auto &symbolValue : rowValue.toArray()) {
             QString text = symbolValue.toString();
             auto *button = new QPushButton(text);
+            button->setFocusPolicy(Qt::NoFocus);
             button->setFixedSize(38, 32);
             QObject::connect(button, &QPushButton::clicked, &window, [&, text] {
-              sendAction(session, "commit", text);
-              window.close();
+              window.finish("commit", text);
             });
             grid->addWidget(button, n / 9, n % 9);
             ++n;
           }
       auto *scroll = new QScrollArea;
+      scroll->setFocusPolicy(Qt::NoFocus);
       scroll->setWidgetResizable(true);
       scroll->setWidget(body);
       const auto iconName =

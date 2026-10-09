@@ -140,7 +140,8 @@ static void service_listener(uint64_t, int32_t *types, void **payloads,
     _exit(89);
   std::lock_guard<std::mutex> guard(s.mutex);
   for (unsigned i = 0; i < count; i++) {
-    if (!payloads[i])
+    // An empty PendingInput list is represented by a null head pointer.
+    if (!payloads[i] && types[i] != 5)
       continue;
     if (types[i] == 0) {
       // CCallbackHolder::ParseEvent: iterator +0, kind +8,
@@ -251,8 +252,10 @@ static bool service_select(ServiceSession &s, unsigned rank,
   ((Fn)syms.at("_wxime_select_candidate"))(
       s.engine, c.text.data(), c.text.size(), c.id.data(), c.id.size(), nullptr,
       0, nullptr, 0, nullptr, 0, nullptr);
+  bool finishVMode = false;
   {
     std::lock_guard<std::mutex> lock(s.mutex);
+    finishVMode = s.vMode && !s.commits.empty();
     if (c.cover <= s.preedit.size())
       s.preedit.erase(0, c.cover);
     s.cursor = s.preedit.size();
@@ -267,6 +270,25 @@ static bool service_select(ServiceSession &s, unsigned rank,
       s.displayCursor = 0;
       s.cursorStops.clear();
     }
+  }
+  if (finishVMode) {
+    // Calculator candidates commit a result without consuming the expression
+    // like a pinyin candidate. End VModeV2 before accepting the next key.
+    ((void (*)(uint64_t, uint32_t, bool))syms.at(
+        "_wxime_session_set_bool_option"))(s.engine, 0x11, false);
+    ((void (*)(uint64_t))syms.at("_wxime_reset_session"))(s.engine);
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.vMode = false;
+    s.pending = 0;
+    s.preedit.clear();
+    s.selected.clear();
+    s.cursor = 0;
+    s.pendingRaw.clear();
+    s.displayPreedit.clear();
+    s.displayCursor = 0;
+    s.cursorStops.clear();
+    s.candidates.clear();
+    ++s.revision;
   }
   return true;
 }

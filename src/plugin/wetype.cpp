@@ -198,6 +198,11 @@ static size_t displayCursorForRaw(const std::string &raw,
   return display;
 }
 class WeType;
+struct DeferredKey {
+  Key key;
+  bool release;
+  int time;
+};
 struct State : InputContextProperty {
   uint64_t id, epoch = 1, seq = 0, applied = 0, revision = 0, inputSeq = 0;
   uint64_t cloudPollUntil = 0, lastCloudPoll = 0;
@@ -214,6 +219,7 @@ struct State : InputContextProperty {
   bool english = false, fullWidth = false, traditional = false,
        englishPunctuation = false, vMode = false;
   bool selectionPending = false;
+  std::vector<DeferredKey> deferredKeys;
   bool active = false;
   KeySym modifierCandidate = FcitxKey_None;
   TrackableObjectReference<InputContext> ic;
@@ -253,7 +259,9 @@ class WeType : public InputMethodEngine {
   bool restartNeedsOpen_ = false;
   uint64_t syncTick_ = 0, updateTick_ = 0;
   uint64_t lastVoiceVersion_ = 0;
-  uint64_t lastVModeVersion_ = 0;
+  pid_t vModeChild_ = -1;
+  uint64_t vModeSession_ = 0, vModeEpoch_ = 0, vModeGeneration_ = 0;
+  std::string vModeToken_;
   std::string inbound_, outbound_;
   bool voiceRecording_ = false, voiceHold_ = false;
   uint64_t voiceSession_ = 0, voiceEpoch_ = 0;
@@ -898,6 +906,76 @@ class WeType : public InputMethodEngine {
     if (s->active && s->epoch == epoch)
       ic->commitString(text);
   }
+  void stopVModeWindow() {
+    pid_t exited = -1;
+    if (vModeChild_ > 0) {
+      do {
+        exited = waitpid(vModeChild_, nullptr, WNOHANG);
+      } while (exited < 0 && errno == EINTR);
+    }
+    if (vModeChild_ > 0 && exited == 0) {
+      kill(vModeChild_, SIGTERM);
+      while (waitpid(vModeChild_, nullptr, 0) < 0 && errno == EINTR) {
+      }
+    }
+    vModeChild_ = -1;
+    vModeSession_ = vModeEpoch_ = 0;
+    vModeToken_.clear();
+  }
+  void cancelVMode(InputContext *ic) {
+    auto *s = state(ic);
+    if (vModeSession_ == s->id)
+      stopVModeWindow();
+    ++s->epoch;
+    send(ic, "reset");
+    s->vMode = false;
+    s->preedit.clear();
+    s->cursor = 0;
+    clearDisplayState(s);
+    ic->inputPanel().reset();
+    panel(ic, s);
+  }
+  bool startVModeWindow(InputContext *ic) {
+    auto *s = state(ic);
+    if (vModeSession_) {
+      const auto previous = contexts_.find(vModeSession_);
+      if (previous != contexts_.end() && previous->second.get())
+        cancelVMode(previous->second.get());
+      else
+        stopVModeWindow();
+    }
+    const auto &rect = ic->cursorRect();
+    vModeSession_ = s->id;
+    vModeEpoch_ = s->epoch;
+    vModeToken_ = std::to_string(getpid()) + "-" +
+                  std::to_string(now(CLOCK_MONOTONIC)) + "-" +
+                  std::to_string(++vModeGeneration_);
+    std::vector<std::string> args{
+        WETYPE_VMODE, std::to_string(s->id), std::to_string(rect.left()),
+        std::to_string(rect.bottom()), std::to_string(s->epoch), vModeToken_};
+    std::vector<char *> argv;
+    for (auto &arg : args)
+      argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    posix_spawn_file_actions_t actions;
+    posix_spawn_file_actions_init(&actions);
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null",
+                                     O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null",
+                                     O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null",
+                                     O_WRONLY, 0);
+    pid_t child = -1;
+    const int result = posix_spawn(&child, WETYPE_VMODE, &actions, nullptr,
+                                   argv.data(), environ);
+    posix_spawn_file_actions_destroy(&actions);
+    if (result) {
+      stopVModeWindow();
+      return false;
+    }
+    vModeChild_ = child;
+    return true;
+  }
   void receiveVModeAction() {
     auto path = stateDirectory() / "vmode-action.json";
     std::ifstream input(path);
@@ -905,13 +983,13 @@ class WeType : public InputMethodEngine {
     if (bytes.empty() || bytes.size() > 65536)
       return;
     auto message = wire::parse(bytes);
-    const auto version = uint64_t(wire::number(message.get(), "version"));
     const auto session = uint64_t(wire::number(message.get(), "session"));
-    if (!version || version <= lastVModeVersion_)
-      return;
-    lastVModeVersion_ = version;
+    const auto epoch = uint64_t(wire::number(message.get(), "epoch"));
     std::error_code error;
     std::filesystem::remove(path, error);
+    if (!session || session != vModeSession_ || epoch != vModeEpoch_ ||
+        vModeToken_.empty() || wire::str(message.get(), "token") != vModeToken_)
+      return;
     auto it = contexts_.find(session);
     if (it == contexts_.end())
       return;
@@ -920,22 +998,42 @@ class WeType : public InputMethodEngine {
         ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     const auto action = wire::str(message.get(), "action");
-    if (action != "commit")
-      return;
-    const auto text = wire::str(message.get(), "text");
-    if (text.empty() || text.size() > 65536)
-      return;
     auto *s = state(ic);
-    if (!s->active || !s->vMode)
+    if (!s->active || !s->vMode || s->epoch != epoch)
       return;
-    send(ic, "reset");
-    s->vMode = false;
-    s->preedit.clear();
-    s->cursor = 0;
-    clearDisplayState(s);
-    ic->inputPanel().reset();
-    ic->commitString(text);
-    panel(ic, s);
+    if (action == "cancel") {
+      cancelVMode(ic);
+    } else if (action == "calculator") {
+      // Keep the original core's armed VModeV2 session for keyboard input.
+      stopVModeWindow();
+      panel(ic, s);
+    } else if (action == "commit") {
+      const auto text = wire::str(message.get(), "text");
+      if (text.empty() || text.size() > 65536)
+        return;
+      cancelVMode(ic);
+      ic->commitString(text);
+    }
+  }
+  void pollVModeWindow() {
+    // Consume a button action before reaping the window that wrote it.
+    receiveVModeAction();
+    if (vModeChild_ <= 0)
+      return;
+    const auto it = contexts_.find(vModeSession_);
+    auto *ic = it == contexts_.end() ? nullptr : it->second.get();
+    if (!ic) {
+      stopVModeWindow();
+      return;
+    }
+    auto *s = state(ic);
+    const auto exited = waitpid(vModeChild_, nullptr, WNOHANG);
+    if (exited == vModeChild_ || (exited < 0 && errno == ECHILD))
+      vModeChild_ = -1;
+    if (vModeChild_ <= 0 || !ic->hasFocus() || !s->active || !s->vMode ||
+        s->epoch != vModeEpoch_ ||
+        ic->capabilityFlags().test(CapabilityFlag::Password))
+      cancelVMode(ic);
   }
   State *state(InputContext *ic) {
     auto *s = ic->propertyFor(&factory_);
@@ -975,6 +1073,7 @@ class WeType : public InputMethodEngine {
     ic->updateUserInterface(UserInterfaceComponent::InputPanel);
   }
   void stop() {
+    stopVModeWindow();
     reader_.reset();
     writer_.reset();
     if (read_ >= 0)
@@ -1012,6 +1111,7 @@ class WeType : public InputMethodEngine {
         ++s->epoch;
         s->seq = s->applied = s->inputSeq = 0;
         s->selectionPending = false;
+        s->deferredKeys.clear();
         s->preedit.clear();
         s->cursor = 0;
         clearDisplayState(s);
@@ -1134,8 +1234,10 @@ class WeType : public InputMethodEngine {
     // candidate, as on the native Windows/macOS clients.
     if (std::string_view(op) != "poll")
       s->candidatePage = s->candidateCursor = 0;
-    if (std::string_view(op) != "select" && std::string_view(op) != "poll")
+    if (std::string_view(op) != "select" && std::string_view(op) != "poll") {
       s->selectionPending = false;
+      s->deferredKeys.clear();
+    }
     if (child_ <= 0 && !start()) {
       failed_ = true;
       scheduleRestart();
@@ -1327,6 +1429,18 @@ class WeType : public InputMethodEngine {
     } else
       ic->inputPanel().setCandidateList(nullptr);
     panel(ic, s);
+    auto deferred = std::move(s->deferredKeys);
+    s->deferredKeys.clear();
+    auto ref = ic->watch();
+    for (const auto &key : deferred) {
+      auto *target = ref.get();
+      if (!target || !target->hasFocus() ||
+          !target->propertyFor(&factory_)->active)
+        break;
+      KeyEvent event(target, key.key, key.release, key.time);
+      if (!target->keyEvent(event))
+        target->forwardKey(key.key, key.release, key.time);
+    }
   }
 
 public:
@@ -1370,8 +1484,8 @@ public:
           if (time >= syncTick_ + 1000000) {
             syncTick_ = time;
             receiveVoice();
-            receiveVModeAction();
           }
+          pollVModeWindow();
           if (networkEnabled_ && *config_.update->autoUpdate &&
               time >= updateTick_ + 3600000000ULL) {
             updateTick_ = time;
@@ -1451,6 +1565,10 @@ public:
   void reset(const InputMethodEntry &, InputContextEvent &e) override {
     auto *ic = e.inputContext();
     auto *s = state(ic);
+    if (vModeSession_ == s->id)
+      stopVModeWindow();
+    s->selectionPending = false;
+    s->deferredKeys.clear();
     ++s->epoch;
     s->preedit.clear();
     s->cursor = 0;
@@ -1538,6 +1656,14 @@ public:
     auto sym = key.sym();
     if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
+    // A later key must not operate on the preedit awaiting a select reply.
+    // Re-enter normal event processing after that reply has committed it.
+    if (s->selectionPending && sym != FcitxKey_Escape) {
+      if (s->deferredKeys.size() < 64)
+        s->deferredKeys.push_back({e.rawKey(), e.isRelease(), e.time()});
+      e.filterAndAccept();
+      return;
+    }
     const bool shiftModifier =
         sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
     const bool ctrlModifier =
@@ -1576,6 +1702,8 @@ public:
           ((shiftModifier && *config_.shortcuts->shiftSwitch) ||
            (ctrlModifier && *config_.shortcuts->ctrlSwitch) ||
            configuredLanguageSwitch)) {
+        if (s->vMode)
+          cancelVMode(ic);
         if (!s->preedit.empty())
           send(ic, "reset");
         s->preedit.clear();
@@ -1706,6 +1834,14 @@ public:
     }
     auto *list = dynamic_cast<CommonCandidateList *>(
         ic->inputPanel().candidateList().get());
+    if (s->vMode &&
+        (sym == FcitxKey_Escape ||
+         (vModeSession_ == s->id &&
+          key.checkKeyList(*config_.shortcuts->vModeKeys)))) {
+      cancelVMode(ic);
+      e.filterAndAccept();
+      return;
+    }
     if (!composing && !s->vMode && *config_.shortcuts->vMode &&
         key.checkKeyList(*config_.shortcuts->vModeKeys)) {
       // VModeV2 is armed by the core's pending-input callback for a literal
@@ -1718,20 +1854,14 @@ public:
       clearDisplayState(s);
       ic->inputPanel().setCandidateList(nullptr);
       panel(ic, s);
-      const auto &rect = ic->cursorRect();
-      startProcess({WETYPE_VMODE, std::to_string(s->id),
-                    std::to_string(rect.left()),
-                    std::to_string(rect.bottom())});
-      e.filterAndAccept();
-      return;
-    }
-    if (s->vMode && !composing && sym == FcitxKey_Escape) {
-      send(ic, "reset");
-      s->vMode = false;
+      if (!startVModeWindow(ic))
+        cancelVMode(ic);
       e.filterAndAccept();
       return;
     }
     if (s->vMode && sym >= 0x20 && sym <= 0x7e) {
+      if (vModeSession_ == s->id)
+        stopVModeWindow();
       if (sym == FcitxKey_space) {
         selectByKey(ic);
         e.filterAndAccept();
