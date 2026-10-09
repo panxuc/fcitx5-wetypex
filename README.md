@@ -73,7 +73,7 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 从 [GitHub Releases](https://github.com/panxuc/fcitx5-wetypex/releases/latest) 下载软件包：
 
 ```bash
-sudo pacman -U ./fcitx5-wetypex-2.2.3.657-8-x86_64.pkg.tar.zst
+sudo pacman -U ./fcitx5-wetypex-2.2.3.657-9-x86_64.pkg.tar.zst
 ```
 
 也可以从 AUR 安装：
@@ -89,7 +89,7 @@ paru -S fcitx5-wetypex
 ### Debian 与 Ubuntu
 
 ```bash
-sudo apt install ./fcitx5-wetypex_2.2.3.657-8_amd64.deb
+sudo apt install ./fcitx5-wetypex_2.2.3.657-9_amd64.deb
 ```
 
 从修订 `8` 起，标准 deb 使用 Ubuntu 22.04 的 glibc 2.35、Qt5 和稳定版 Fcitx5 构建，可用于 Ubuntu 22.04、24.04、26.04 及 Debian 12/13。LLVM unwinder 已显式列入依赖，Ubuntu 26.04 会安装 `llvm-libunwind1`，避免核心因缺少 `libunwind.so.1` 无法启动。
@@ -101,7 +101,7 @@ Ubuntu 20.04 和 glibc 2.31 的系统使用独立的 `fcitx5-wetypex-legacy_..._
 ### Fedora 与兼容的 RPM 发行版
 
 ```bash
-sudo dnf install ./fcitx5-wetypex-2.2.3.657-8.x86_64.rpm
+sudo dnf install ./fcitx5-wetypex-2.2.3.657-9.x86_64.rpm
 ```
 
 FFmpeg 及部分桌面依赖可能来自发行版启用的附加软件仓库。
