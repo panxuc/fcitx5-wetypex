@@ -53,6 +53,7 @@ struct ServiceCandidate {
   std::string text;
   std::vector<unsigned char> id;
   uint32_t cover = 0;
+  bool cloud = false;
 };
 struct ServiceSession {
   uint64_t engine = 0, revision = 0;
@@ -128,6 +129,13 @@ static void read_service_candidates(void *iterator,
     ServiceCandidate candidate;
     candidate.text.assign(text, len);
     memcpy(&candidate.cover, c + 0x64, 4);
+    // Cloud candidates carry a fixed marker pair in the engine's candidate
+    // struct; local candidates leave both fields zero.
+    uint16_t marker;
+    int64_t origin;
+    memcpy(&marker, c + 0x44, 2);
+    memcpy(&origin, c + 0x58, 8);
+    candidate.cloud = marker == 0xfffd && origin == 11000;
     if (id && n)
       candidate.id.assign(id, id + n);
     output.push_back(std::move(candidate));
@@ -156,7 +164,8 @@ static void service_listener(uint64_t, int32_t *types, void **payloads,
         ((void (*)(void *))syms.at("_wxime_delete_candidate_iterator"))(cloud);
     } else if (types[i] == 6) {
       // _wxime_cloud_result_event: iterator +0, kind +8, version +24.
-      // The iterator is already the original engine's fully merged list.
+      // The iterator is the engine's fully merged list; cloud entries are
+      // identified by their struct marker in read_service_candidates.
       auto it = *(void **)payloads[i];
       read_service_candidates(it, s.candidates);
       ++s.revision;
@@ -644,6 +653,10 @@ static void service_loop() {
           json_object_array_add(
               array, json_object_new_string_len(c.text.data(), c.text.size()));
         json_object_object_add(response.get(), "candidates", array);
+        array = json_object_new_array();
+        for (auto &c : s.candidates)
+          json_object_array_add(array, json_object_new_boolean(c.cloud));
+        json_object_object_add(response.get(), "cloud", array);
         array = json_object_new_array();
         for (auto &c : s.commits)
           json_object_array_add(array,

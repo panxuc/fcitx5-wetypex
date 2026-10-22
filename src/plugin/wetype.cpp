@@ -1,5 +1,6 @@
 #include "../common/json.hpp"
 #include "config.hpp"
+#include "wechat_emoji.hpp"
 #include <algorithm>
 #include <cerrno>
 #include <clipboard_public.h>
@@ -1623,6 +1624,7 @@ class WeType : public InputMethodEngine {
     list->setLayoutHint(vertical_ ? CandidateLayoutHint::Vertical
                                   : CandidateLayoutHint::Horizontal);
     auto *candidates = wire::get(j.get(), "candidates");
+    auto *cloudFlags = wire::get(j.get(), "cloud");
     if ((!s->preedit.empty() || s->vMode) && candidates &&
         json_object_is_type(candidates, json_type_array))
       for (size_t i = 0;
@@ -1631,10 +1633,22 @@ class WeType : public InputMethodEngine {
         auto *v = json_object_array_get_idx(candidates, i);
         if (json_object_is_type(v, json_type_string) &&
             json_object_get_string_len(v)) {
+          bool cloud = false;
+          if (cloudFlags && json_object_is_type(cloudFlags, json_type_array) &&
+              i < json_object_array_length(cloudFlags)) {
+            auto *flag = json_object_array_get_idx(cloudFlags, i);
+            cloud = json_object_is_type(flag, json_type_boolean) &&
+                    json_object_get_boolean(flag);
+          }
           std::string display =
               nativeLabels ? std::string{}
                            : std::to_string(list->totalSize() % pageSize_ + 1);
-          display += json_object_get_string(v);
+          if (cloud)
+            display += "☁";
+          auto text = std::string_view(json_object_get_string(v),
+                                       json_object_get_string_len(v));
+          auto glyph = wetype_emoji::glyph(text);
+          display += glyph.empty() ? text : glyph;
           list->append<Word>(this, std::move(display), i, s->revision);
         }
       }
@@ -2368,8 +2382,10 @@ public:
       s->preedit.insert(s->cursor, text);
       ++s->cursor;
       clearDisplayState(s);
+      // Cloud replies are asynchronous and can lag well behind a keystroke.
+      // Keep refreshing the merged list while the composition stays open.
       if ((lower || upper) && networkEnabled_)
-        s->cloudPollUntil = now(CLOCK_MONOTONIC) + 1500000;
+        s->cloudPollUntil = now(CLOCK_MONOTONIC) + 8000000;
       send(ic, "key", text);
       panel(ic, s);
       e.filterAndAccept();
