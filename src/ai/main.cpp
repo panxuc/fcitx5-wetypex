@@ -1,5 +1,7 @@
 #include "../common/qt_helpers.hpp"
 #include <QApplication>
+#include <QByteArray>
+#include <QColor>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -8,15 +10,19 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMouseEvent>
+#include <QPalette>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSizePolicy>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QWebEnginePage>
 #include <QWebEngineView>
 #include <QWidget>
+#include <QWindow>
 
 namespace {
 QString asset(const char *name) {
@@ -43,35 +49,85 @@ QString prepareResponse(QString html, const QString &query) {
   html.replace(QStringLiteral("<body>"), QStringLiteral("<body>") + queryHtml);
   html.replace(
       QStringLiteral("</head>"),
-      QStringLiteral("<style>:root{color-scheme:light}.wr_dynamicTheme{"
-                     "--WT_BC2:rgba(0,0,0,.8)!important}body{background:#fafafa}"
-                     ".wetypex-visible{opacity:1!important;visibility:visible!important}"
-                     ".wetypex-query-row{display:flex;justify-content:flex-end;padding:14px 16px 4px}"
-                     ".wetypex-query{position:relative;max-width:82%;padding:5px 12px;background:#d9f3e9;"
-                     "border-radius:12px 12px 2px 12px;color:#222;font-size:12px;line-height:18px}"
-                     ".wetypex-query:after{content:'';position:absolute;right:-5px;bottom:0;"
-                     "width:8px;height:10px;background:#d9f3e9;clip-path:polygon(0 0,0 100%,100% 100%)}"
-                     ".pc_markdown-body__TGijn p{font-size:13px!important;line-height:22px!important}"
-                     "</style></head>"));
+      QStringLiteral(
+          "<style>:root{color-scheme:light}.wr_dynamicTheme{"
+          "--WT_BC2:rgba(0,0,0,.8)!important}"
+          "html,body{height:auto!important;min-height:100%!important;margin:0;"
+          "background:#fafafa!important;overflow-x:hidden!important;overflow-y:auto!important}"
+          ".pc_wr_main_container__6Toi1{height:auto!important;"
+          "min-height:calc(100vh - 46px)!important;overflow:visible!important}"
+          ".pc_wr_main_content__91zKP{overflow:visible!important;min-height:0!important}"
+          ".wr_main_scroll{height:auto!important;overflow:visible!important}"
+          "::-webkit-scrollbar{width:6px}"
+          "::-webkit-scrollbar-thumb{background:rgba(0,0,0,.08);border-radius:3px}"
+          "::-webkit-scrollbar-track{background:transparent}"
+          ".wetypex-visible{opacity:1!important;visibility:visible!important}"
+          ".wetypex-query-row{display:flex;justify-content:flex-end;padding:14px 16px 4px}"
+          ".wetypex-query{position:relative;max-width:82%;padding:5px 12px;background:#d9f3e9;"
+          "border-radius:12px 12px 2px 12px;color:#222;font-size:12px;line-height:18px;"
+          "white-space:pre-wrap;word-break:break-word}"
+          ".wetypex-query:after{content:'';position:absolute;right:-5px;bottom:0;"
+          "width:8px;height:10px;background:#d9f3e9;clip-path:polygon(0 0,0 100%,100% 100%)}"
+          ".pc_markdown-body__TGijn{font-size:13px!important;line-height:22px!important}"
+          ".pc_markdown-body__TGijn p,.pc_markdown-body__TGijn li{"
+          "font-size:13px!important;line-height:22px!important}"
+          ".pc_markdown-body__TGijn h1,.pc_markdown-body__TGijn h2,"
+          ".pc_markdown-body__TGijn h3,.pc_markdown-body__TGijn h4,"
+          ".pc_markdown-body__TGijn h5,.pc_markdown-body__TGijn h6{"
+          "font-size:14px!important;line-height:22px!important;margin:10px 0 4px!important}"
+          "</style></head>"));
   return html;
+}
+
+QString statusPage(const QString &query, const QString &message, bool animated) {
+  const QString dots = animated
+                           ? QStringLiteral("<span class='dots'><span></span>"
+                                            "<span></span><span></span></span>")
+                           : QString();
+  return QStringLiteral(
+             "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><style>"
+             "html,body{width:100%;height:100%;margin:0;background:#fafafa;color:#222;"
+             "font-family:-apple-system,'PingFang SC','Microsoft YaHei',sans-serif}"
+             "body{overflow-y:auto}"
+             ".query-row{display:flex;justify-content:flex-end;padding:14px 16px 4px}"
+             ".query{max-width:82%;padding:5px 12px;background:#d9f3e9;"
+             "border-radius:12px 12px 2px 12px;font-size:12px;line-height:18px;"
+             "white-space:pre-wrap;word-break:break-word}"
+             ".status{display:flex;align-items:center;padding:12px 18px;"
+             "font-size:13px;line-height:20px;color:#6b7075}"
+             ".dots{display:inline-flex;align-items:center;margin-left:6px}"
+             ".dots span{width:4px;height:4px;margin-left:3px;border-radius:50%;"
+             "background:#8a8f94;animation:blink 1.2s infinite ease-in-out}"
+             ".dots span:nth-child(2){animation-delay:.16s}"
+             ".dots span:nth-child(3){animation-delay:.32s}"
+             "@keyframes blink{0%,80%,100%{opacity:.2;transform:translateY(0)}"
+             "40%{opacity:1;transform:translateY(-2px)}}"
+             "</style></head><body>"
+             "<div class='query-row'><div class='query'>%1</div></div>"
+             "<div class='status'>%2%3</div></body></html>")
+      .arg(query.toHtmlEscaped(), message, dots);
 }
 
 class AiWindow final : public QWidget {
 public:
-  explicit AiWindow(const QString &initialResponse, const QString &initialQuery)
-      : currentQuery_(initialQuery) {
+  explicit AiWindow(const QString &initialResponse, const QString &initialQuery,
+                    const QString &initialAsk) {
     setWindowFlag(Qt::FramelessWindowHint);
-    setAttribute(Qt::WA_TranslucentBackground);
     setWindowIcon(QIcon::fromTheme(QStringLiteral("fcitx5-wetypex")));
     setWindowTitle(QStringLiteral("问Ai"));
     resize(440, 566);
     setMinimumSize(352, 453);
+    setAutoFillBackground(true);
+    QPalette windowPalette = palette();
+    windowPalette.setColor(QPalette::Window, QColor(QStringLiteral("#fafafa")));
+    setPalette(windowPalette);
 
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(1, 1, 1, 1);
     outer->setSpacing(0);
     auto *surface = new QWidget;
     surface->setObjectName(QStringLiteral("surface"));
+    surface->setAttribute(Qt::WA_StyledBackground, true);
     outer->addWidget(surface);
     auto *root = new QVBoxLayout(surface);
     root->setContentsMargins(0, 0, 0, 0);
@@ -112,6 +168,9 @@ public:
 
     response_ = new QWebEngineView;
     response_->setContextMenuPolicy(Qt::NoContextMenu);
+    response_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Ignored);
+    response_->setMinimumSize(0, 0);
+    response_->page()->setBackgroundColor(QColor(QStringLiteral("#fafafa")));
     root->addWidget(response_, 1);
 
     auto *composer = new QWidget;
@@ -124,7 +183,7 @@ public:
     polish_->setObjectName(QStringLiteral("polish"));
     polish_->setIcon(QIcon(asset("ai-polish.svg")));
     polish_->setIconSize(QSize(14, 14));
-    polish_->setFixedWidth(69);
+    polish_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     polish_->setFixedHeight(26);
     polishRow->addWidget(polish_);
     polishRow->addStretch();
@@ -153,7 +212,7 @@ public:
 
     setStyleSheet(QStringLiteral(R"(
       #surface { background: #fafafa; border: 1px solid #d9dfe4;
-                 border-radius: 9px; }
+                 border-radius: 0; }
       #chromeButton, #closeButton { border: 0; border-radius: 0;
                                    background: transparent; }
       #chromeButton:hover { background: #ececec; }
@@ -163,10 +222,12 @@ public:
       #polish { color: #555; background: #fff; border: 1px solid #e4e4e4;
                 border-radius: 6px; padding: 0 9px; font-size: 11px; }
       #polish:hover { background: #f4f4f4; }
-      #inputShell { background: #fff; border: 1px solid #f0f0f0;
+      #polish:disabled { color: #aaa; background: #f6f6f6; }
+      #inputShell { background: #fff; border: 1px solid #e3e6e8;
                     border-radius: 14px; }
       #sendButton { border: 0; border-radius: 11px; background: #23c891; padding: 0; }
-      #sendButton:disabled { background: #beefde; }
+      #sendButton:hover { background: #1fbd88; }
+      #sendButton:disabled { background: #a5e0ca; }
       QLineEdit { background: transparent; color: #222; font-size: 11px;
                   selection-background-color: #23c891; }
       QLineEdit:disabled { color: #999; }
@@ -183,26 +244,40 @@ public:
         maximize->setIcon(QIcon(asset("chrome-unmaximize.png")));
       }
     });
-    connect(input_, &QLineEdit::textChanged, this, [this](const QString &text) {
-      send_->setEnabled(!text.trimmed().isEmpty());
-    });
+    connect(input_, &QLineEdit::textChanged, this, [this] { refreshControls(); });
     connect(input_, &QLineEdit::returnPressed, this, [this] { ask(false); });
     connect(send_, &QPushButton::clicked, this, [this] { ask(false); });
     connect(polish_, &QPushButton::clicked, this, [this] { ask(true); });
 
-    if (!initialResponse.isEmpty())
+    if (!initialAsk.isEmpty()) {
+      input_->setText(initialAsk);
+      QTimer::singleShot(0, this, [this] { ask(false); });
+    } else if (!initialResponse.isEmpty()) {
       loadResponse(initialResponse, initialQuery);
-    else
+    } else {
       response_->setHtml(QStringLiteral(
-          "<html><body style='background:#fafafa'></body></html>"));
+          "<html><body style='height:100%;margin:0;background:#fafafa'>"
+          "</body></html>"));
+    }
   }
 
 protected:
   void mousePressEvent(QMouseEvent *event) override {
-    if (wetype::mousePosition(event).y() <= 31 && event->button() == Qt::LeftButton) {
-      dragOffset_ = wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
-      dragging_ = true;
+    if (event->button() != Qt::LeftButton ||
+        wetype::mousePosition(event).y() > 31)
+      return;
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    if (windowHandle() && windowHandle()->startSystemMove()) {
+      event->accept();
+      return;
     }
+#endif
+
+    dragOffset_ =
+        wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
+    dragging_ = true;
+    event->accept();
   }
   void mouseMoveEvent(QMouseEvent *event) override {
     if (dragging_ && event->buttons().testFlag(Qt::LeftButton))
@@ -211,15 +286,22 @@ protected:
   void mouseReleaseEvent(QMouseEvent *) override { dragging_ = false; }
 
 private:
-  void loadResponse(const QString &path, const QString &query) {
+  bool loadResponse(const QString &path, const QString &query) {
     QFile input(path);
     if (!input.open(QIODevice::ReadOnly))
-      return;
+      return false;
     response_->setHtml(prepareResponse(QString::fromUtf8(input.readAll()), query),
                        QUrl(QStringLiteral(
                            "https://cdn.weread.qq.com/web/winktemplaterendersvr/")));
+    return true;
+  }
+  void refreshControls() {
+    send_->setEnabled(!busy_ && !input_->text().trimmed().isEmpty());
+    polish_->setEnabled(!busy_);
   }
   void ask(bool polish) {
+    if (busy_)
+      return;
     QString question = input_->text().trimmed();
     if (question.isEmpty())
       return;
@@ -227,10 +309,12 @@ private:
     if (polish)
       question.prepend(
           QStringLiteral("请优化下面这段表达，并只给出优化后的文本：\n"));
-    input_->setEnabled(false);
-    currentQuery_ = displayedQuestion;
-    send_->setEnabled(false);
-    polish_->setEnabled(false);
+    busy_ = true;
+    input_->clear();
+    input_->setPlaceholderText(QStringLiteral("正在生成回答…"));
+    refreshControls();
+    response_->setHtml(statusPage(displayedQuestion,
+                                  QStringLiteral("正在生成回答"), true));
     const QString output =
         QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
         QStringLiteral("/ai-response.html");
@@ -238,14 +322,21 @@ private:
     auto *process = new QProcess(this);
     wetype::onProcessDone(
         process, this,
-        [this, process, output](int code, QProcess::ExitStatus status) {
-          input_->setEnabled(true);
-          polish_->setEnabled(true);
-          if (status == QProcess::NormalExit && code == 0) {
-            loadResponse(output, currentQuery_);
-            input_->clear();
+        [this, process, output, displayedQuestion](int code,
+                                                   QProcess::ExitStatus status) {
+          busy_ = false;
+          input_->setPlaceholderText(QStringLiteral("输入问题，获取 AI 回答"));
+          const bool loaded =
+              status == QProcess::NormalExit && code == 0 &&
+              loadResponse(output, displayedQuestion);
+          if (!loaded) {
+            if (input_->text().isEmpty())
+              input_->setText(displayedQuestion);
+            response_->setHtml(statusPage(displayedQuestion,
+                                          QStringLiteral("生成失败，请稍后重试"),
+                                          false));
           }
-          send_->setEnabled(!input_->text().trimmed().isEmpty());
+          refreshControls();
           process->deleteLater();
         });
     process->start(QStringLiteral(WETYPE_AI_HELPER),
@@ -258,15 +349,33 @@ private:
   QPushButton *polish_ = nullptr;
   QPoint dragOffset_;
   bool dragging_ = false;
-  QString currentQuery_;
+  bool busy_ = false;
 };
 } // namespace
 
 int main(int argc, char **argv) {
+  // Wayland GPU compositing gives WebEngine a separate surface whose page
+  // background shows the desktop through it; software compositing stays opaque.
+  QByteArray webEngineFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
+  if (!webEngineFlags.contains("--disable-gpu")) {
+    if (!webEngineFlags.isEmpty())
+      webEngineFlags += ' ';
+    webEngineFlags += "--disable-gpu";
+  }
+  qputenv("QTWEBENGINE_CHROMIUM_FLAGS", webEngineFlags);
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("fcitx5-wetypex-ai"));
-  AiWindow window(argc >= 2 ? QString::fromLocal8Bit(argv[1]) : QString(),
-                  argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString());
+  app.setDesktopFileName(QStringLiteral("fcitx5-wetypex-ai"));
+  QString initialResponse;
+  QString initialQuery;
+  QString initialAsk;
+  if (argc >= 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--ask")) {
+    initialAsk = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
+  } else {
+    initialResponse = argc >= 2 ? QString::fromLocal8Bit(argv[1]) : QString();
+    initialQuery = argc >= 3 ? QString::fromLocal8Bit(argv[2]) : QString();
+  }
+  AiWindow window(initialResponse, initialQuery, initialAsk);
   window.show();
   return app.exec();
 }
