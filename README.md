@@ -179,7 +179,7 @@ fcitx5-wetypex-account sync-now     # 请求个人词库与常用语同步
 - `Ctrl + Win + Shift`：启动语音输入，再按任意键结束。
 - `Ctrl + Win`：按住说话，松开结束。
 
-外观中的“候选序号样式”可选择微信风格或 Fcitx 默认标签。Wayland 下的 V 工具栏优先使用 layer-shell 保持原输入框焦点；构建依赖与兼容回退见[故障排查](docs/troubleshooting.md#wayland-下-v-工具栏闪退或不显示)。
+外观中的“候选序号样式”可选择微信风格或 Fcitx 默认标签。Wayland 下的 V 工具栏优先使用 layer-shell 保持原输入框焦点，并尽量限制在当前窗口范围内，避免点击时焦点落到下方窗口；构建依赖与兼容回退见[故障排查](docs/troubleshooting.md#wayland-下-v-工具栏闪退或不显示)。Hyprland 0.55+ 的窗口规则与 app_id 配置见[Hyprland 兼容](docs/hyprland.md)。
 
 所有快捷键、输入方式、候选数量、主题、模糊音和同步开关也会出现在 Fcitx5 自带的输入法配置页中；同一页面提供完整设置、账号与同步入口，采用与 Fcitx5 拼音词典管理器相同的 `ExternalOption` 扩展机制。配置项说明见[配置参考](docs/configuration.md)。
 
@@ -219,6 +219,7 @@ fcitx5-diagnose | less
 - [架构说明](docs/architecture.md)
 - [功能状态](docs/feature-status.md)
 - [配置参考](docs/configuration.md)
+- [Hyprland 兼容](docs/hyprland.md)
 - [故障排查](docs/troubleshooting.md)
 - [发行与打包](docs/distribution.md)
 

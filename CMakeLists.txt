@@ -199,6 +199,7 @@ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-update DESTINATION $
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-sync DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(TARGETS fcitx5-wetypex-settings fcitx5-wetypex-clipboard-set fcitx5-wetypex-ai-viewer fcitx5-wetypex-transfer fcitx5-wetypex-vmode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/wetypex-symbols.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+install(FILES data/hyprland.lua DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(DIRECTORY data/themes/ DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5/themes)
 install(FILES data/fcitx5-wetypex-settings.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(DIRECTORY data/icons/hicolor/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor)

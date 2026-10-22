@@ -219,7 +219,7 @@ struct State : InputContextProperty {
   uint8_t symbolAutoState = 0;
   bool doubleQuoteLeft = true, singleQuoteLeft = true;
   bool english = false, fullWidth = false, traditional = false,
-       englishPunctuation = false, vMode = false;
+       englishPunctuation = false, vMode = false, vCalculator = false;
   bool selectionPending = false;
   std::vector<DeferredKey> deferredKeys;
   VMenu vMenu = VMenu::None;
@@ -282,6 +282,7 @@ class WeType : public InputMethodEngine {
   uint64_t vModeSession_ = 0, vModeEpoch_ = 0, vModeGeneration_ = 0;
   std::string vModeToken_;
   bool vModeNative_ = false;
+  int vModeActionRetries_ = 0;
   std::string inbound_, outbound_;
   bool voiceRecording_ = false, voiceHold_ = false;
   uint64_t voiceSession_ = 0, voiceEpoch_ = 0;
@@ -1048,6 +1049,7 @@ class WeType : public InputMethodEngine {
     if (s->vMenu == VMenu::Main) {
       if (value == "calculator") {
         stopVModeWindow();
+        s->vCalculator = true;
         ic->inputPanel().reset();
         panel(ic, s);
       } else if (value == "clipboard") {
@@ -1099,6 +1101,7 @@ class WeType : public InputMethodEngine {
     vModeSession_ = vModeEpoch_ = 0;
     vModeToken_.clear();
     vModeNative_ = false;
+    vModeActionRetries_ = 0;
   }
   void cancelVMode(InputContext *ic, const char *reason = "V mode cancelled") {
     auto *s = state(ic);
@@ -1107,6 +1110,7 @@ class WeType : public InputMethodEngine {
     ++s->epoch;
     send(ic, "reset");
     s->vMode = false;
+    s->vCalculator = false;
     s->preedit.clear();
     s->cursor = 0;
     clearDisplayState(s);
@@ -1123,14 +1127,21 @@ class WeType : public InputMethodEngine {
         stopVModeWindow();
     }
     const auto &rect = ic->cursorRect();
+    const bool relative =
+        ic->capabilityFlags().test(CapabilityFlag::RelativeRect);
+    double scale = ic->scaleFactor();
+    if (!(scale > 0.0))
+      scale = 1.0;
     vModeSession_ = s->id;
     vModeEpoch_ = s->epoch;
     vModeToken_ = std::to_string(getpid()) + "-" +
                   std::to_string(now(CLOCK_MONOTONIC)) + "-" +
                   std::to_string(++vModeGeneration_);
+    vModeActionRetries_ = 0;
     std::vector<std::string> args{
         WETYPE_VMODE, std::to_string(s->id), std::to_string(rect.left()),
-        std::to_string(rect.bottom()), std::to_string(s->epoch), vModeToken_};
+        std::to_string(rect.bottom()), std::to_string(s->epoch), vModeToken_,
+        relative ? "1" : "0", std::to_string(scale)};
     std::vector<char *> argv;
     for (auto &arg : args)
       argv.push_back(arg.data());
@@ -1158,6 +1169,9 @@ class WeType : public InputMethodEngine {
       return true;
     }
     vModeChild_ = child;
+    std::ofstream log(logPath, std::ios::app);
+    log << "V toolbar start: rect=" << rect.left() << ',' << rect.bottom()
+        << " relative=" << relative << " scale=" << scale << '\n';
     return true;
   }
   void receiveVModeAction() {
@@ -1170,26 +1184,55 @@ class WeType : public InputMethodEngine {
     const auto session = uint64_t(wire::number(message.get(), "session"));
     const auto epoch = uint64_t(wire::number(message.get(), "epoch"));
     std::error_code error;
-    std::filesystem::remove(path, error);
     if (!session || session != vModeSession_ || epoch != vModeEpoch_ ||
-        vModeToken_.empty() || wire::str(message.get(), "token") != vModeToken_)
+        vModeToken_.empty() || wire::str(message.get(), "token") != vModeToken_) {
+      std::filesystem::remove(path, error);
+      vModeActionRetries_ = 0;
       return;
+    }
     auto it = contexts_.find(session);
-    if (it == contexts_.end())
+    auto *ic = it == contexts_.end() ? nullptr : it->second.get();
+    if (!ic) {
+      std::filesystem::remove(path, error);
+      vModeActionRetries_ = 0;
       return;
-    auto *ic = it->second.get();
-    if (!ic || !ic->hasFocus() ||
-        ic->capabilityFlags().test(CapabilityFlag::Password))
-      return;
+    }
     const auto action = wire::str(message.get(), "action");
     auto *s = state(ic);
-    if (!s->active || !s->vMode || s->epoch != epoch)
+    const bool password =
+        ic->capabilityFlags().test(CapabilityFlag::Password);
+    if (password || !s->vMode || s->epoch != epoch) {
+      std::filesystem::remove(path, error);
+      vModeActionRetries_ = 0;
+      std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
+      log << "V toolbar action dropped: " << action.substr(0, 32) << '\n';
       return;
+    }
     if (action == "cancel") {
+      std::filesystem::remove(path, error);
+      vModeActionRetries_ = 0;
       cancelVMode(ic);
-    } else if (action == "calculator") {
+      return;
+    }
+    // The layer surface can briefly move focus while it closes. Retry instead
+    // of dropping a token-validated action; the file is atomic and single-use.
+    auto *focused = instance_->lastFocusedInputContext();
+    const bool transient =
+        !s->active || (action != "calculator" && focused && focused != ic);
+    if (transient && ++vModeActionRetries_ <= 20)
+      return;
+    std::filesystem::remove(path, error);
+    vModeActionRetries_ = 0;
+    std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
+    if (transient) {
+      log << "V toolbar action dropped: " << action.substr(0, 32) << '\n';
+      return;
+    }
+    log << "V toolbar action: " << action.substr(0, 32) << '\n';
+    if (action == "calculator") {
       // Keep the original core's armed VModeV2 session for keyboard input.
       stopVModeWindow();
+      s->vCalculator = true;
       panel(ic, s);
     } else if (action == "commit") {
       const auto text = wire::str(message.get(), "text");
@@ -1211,30 +1254,35 @@ class WeType : public InputMethodEngine {
       return;
     }
     auto *s = state(ic);
-    int status = 0;
+    auto *focused = instance_->lastFocusedInputContext();
+    // A layer-shell toolbar can take the compositor's focus on some
+    // compositors even when keyboard interactivity is disabled. Treat only a
+    // focus move to another input context as a real switch; no focused
+    // context means the toolbar (or a non-input window) owns the focus.
+    const bool otherFocus = focused && focused != ic;
     const auto exited =
-        vModeChild_ > 0 ? waitpid(vModeChild_, &status, WNOHANG) : 0;
-    const bool fallback =
-        exited > 0 && exited == vModeChild_ && WIFEXITED(status) &&
-        (WEXITSTATUS(status) == 69 || WEXITSTATUS(status) == 127);
+        vModeChild_ > 0 ? waitpid(vModeChild_, nullptr, WNOHANG) : 0;
+    const bool exitedNow =
+        exited > 0 || (exited < 0 && errno == ECHILD);
     if (exited == vModeChild_ || (exited < 0 && errno == ECHILD))
       vModeChild_ = -1;
-    if (fallback && ic->hasFocus() && s->active && s->vMode &&
+    if (exitedNow && focused == ic && s->active && s->vMode &&
         s->epoch == vModeEpoch_ &&
         !ic->capabilityFlags().test(CapabilityFlag::Password)) {
       vModeNative_ = true;
       mainVMenu(ic);
       return;
     }
-    if ((vModeChild_ <= 0 && !vModeNative_) || !ic->hasFocus() || !s->active ||
+    if ((vModeChild_ <= 0 && !vModeNative_) || otherFocus || !s->active ||
         !s->vMode || s->epoch != vModeEpoch_ ||
         ic->capabilityFlags().test(CapabilityFlag::Password)) {
-      const auto *reason = vModeChild_ <= 0 && !vModeNative_ ? "process exited"
-                           : !ic->hasFocus() ? "input context lost focus"
-                           : !s->active      ? "input method deactivated"
-                           : !s->vMode       ? "V mode ended"
-                           : s->epoch != vModeEpoch_ ? "input session changed"
-                                                     : "password input context";
+      const auto *reason =
+          otherFocus ? "input focus moved to another context"
+          : vModeChild_ <= 0 && !vModeNative_ ? "process exited"
+          : !s->active                       ? "input method deactivated"
+          : !s->vMode                        ? "V mode ended"
+          : s->epoch != vModeEpoch_          ? "input session changed"
+                                             : "password input context";
       cancelVMode(ic, reason);
     }
   }
@@ -1244,8 +1292,12 @@ class WeType : public InputMethodEngine {
     return s;
   }
   void panel(InputContext *ic, State *s) {
-    ic->inputPanel().setAuxUp(s->vMenu == VMenu::None ? Text()
-                                                      : Text(s->vMenuTitle));
+    Text aux;
+    if (s->vMenu != VMenu::None)
+      aux = Text(s->vMenuTitle);
+    else if (s->vCalculator)
+      aux = Text("计算：输入表达式，空格选取结果");
+    ic->inputPanel().setAuxUp(aux);
     const std::string displayed =
         !s->displayPreedit.empty() ? s->displayPreedit
         : !s->vMode && *config_.input->mode == wetype_config::InputMode::Pinyin
@@ -1320,6 +1372,7 @@ class WeType : public InputMethodEngine {
         s->cursor = 0;
         clearDisplayState(s);
         s->vMode = false;
+        s->vCalculator = false;
         clearVMenu(s);
         s->cloudPollUntil = 0;
         s->pendingPairKey = 0;
@@ -1774,6 +1827,15 @@ public:
       stopSync();
     auto *ic = e.inputContext();
     auto *current = state(ic);
+    if (vModeSession_ == current->id && current->vMode) {
+      // The toolbar is still open after a focus round trip caused by the
+      // layer surface itself. Do not send "open" again: it would reset the
+      // backend V session the toolbar is still using.
+      current->active = true;
+      ic->statusArea().addAction(StatusGroup::InputMethod, &settingsAction_);
+      panel(ic, current);
+      return;
+    }
     current->active = true;
     current->english = *config_.input->defaultLanguage ==
                        wetype_config::DefaultLanguage::English;
@@ -1801,6 +1863,7 @@ public:
     s->pendingPairRight.clear();
     s->symbolAutoState = 0;
     s->vMode = false;
+    s->vCalculator = false;
     s->cloudPollUntil = 0;
     ic->inputPanel().reset();
     if (child_ > 0)
@@ -1810,7 +1873,14 @@ public:
   }
   void deactivate(const InputMethodEntry &entry,
                   InputContextEvent &e) override {
-    state(e.inputContext())->active = false;
+    auto *s = state(e.inputContext());
+    if (vModeSession_ == s->id && s->vMode &&
+        instance_->lastFocusedInputContext() == nullptr) {
+      std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
+      log << "V toolbar kept: no input context has focus\n";
+      return;
+    }
+    s->active = false;
     reset(entry, e);
     if (child_ > 0)
       send(e.inputContext(), "close");
@@ -1830,6 +1900,7 @@ public:
       return;
     s->selectionPending = true;
     s->vMode = false;
+    s->vCalculator = false;
     ic->inputPanel().setCandidateList(nullptr);
     // Keep the current client preedit until the asynchronous select response
     // commits the chosen text.  Clearing it here races React/contenteditable
@@ -2128,6 +2199,7 @@ public:
       send(ic, "key", "v");
       send(ic, "vmode");
       s->vMode = true;
+      s->vCalculator = false;
       s->preedit.clear();
       s->cursor = 0;
       clearDisplayState(s);

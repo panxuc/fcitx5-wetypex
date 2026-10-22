@@ -832,6 +832,7 @@ private:
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("fcitx5-wetypex-transfer"));
+  app.setDesktopFileName(QStringLiteral("fcitx5-wetypex-transfer"));
   TransferWindow window;
   window.show();
   return app.exec();

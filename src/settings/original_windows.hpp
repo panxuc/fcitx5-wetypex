@@ -19,6 +19,7 @@
 #include <QTabBar>
 #include <QToolButton>
 #include <QWidget>
+#include <QWindow>
 
 namespace original_ui {
 
@@ -212,11 +213,20 @@ public:
 
 protected:
   void mousePressEvent(QMouseEvent *event) override {
-    if (event->button() == Qt::LeftButton && wetype::mousePosition(event).y() < 58) {
-      dragOffset_ =
-          wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
+    if (event->button() != Qt::LeftButton ||
+        wetype::mousePosition(event).y() >= 58)
+      return;
+
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    if (windowHandle() && windowHandle()->startSystemMove()) {
       event->accept();
+      return;
     }
+#endif
+
+    dragOffset_ =
+        wetype::mouseGlobalPosition(event) - frameGeometry().topLeft();
+    event->accept();
   }
   void mouseMoveEvent(QMouseEvent *event) override {
     if (event->buttons().testFlag(Qt::LeftButton) && !dragOffset_.isNull()) {

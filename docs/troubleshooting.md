@@ -77,9 +77,11 @@ V 工具栏在支持 `zwlr_layer_shell_v1` 的 Wayland 合成器上使用不接�
 
 标准 deb 使用 Qt5 并保留跨发行版基线；Ubuntu 26.04 和 Debian 13 已不再提供 Qt5 的 LayerShellQt，所以 deb 在 Wayland 会话使用原生候选菜单，避免新增不可解析的旧库依赖。Qt5.12 的 legacy 包采用相同回退。X11 会话仍使用独立工具栏；显式指定 `QT_QPA_PLATFORM=xcb` 时也保留该选择。原生 Wayland 的本机源码构建可安装匹配 Qt 主版本的 LayerShellQt 开发包、运行时 shell 插件及 `wayland-client`，启用独立工具栏。
 
+Hyprland 0.55+ 使用 Lua 配置。安装的 `hyprland.lua` 只包含设置、隔空传送和 AI 窗口的浮动/居中规则；V 工具栏是 layer-shell 表面，不受 `hl.window_rule` 影响。Wayland 光标矩形是相对输入表面的坐标，Hyprland 下由 `state/vmode.log` 中的 `placement:` 行记录解析后的锚点、显示器、工作区和当前窗口范围，可用来确认定位来源。工具栏会优先限制在当前窗口内，避免点击时焦点落到下方窗口；窗口过小时退回显示器工作区。工具栏位置异常时不要用窗口规则尝试修复，应检查 LayerShellQt、合成器协议和该日志。加载方式和验证命令见 [Hyprland 兼容](hyprland.md)。
+
 单实例守卫使用 `flock`。`state/vmode.lock` 文件保留在磁盘上，进程退出（包括 SIGTERM、SIGKILL）后内核自动释放锁；文件存在不表示工具栏仍在运行，无需手工删除。删除活实例使用的锁文件会破坏互斥，应先关闭工具栏。
 
-仍有异常时检查 `state/vmode.log`，其中记录最近一次启动使用的窗口协议、Qt 错误和轮询关闭原因，不记录输入内容。
+仍有异常时检查 `state/vmode.log`，其中记录最近一次启动使用的窗口协议、定位参数、按钮动作和轮询关闭原因，不记录输入内容。
 
 ## AI 窗口空白或缺图标
 
