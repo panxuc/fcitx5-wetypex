@@ -16,6 +16,7 @@
 #include <QRegularExpression>
 #include <QSizePolicy>
 #include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -306,6 +307,14 @@ private:
     if (question.isEmpty())
       return;
     const QString displayedQuestion = question;
+    auto requestDir = std::make_shared<QTemporaryDir>(
+        QDir::tempPath() + QStringLiteral("/fcitx5-wetypex-ai-XXXXXX"));
+    if (!requestDir->isValid()) {
+      response_->setHtml(
+          statusPage(displayedQuestion,
+                     QStringLiteral("无法创建临时目录，请稍后重试"), false));
+      return;
+    }
     if (polish)
       question.prepend(
           QStringLiteral("请优化下面这段表达，并只给出优化后的文本：\n"));
@@ -316,14 +325,12 @@ private:
     response_->setHtml(statusPage(displayedQuestion,
                                   QStringLiteral("正在生成回答"), true));
     const QString output =
-        QStandardPaths::writableLocation(QStandardPaths::AppDataLocation) +
-        QStringLiteral("/ai-response.html");
-    QDir().mkpath(QFileInfo(output).absolutePath());
+        requestDir->filePath(QStringLiteral("response.html"));
     auto *process = new QProcess(this);
     wetype::onProcessDone(
         process, this,
-        [this, process, output, displayedQuestion](int code,
-                                                   QProcess::ExitStatus status) {
+        [this, process, output, displayedQuestion,
+         requestDir](int code, QProcess::ExitStatus status) {
           busy_ = false;
           input_->setPlaceholderText(QStringLiteral("输入问题，获取 AI 回答"));
           const bool loaded =
@@ -357,7 +364,13 @@ int main(int argc, char **argv) {
   // Wayland GPU compositing gives WebEngine a separate surface whose page
   // background shows the desktop through it; software compositing stays opaque.
   QByteArray webEngineFlags = qgetenv("QTWEBENGINE_CHROMIUM_FLAGS");
-  if (!webEngineFlags.contains("--disable-gpu")) {
+  const auto platform = qgetenv("QT_QPA_PLATFORM");
+  const bool wayland =
+      platform.startsWith("wayland") ||
+      (platform.isEmpty() &&
+       (!qEnvironmentVariableIsEmpty("WAYLAND_DISPLAY") ||
+        qEnvironmentVariable("XDG_SESSION_TYPE") == "wayland"));
+  if (wayland && !webEngineFlags.contains("--disable-gpu")) {
     if (!webEngineFlags.isEmpty())
       webEngineFlags += ' ';
     webEngineFlags += "--disable-gpu";
