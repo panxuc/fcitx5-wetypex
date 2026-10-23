@@ -2647,6 +2647,7 @@ static std::vector<unsigned char> llm_service_cookie;
 static unsigned llm_service_events = 0;
 static std::atomic<bool> llm_service_finished{false};
 static void llm_service_callback(LlmEvent event) {
+  bool finished = false;
   fprintf(stdout, "LLM_EVENT chat=%d frame=%d error=%d end=%d results=%u\n",
           event.chat_id, event.frame, event.error_code, event.is_end,
           event.result_count);
@@ -2670,10 +2671,12 @@ static void llm_service_callback(LlmEvent event) {
     std::string metadata(item.text ? item.text : "", item.text_length);
     if (metadata.find("\"is_answer_end\":1") != std::string::npos ||
         metadata.find("\"is_answer_end\":true") != std::string::npos)
-      llm_service_finished = true;
+      finished = true;
   }
-  if (event.is_end)
-    llm_service_finished = true;
+  // is_end terminates this transport frame. A nonempty cookie continues the
+  // answer in a later request, even when the current frame is complete.
+  if (event.is_end && (event.error_code || !event.cookie_length))
+    finished = true;
   {
     std::lock_guard lock(llm_service_mutex);
     llm_service_cookie.assign(event.cookie,
@@ -2682,6 +2685,10 @@ static void llm_service_callback(LlmEvent event) {
     ++llm_service_events;
   }
   fflush(stdout);
+  // Do not let the main thread exit before the final rendered document has
+  // been flushed by this callback.
+  if (finished)
+    llm_service_finished = true;
 }
 struct LlmSearchParam {
   const char *text;
