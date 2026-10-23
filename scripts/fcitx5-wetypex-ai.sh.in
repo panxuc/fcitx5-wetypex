@@ -51,7 +51,9 @@ if [ "$fetch_only" -eq 1 ]; then
       python3 - "$raw" "$html" <<'PY'
 import os,pathlib,sys,tempfile
 raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
-start=raw.find('<!DOCTYPE html>');end=raw.find('\nLLM_RESULT',start)
+# The service emits successive rendered snapshots while the answer streams.
+# The first document may contain only an opening Markdown token.
+start=raw.rfind('<!DOCTYPE html>');end=raw.find('\nLLM_RESULT',start)
 if start < 0 or end < 0: raise SystemExit(1)
 target=pathlib.Path(sys.argv[2])
 fd,temporary=tempfile.mkstemp(prefix='.wetypex-ai-',dir=str(target.parent))
