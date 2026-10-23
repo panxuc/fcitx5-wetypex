@@ -1611,13 +1611,12 @@ class WeType : public InputMethodEngine {
     }
     auto *s = state(ic);
     auto seq = uint64_t(wire::number(j.get(), "seq"));
-    if (uint64_t(wire::number(j.get(), "epoch")) != s->epoch ||
-        seq <= s->applied || seq > s->seq)
+    auto respEpoch = uint64_t(wire::number(j.get(), "epoch"));
+    if (respEpoch != s->epoch || seq <= s->applied || seq > s->seq)
       return;
     s->applied = seq;
     activity_ = now(CLOCK_MONOTONIC);
-    if (!s->active || !ic->hasFocus() ||
-        ic->capabilityFlags().test(CapabilityFlag::Password))
+    if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     if (s->vMenu != VMenu::None) {
       auto *words = wire::get(j.get(), "hotwords");

@@ -47,13 +47,12 @@ inline Json parse(const std::string &s) {
   if (!t)
     return {};
 #ifdef JSON_TOKENER_VALIDATE_UTF8
-  json_tokener_set_flags(t, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+  json_tokener_set_flags(t, JSON_TOKENER_VALIDATE_UTF8);
 #else
   if (!validUtf8(s)) {
     json_tokener_free(t);
     return {};
   }
-  json_tokener_set_flags(t, JSON_TOKENER_STRICT);
 #endif
   auto *p = json_tokener_parse_ex(t, s.c_str(), s.size() + 1);
   bool ok = json_tokener_get_error(t) == json_tokener_success;
