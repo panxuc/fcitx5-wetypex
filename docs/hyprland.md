@@ -83,7 +83,7 @@ V 工具栏使用 `zwlr_layer_shell_v1`，不是普通 `xdg_toplevel`，因此 `
 
 Wayland 下 Fcitx 给出的是相对输入表面的光标矩形，不是全局坐标。Hyprland 上工具栏通过 IPC 读取当前聚焦窗口的 `at`，加上光标矩形并除以缩放系数得到插入点，再按显示器 `reserved` 区域限制在屏幕内；读取失败时退回 `j/cursorpos`。`state/vmode.log` 的 `placement:` 行会记录坐标系来源、锚点、显示器和工作区，便于核对位置。
 
-工具栏是 `KeyboardInteractivityNone` 的 overlay 层，不接收键盘焦点。即使合成器在打开或点击时短暂改变了焦点，输入法也会保留 V 会话，只有焦点切换到另一个输入上下文时才关闭工具栏；工具栏进程异常退出且原输入框仍有焦点时，改用原生候选菜单。
+工具栏是 `KeyboardInteractivityNone` 的 overlay 层，不接收键盘焦点。合成器在打开或点击时短暂改变焦点，输入法会等待最多 500ms，原输入框恢复焦点后才执行工具栏动作。超时、切换输入框或停用输入法会结束该会话；工具栏进程异常退出且原输入框仍有焦点时，改用原生候选菜单。
 
 LayerShellQt 或合成器协议不可用时，V 工具栏会回退到 Fcitx 原生候选菜单。Hyprland 下如果工具栏位置异常或闪退，请检查 `state/vmode.log`，并确认 LayerShellQt 的 Qt 主版本与 Fcitx5 使用的 Qt 版本一致。
 

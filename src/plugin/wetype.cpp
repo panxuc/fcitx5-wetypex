@@ -282,7 +282,8 @@ class WeType : public InputMethodEngine {
   uint64_t vModeSession_ = 0, vModeEpoch_ = 0, vModeGeneration_ = 0;
   std::string vModeToken_;
   bool vModeNative_ = false;
-  int vModeActionRetries_ = 0;
+  uint64_t vModeFocusDeadline_ = 0;
+  bool vModeFallbackPending_ = false;
   std::string inbound_, outbound_;
   bool voiceRecording_ = false, voiceHold_ = false;
   uint64_t voiceSession_ = 0, voiceEpoch_ = 0;
@@ -1101,7 +1102,8 @@ class WeType : public InputMethodEngine {
     vModeSession_ = vModeEpoch_ = 0;
     vModeToken_.clear();
     vModeNative_ = false;
-    vModeActionRetries_ = 0;
+    vModeFocusDeadline_ = 0;
+    vModeFallbackPending_ = false;
   }
   void cancelVMode(InputContext *ic, const char *reason = "V mode cancelled") {
     auto *s = state(ic);
@@ -1137,7 +1139,8 @@ class WeType : public InputMethodEngine {
     vModeToken_ = std::to_string(getpid()) + "-" +
                   std::to_string(now(CLOCK_MONOTONIC)) + "-" +
                   std::to_string(++vModeGeneration_);
-    vModeActionRetries_ = 0;
+    vModeFocusDeadline_ = 0;
+    vModeFallbackPending_ = false;
     std::vector<std::string> args{
         WETYPE_VMODE, std::to_string(s->id), std::to_string(rect.left()),
         std::to_string(rect.bottom()), std::to_string(s->epoch), vModeToken_,
@@ -1187,47 +1190,42 @@ class WeType : public InputMethodEngine {
     if (!session || session != vModeSession_ || epoch != vModeEpoch_ ||
         vModeToken_.empty() || wire::str(message.get(), "token") != vModeToken_) {
       std::filesystem::remove(path, error);
-      vModeActionRetries_ = 0;
       return;
     }
     auto it = contexts_.find(session);
     auto *ic = it == contexts_.end() ? nullptr : it->second.get();
     if (!ic) {
       std::filesystem::remove(path, error);
-      vModeActionRetries_ = 0;
       return;
     }
     const auto action = wire::str(message.get(), "action");
     auto *s = state(ic);
     const bool password =
         ic->capabilityFlags().test(CapabilityFlag::Password);
-    if (password || !s->vMode || s->epoch != epoch) {
+    if (password || !s->active || !s->vMode || s->epoch != epoch) {
       std::filesystem::remove(path, error);
-      vModeActionRetries_ = 0;
       std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
       log << "V toolbar action dropped: " << action.substr(0, 32) << '\n';
       return;
     }
     if (action == "cancel") {
       std::filesystem::remove(path, error);
-      vModeActionRetries_ = 0;
       cancelVMode(ic);
       return;
     }
-    // The layer surface can briefly move focus while it closes. Retry instead
-    // of dropping a token-validated action; the file is atomic and single-use.
+    // Wait briefly for the original client to regain focus. A valid token
+    // identifies the session, but never grants permission to commit unfocused.
     auto *focused = instance_->lastFocusedInputContext();
-    const bool transient =
-        !s->active || (action != "calculator" && focused && focused != ic);
-    if (transient && ++vModeActionRetries_ <= 20)
-      return;
-    std::filesystem::remove(path, error);
-    vModeActionRetries_ = 0;
-    std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
-    if (transient) {
-      log << "V toolbar action dropped: " << action.substr(0, 32) << '\n';
+    if (!ic->hasFocus() || (focused && focused != ic)) {
+      if (!focused && vModeFocusDeadline_ &&
+          now(CLOCK_MONOTONIC) < vModeFocusDeadline_)
+        return;
+      std::filesystem::remove(path, error);
+      cancelVMode(ic, "toolbar action target lost focus");
       return;
     }
+    std::filesystem::remove(path, error);
+    std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
     log << "V toolbar action: " << action.substr(0, 32) << '\n';
     if (action == "calculator") {
       // Keep the original core's armed VModeV2 session for keyboard input.
@@ -1255,10 +1253,6 @@ class WeType : public InputMethodEngine {
     }
     auto *s = state(ic);
     auto *focused = instance_->lastFocusedInputContext();
-    // A layer-shell toolbar can take the compositor's focus on some
-    // compositors even when keyboard interactivity is disabled. Treat only a
-    // focus move to another input context as a real switch; no focused
-    // context means the toolbar (or a non-input window) owns the focus.
     const bool otherFocus = focused && focused != ic;
     const auto exited =
         vModeChild_ > 0 ? waitpid(vModeChild_, nullptr, WNOHANG) : 0;
@@ -1266,25 +1260,26 @@ class WeType : public InputMethodEngine {
         exited > 0 || (exited < 0 && errno == ECHILD);
     if (exited == vModeChild_ || (exited < 0 && errno == ECHILD))
       vModeChild_ = -1;
-    if (exitedNow && focused == ic && s->active && s->vMode &&
-        s->epoch == vModeEpoch_ &&
-        !ic->capabilityFlags().test(CapabilityFlag::Password)) {
+    vModeFallbackPending_ |= exitedNow;
+    const bool password = ic->capabilityFlags().test(CapabilityFlag::Password);
+    if (!otherFocus && s->active && s->vMode && s->epoch == vModeEpoch_ &&
+        !password && !ic->hasFocus() && !vModeNative_ && vModeFocusDeadline_ &&
+        now(CLOCK_MONOTONIC) < vModeFocusDeadline_)
+      return;
+    if (otherFocus || !ic->hasFocus() || !s->active || !s->vMode ||
+        s->epoch != vModeEpoch_ || password) {
+      cancelVMode(ic, "toolbar input context changed or focus grace expired");
+      return;
+    }
+    vModeFocusDeadline_ = 0;
+    if (vModeFallbackPending_) {
+      vModeFallbackPending_ = false;
       vModeNative_ = true;
       mainVMenu(ic);
       return;
     }
-    if ((vModeChild_ <= 0 && !vModeNative_) || otherFocus || !s->active ||
-        !s->vMode || s->epoch != vModeEpoch_ ||
-        ic->capabilityFlags().test(CapabilityFlag::Password)) {
-      const auto *reason =
-          otherFocus ? "input focus moved to another context"
-          : vModeChild_ <= 0 && !vModeNative_ ? "process exited"
-          : !s->active                       ? "input method deactivated"
-          : !s->vMode                        ? "V mode ended"
-          : s->epoch != vModeEpoch_          ? "input session changed"
-                                             : "password input context";
-      cancelVMode(ic, reason);
-    }
+    if (vModeChild_ <= 0 && !vModeNative_)
+      cancelVMode(ic, "toolbar process exited");
   }
   State *state(InputContext *ic) {
     auto *s = ic->propertyFor(&factory_);
@@ -1827,11 +1822,16 @@ public:
       stopSync();
     auto *ic = e.inputContext();
     auto *current = state(ic);
-    if (vModeSession_ == current->id && current->vMode) {
+    if (vModeSession_ == current->id && current->vMode && vModeFocusDeadline_ &&
+        now(CLOCK_MONOTONIC) >= vModeFocusDeadline_)
+      cancelVMode(ic, "toolbar focus grace expired before activation");
+    if (vModeSession_ == current->id && current->vMode && current->active &&
+        !ic->capabilityFlags().test(CapabilityFlag::Password)) {
       // The toolbar is still open after a focus round trip caused by the
       // layer surface itself. Do not send "open" again: it would reset the
       // backend V session the toolbar is still using.
       current->active = true;
+      vModeFocusDeadline_ = 0;
       ic->statusArea().addAction(StatusGroup::InputMethod, &settingsAction_);
       panel(ic, current);
       return;
@@ -1874,10 +1874,13 @@ public:
   void deactivate(const InputMethodEntry &entry,
                   InputContextEvent &e) override {
     auto *s = state(e.inputContext());
-    if (vModeSession_ == s->id && s->vMode &&
+    if (e.type() == EventType::InputContextFocusOut && vModeSession_ == s->id &&
+        s->vMode && !vModeNative_ &&
         instance_->lastFocusedInputContext() == nullptr) {
+      if (!vModeFocusDeadline_)
+        vModeFocusDeadline_ = now(CLOCK_MONOTONIC) + 500000;
       std::ofstream log(stateDirectory() / "vmode.log", std::ios::app);
-      log << "V toolbar kept: no input context has focus\n";
+      log << "V toolbar waiting up to 500ms for original input focus\n";
       return;
     }
     s->active = false;
