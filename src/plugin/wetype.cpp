@@ -1616,7 +1616,8 @@ class WeType : public InputMethodEngine {
       return;
     s->applied = seq;
     activity_ = now(CLOCK_MONOTONIC);
-    if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
+    if (!s->active || !ic->hasFocus() ||
+        ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     if (s->vMenu != VMenu::None) {
       auto *words = wire::get(j.get(), "hotwords");

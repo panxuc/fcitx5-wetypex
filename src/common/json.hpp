@@ -15,7 +15,6 @@ struct Deleter {
 };
 using Json = std::unique_ptr<json_object, Deleter>;
 inline Json object() { return Json(json_object_new_object()); }
-#ifndef JSON_TOKENER_VALIDATE_UTF8
 inline bool validUtf8(const std::string &text) {
   for (size_t i = 0; i < text.size(); ++i) {
     const auto first = static_cast<unsigned char>(text[i]);
@@ -39,30 +38,74 @@ inline bool validUtf8(const std::string &text) {
   }
   return true;
 }
-#endif
+// json-c 0.18 compares signed UTF-8 bytes with 0x1f in strict mode
+// (upstream #875). Keep strict JSON syntax by escaping raw string scalars
+// before passing them to that version, including supplementary-plane emoji.
+inline std::string asciiJson(const std::string &text) {
+  std::string output;
+  output.reserve(text.size());
+  bool quoted = false, escaped = false;
+  const auto append = [&](uint32_t value) {
+    constexpr char hex[] = "0123456789abcdef";
+    output += "\\u";
+    for (int shift : {12, 8, 4, 0})
+      output += hex[(value >> shift) & 15];
+  };
+  for (size_t i = 0; i < text.size(); ++i) {
+    const auto c = static_cast<unsigned char>(text[i]);
+    if (c < 0x80) {
+      output += char(c);
+      if (quoted) {
+        if (escaped)
+          escaped = false;
+        else if (c == '\\')
+          escaped = true;
+        else if (c == '"')
+          quoted = false;
+      } else if (c == '"')
+        quoted = true;
+      continue;
+    }
+    if (!quoted || escaped)
+      return {};
+    const size_t tails = c < 0xe0 ? 1 : c < 0xf0 ? 2 : 3;
+    uint32_t scalar = c & (tails == 1 ? 0x1f : tails == 2 ? 0xf : 7);
+    for (size_t j = 0; j < tails; ++j)
+      scalar = (scalar << 6) | (static_cast<unsigned char>(text[++i]) & 0x3f);
+    if (scalar > 0xffff) {
+      scalar -= 0x10000;
+      append(0xd800 + (scalar >> 10));
+      append(0xdc00 + (scalar & 0x3ff));
+    } else
+      append(scalar);
+  }
+  return output;
+}
 inline Json parse(const std::string &s) {
-  if (s.size() >= INT_MAX)
+  if (s.size() >= INT_MAX || !validUtf8(s))
+    return {};
+  const bool affected = (json_c_version_num() & 0xffff00) == 0x1200;
+  const std::string escaped = affected ? asciiJson(s) : std::string();
+  const auto &input = affected ? escaped : s;
+  if ((!s.empty() && input.empty()) || input.size() >= INT_MAX)
     return {};
   json_tokener *t = json_tokener_new();
   if (!t)
     return {};
 #ifdef JSON_TOKENER_VALIDATE_UTF8
-  json_tokener_set_flags(t, JSON_TOKENER_VALIDATE_UTF8);
+  json_tokener_set_flags(t, JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
 #else
-  if (!validUtf8(s)) {
-    json_tokener_free(t);
-    return {};
-  }
+  json_tokener_set_flags(t, JSON_TOKENER_STRICT);
 #endif
-  auto *p = json_tokener_parse_ex(t, s.c_str(), s.size() + 1);
+  auto *p = json_tokener_parse_ex(t, input.c_str(), input.size() + 1);
   bool ok = json_tokener_get_error(t) == json_tokener_success;
 #ifdef JSON_TOKENER_VALIDATE_UTF8
   const size_t consumed = json_tokener_get_parse_end(t);
 #else
   const size_t consumed = t->char_offset;
 #endif
-  for (size_t end = consumed; end < s.size(); ++end)
-    if (!std::isspace(static_cast<unsigned char>(s[end])))
+  for (size_t end = consumed; end < input.size(); ++end)
+    if (!std::isspace(static_cast<unsigned char>(input[end])))
       ok = false;
   json_tokener_free(t);
   if (!ok && p)

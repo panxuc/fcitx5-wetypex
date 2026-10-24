@@ -2866,6 +2866,12 @@ int main(int argc, char **argv) {
       return 2;
     const auto flags = capabilities();
     auto report = wire::object();
+    auto unicode = wire::object();
+    wire::put(unicode.get(), "text", std::string(u8"中文🙂"));
+    auto roundtrip = wire::parse(wire::dump(unicode.get()));
+    const bool jsonReady = wire::str(roundtrip.get(), "text") == u8"中文🙂";
+    wire::put(report.get(), "json_c_version", std::string(json_c_version()));
+    wire::boolean(report.get(), "utf8_json", jsonReady);
     wire::put(report.get(), "libcurl_version", std::string(version()));
     wire::put(report.get(), "provider", std::string(provider()));
     wire::boolean(report.get(), "ws", flags & 1);
@@ -2874,7 +2880,7 @@ int main(int argc, char **argv) {
     wire::put(report.get(), "address_policy",
               std::string("happy-eyeballs-200ms-with-ipv4-retry"));
     puts(wire::dump(report.get()).c_str());
-    return (flags & 3) == 3 ? 0 : 1;
+    return (flags & 3) == 3 && jsonReady ? 0 : 1;
   }
   std::string dir = argv[1], mode = argv[2], line;
   std::vector<std::string> binds, unwinds;
