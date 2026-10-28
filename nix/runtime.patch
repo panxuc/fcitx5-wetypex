@@ -282,7 +282,7 @@ index 629aff3..87779ae 100644
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
 diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
-index de6e6a4..a86f210 100644
+index de6e6a4..0c42c66 100644
 --- a/scripts/setup_runtime.py
 +++ b/scripts/setup_runtime.py
 @@ -1,4 +1,4 @@
@@ -333,7 +333,16 @@ index de6e6a4..a86f210 100644
          for name, original in {'input':'icon_setup_sidebar_keyboard.svg',
                                 'voice':'icon_setup_sidebar_microphone.svg',
                                 'phrases':'icon_setup_sidebar_changyongyu.svg',
-@@ -159,7 +176,7 @@ def digest(path):
+@@ -91,6 +108,8 @@ def install_ui_resources(archive, data):
+         candidate=prefix+'candidate/icons/'
+         for theme,variant in (('wetypex-light','light'),
+                               ('wetypex-dark','dark')):
++            if (data/'fcitx5/themes'/theme).is_symlink():
++                continue
+             assets['fcitx5/themes/'+theme+'/next.svg']=(
+                 candidate+'bubble_normal_arrow_lower_'+variant+'.svg')
+             assets['fcitx5/themes/'+theme+'/prev.svg']=(
+@@ -159,7 +178,7 @@ def digest(path):
      with path.open('rb') as stream:return stream_digest(stream,'sha256')
 
  def validate_runtime(target):
@@ -342,7 +351,7 @@ index de6e6a4..a86f210 100644
      host=support/'wetypex-engine-host'
      locale=support/'locale.so'
      if not locale.exists():locale=support/'wetypex-locale.so'
-@@ -178,12 +195,14 @@ def validate_runtime(target):
+@@ -178,12 +197,14 @@ def validate_runtime(target):
          return False,'unable to check UTF-8 JSON compatibility'
      with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
          command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
