@@ -109,6 +109,45 @@ FFmpeg 及部分桌面依赖可能来自发行版启用的附加软件仓库。
 
 RPM 以 Fedora 40 为构建基线。Arch 是滚动发行版，发布包跟随当前仓库；旧系统应保持库版本一致或在对应环境从源码构建。
 
+### NixOS
+
+Flake 提供 `packages.x86_64-linux.fcitx5-wetypex` 和同一包的 `default` 别名。
+在现有系统 flake 中加入 input，并跟随系统的 Nixpkgs，以匹配 Fcitx5 插件 ABI：
+
+```nix
+inputs.wetypex = {
+  url = "github:panxuc/fcitx5-wetypex";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+```
+
+在 `outputs` 中接收 `wetypex`，然后把模块加入现有 `nixosSystem.modules`：
+
+```nix
+outputs = { nixpkgs, wetypex, ... }: {
+  nixosConfigurations.YOUR_HOST = nixpkgs.lib.nixosSystem {
+    # 保留已有的 system、hardware-configuration.nix 和其他 modules。
+    modules = [
+      ({ pkgs, ... }: {
+        i18n.inputMethod = {
+          enable = true;
+          type = "fcitx5";
+          fcitx5.addons = [
+            wetypex.packages.${pkgs.stdenv.hostPlatform.system}.fcitx5-wetypex
+          ];
+        };
+      })
+    ];
+  };
+};
+```
+
+应用系统配置后，按下方“首次设置”准备原版运行时。Nix 构建只安装社区适配层，原版安装包和资源仍由用户在接受上游许可后自行初始化。
+
+包的安装路径、动态库、证书和 Bubblewrap 沙箱已适配 Nix store；Nix 包由 flake 锁文件管理更新，内置发行版更新器关闭。更新 input 后重新构建系统即可升级。
+
+在源码仓库中可单独运行 `nix build .#fcitx5-wetypex` 或 `nix flake check` 验证包。本 flake 仅提供 Linux x86_64 输出。
+
 ### 便携归档
 
 ```bash

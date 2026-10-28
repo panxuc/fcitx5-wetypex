@@ -1,0 +1,801 @@
+diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-account.sh.in
+--- a/scripts/fcitx5-wetypex-account.sh.in
++++ b/scripts/fcitx5-wetypex-account.sh.in
+@@ -1,4 +1,6 @@
+-#!/bin/sh
++#!@NIX_BASH@
++export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
+ set -eu
+ umask 077
+ 
+@@ -7,7 +9,7 @@
+   exec @CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-voice transcribe "${2:-}"
+ fi
+ if [ "$command_name" = network-info ]; then
+-  support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
++  support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+   exec "$support/wetypex-engine-host" "$support" network-info
+ fi
+ if [ "$command_name" = sync-now ]; then
+@@ -51,7 +53,7 @@
+     group_id="${2:-}"
+     case "$group_id" in *[!0-9]*|'') echo "set-functions requires a numeric GROUP_ID" >&2; exit 64;; esac
+     case "$operation_value" in *[!0-9]*|'') echo "set-functions requires a numeric function mask" >&2; exit 64;; esac
+-    python3 - "$group_id" "$operation_value" <<'PY'
++    @NIX_PYTHON@ - "$group_id" "$operation_value" <<'PY'
+ import sys
+ group, mask = map(int, sys.argv[1:])
+ if not 0 < group < 2**64 or not 0 <= mask < 2**64:
+@@ -133,7 +135,7 @@
+ 
+ runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
+ state="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
+-support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
++support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+ test -f "$runtime/manifest.txt" || {
+   echo "Run fcitx5-wetypex-setup first." >&2
+   exit 78
+@@ -167,16 +169,14 @@
+   # database. Wait for the current short operation instead of surfacing an
+   # intermittent failure when two callers overlap.
+   bwrap --unshare-pid --die-with-parent \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 \
+-      --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
++      --ro-bind /nix/store /nix/store --proc /proc --dev /dev --tmpfs /tmp \
+       --dir /etc --ro-bind /etc/resolv.conf /etc/resolv.conf \
+       --ro-bind /etc/hosts /etc/hosts \
+       --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+-      --ro-bind-try /etc/ssl /etc/ssl --ro-bind-try /etc/pki /etc/pki \
+-      --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
+       --ro-bind "$runtime" /input --ro-bind "$support" /support \
+       --bind "$state" /work --chdir /work --clearenv \
+-      --setenv PATH /usr/bin --setenv HOME /work \
++      --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
+       --setenv WETYPE_SUPPORT_DIR /support \
+       --setenv WETYPE_DEVICE_MODEL "$model" \
+       --setenv WETYPE_WORK_DIR /work/business \
+@@ -193,7 +193,7 @@
+   echo "Unable to initialize the original WeType account service. See $log" >&2
+   exit 1
+ fi
+-if [ "$command_name" = pairing-code ] && ! printf '%s\n' "$output" | python3 -c '
++if [ "$command_name" = pairing-code ] && ! printf '%s\n' "$output" | @NIX_PYTHON@ -c '
+ import json, sys
+ data = json.load(sys.stdin)
+ raise SystemExit(0 if data.get("pairing_error") == 0 and len(data.get("match_code", "")) == 6 else 1)
+@@ -203,7 +203,7 @@
+   output="$(run_original)"
+ fi
+ chmod 600 "$log" "$state/identity.json" 2>/dev/null || true
+-printf '%s\n' "$output" | python3 -c '
++printf '%s\n' "$output" | @NIX_PYTHON@ -c '
+ import json, sys
+ data = json.load(sys.stdin)
+ command = sys.argv[1]
+diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
+--- a/scripts/fcitx5-wetypex-ai.sh.in
++++ b/scripts/fcitx5-wetypex-ai.sh.in
+@@ -1,4 +1,6 @@
+-#!/bin/sh
++#!@NIX_BASH@
++export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
+ set -eu
+ umask 077
+ fetch_only=0
+@@ -16,14 +18,14 @@
+ data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+ runtime="${WETYPE_RUNTIME_DIR:-$data_home/fcitx5-wetypex/runtime}"
+ account="${WETYPE_ACCOUNT_STATE_DIR:-$data_home/fcitx5-wetypex/account}"
+-support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
++support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+ state="${WETYPE_AI_STATE_DIR:-$data_home/fcitx5-wetypex/ai}"
+ identity="$account/identity.json"
+ test -f "$runtime/manifest.txt" -a -f "$identity" || { echo 'WeTypeX runtime or paired identity is missing.' >&2; exit 78; }
+ mkdir -p "$state/user"
+ chmod 700 "$state"
+-uin="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["uin"])' "$identity")"
+-device="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["device_code"])' "$identity")"
++uin="$(@NIX_PYTHON@ -c 'import json,sys;print(json.load(open(sys.argv[1]))["uin"])' "$identity")"
++device="$(@NIX_PYTHON@ -c 'import json,sys;print(json.load(open(sys.argv[1]))["device_code"])' "$identity")"
+ if [ "$fetch_only" -eq 1 ]; then
+   work="$(mktemp -d "$state/request.XXXXXXXX")"
+   trap 'if [ -f "$work/last-ai.log" ]; then mv -f -- "$work/last-ai.log" "$state/last-ai.log"; fi; rm -rf -- "$work"' 0
+@@ -37,18 +39,18 @@
+   while [ "$attempt" -lt 3 ]; do
+     attempt=$((attempt + 1))
+     if timeout 50 bwrap --unshare-pid --die-with-parent \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
++      --ro-bind /nix/store /nix/store \
+       --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
+       --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
+-      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind-try /etc/ssl /etc/ssl \
+-      --ro-bind-try /etc/pki /etc/pki --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
++      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+       --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$work" /work \
+-      --chdir /work --clearenv --setenv PATH /usr/bin --setenv HOME /work \
++      --chdir /work --clearenv --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
+       --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_NETWORK_LIVE 1 \
+       --setenv WETYPE_CORE_UIN "$uin" --setenv WETYPE_CORE_DEVICE_CODE "$device" \
+       --setenv WETYPE_DEVICE_MODEL "$(cat /sys/class/dmi/id/product_name 2>/dev/null || printf LINUX)" \
+       /support/wetypex-engine-host /input llm-service "$question" > "$raw" 2> "$work/last-ai.log" && \
+-      python3 - "$raw" "$html" <<'PY'
++      @NIX_PYTHON@ - "$raw" "$html" <<'PY'
+ import os,pathlib,sys,tempfile
+ raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
+ # The service emits successive rendered snapshots while the answer streams.
+diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backend.sh.in
+--- a/scripts/fcitx5-wetypex-backend.sh.in
++++ b/scripts/fcitx5-wetypex-backend.sh.in
+@@ -1,11 +1,13 @@
+-#!/bin/sh
++#!@NIX_BASH@
++export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
+ set -eu
+ umask 077
+ runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
+ state="${WETYPE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/state}"
+ account="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
+ config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+-support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
++support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+ test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
+ mkdir -p "$state/user"
+ chmod 700 "$state"
+@@ -18,33 +20,33 @@
+ 
+ standalone=0
+ if [ -f "$config_home/fcitx5/wetypex.json" ]; then
+-  standalone="$(python3 -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
++  standalone="$(@NIX_PYTHON@ -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
+ fi
+ 
+ # The original desktop enables cloud candidates only when networking is
+ # available.  Pairing initializes this per-user anonymous device identity.
+ if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
+-  uin="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(v.get("uin", ""))' "$account/identity.json" 2>/dev/null || true)"
+-  device_code="$(python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); print(v.get("device_code", ""))' "$account/identity.json" 2>/dev/null || true)"
++  uin="$(@NIX_PYTHON@ -c 'import json,sys; v=json.load(open(sys.argv[1])); print(v.get("uin", ""))' "$account/identity.json" 2>/dev/null || true)"
++  device_code="$(@NIX_PYTHON@ -c 'import json,sys; v=json.load(open(sys.argv[1])); print(v.get("device_code", ""))' "$account/identity.json" 2>/dev/null || true)"
+   model="$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)"
+   group_id=0
+   group_functions=0
+   hotword_version=0
+   if [ -f "$state/sync-state.json" ]; then
+-    group_id="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("group_id",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
+-    group_functions="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("func_switch",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
+-    hotword_version="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("hotword_version",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
++    group_id="$(@NIX_PYTHON@ -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("group_id",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
++    group_functions="$(@NIX_PYTHON@ -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("func_switch",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
++    hotword_version="$(@NIX_PYTHON@ -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("hotword_version",0)))' "$state/sync-state.json" 2>/dev/null || printf 0)"
+   fi
+   test -n "$model" || model=LINUX
+   if [ -n "$uin" ] && [ -n "$device_code" ]; then
+     bwrap --unshare-pid --die-with-parent \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
++      --ro-bind /nix/store /nix/store \
+       --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
+       --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
+-      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind-try /etc/ssl /etc/ssl \
+-      --ro-bind-try /etc/pki /etc/pki --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
++      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+       --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
+-      --chdir /work --clearenv --setenv PATH /usr/bin --setenv HOME /work \
++      --chdir /work --clearenv --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
+       --setenv TZ "${TZ:-Asia/Shanghai}" --setenv WETYPE_SUPPORT_DIR /support \
+       --setenv WETYPE_NETWORK_LIVE 1 --setenv WETYPE_CORE_UIN "$uin" \
+       --setenv WETYPE_CORE_DEVICE_CODE "$device_code" --setenv WETYPE_DEVICE_MODEL "$model" \
+@@ -57,9 +59,10 @@
+ 
+ # Offline and standalone sessions retain a private network namespace.
+ bwrap --unshare-net --unshare-pid --die-with-parent \
+-  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
++  --ro-bind /nix/store /nix/store \
+   --proc /proc --dev /dev --tmpfs /tmp \
+   --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
+-  --chdir /work --clearenv --setenv PATH /usr/bin --setenv HOME /work \
++  --chdir /work --clearenv --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++  --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
+   --setenv TZ "${TZ:-Asia/Shanghai}" --setenv WETYPE_SUPPORT_DIR /support \
+   /support/wetypex-engine-host /input serve
+diff --git a/scripts/fcitx5-wetypex-setup.sh.in b/scripts/fcitx5-wetypex-setup.sh.in
+--- a/scripts/fcitx5-wetypex-setup.sh.in
++++ b/scripts/fcitx5-wetypex-setup.sh.in
+@@ -1,3 +1,5 @@
+-#!/bin/sh
+-export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+-exec "${WETYPE_PYTHON:-python3}" "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" "$@"
++#!@NIX_BASH@
++export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
++export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
++exec "${WETYPE_PYTHON:-@NIX_PYTHON@}" "@NIX_OUT@/share/fcitx5-wetypex/setup_runtime.py" "$@"
+diff --git a/scripts/fcitx5-wetypex-sync.sh.in b/scripts/fcitx5-wetypex-sync.sh.in
+--- a/scripts/fcitx5-wetypex-sync.sh.in
++++ b/scripts/fcitx5-wetypex-sync.sh.in
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """Refresh the device group and request synchronization from the native core."""
+ import json
+ import os
+@@ -7,6 +7,9 @@
+ import subprocess
+ import sys
+ import time
++
++os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
+ 
+ def main():
+     if sys.argv[1:] not in ([], ["--refresh-state"]):
+diff --git a/scripts/fcitx5-wetypex-syncd.sh.in b/scripts/fcitx5-wetypex-syncd.sh.in
+--- a/scripts/fcitx5-wetypex-syncd.sh.in
++++ b/scripts/fcitx5-wetypex-syncd.sh.in
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """Synchronize the Fcitx clipboard through the original WeType service."""
+ import fcntl
+ import base64
+@@ -13,6 +13,9 @@
+ import sys
+ import time
+ import tempfile
++
++os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
+ 
+ data_home = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share"))
+ state_dir = pathlib.Path(os.environ.get("WETYPE_STATE_DIR", data_home / "fcitx5-wetypex/state"))
+diff --git a/scripts/fcitx5-wetypex-update.sh.in b/scripts/fcitx5-wetypex-update.sh.in
+--- a/scripts/fcitx5-wetypex-update.sh.in
++++ b/scripts/fcitx5-wetypex-update.sh.in
+@@ -1,241 +1,3 @@
+-#!/usr/bin/env python3
+-"""Download verified WeTypeX release updates for the current Linux family."""
+-
+-import fcntl
+-import hashlib
+-import json
+-import os
+-import pathlib
+-import re
+-import shutil
+-import subprocess
+-import sys
+-import time
+-import urllib.error
+-import urllib.request
+-
+-CURRENT_VERSION = "@PROJECT_VERSION@"
+-CURRENT_PACKAGE_RELEASE = "@WETYPE_PACKAGE_RELEASE@"
+-RELEASE_API = os.environ.get(
+-    "WETYPE_UPDATE_API",
+-    "https://api.github.com/repos/panxuc/fcitx5-wetypex/releases/latest",
+-)
+-CHECK_INTERVAL = 24 * 60 * 60
+-RETRY_INTERVAL = 60 * 60
+-
+-
+-def version_tuple(value):
+-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)\.(\d+)(?:-(\d+))?", value or "")
+-    return tuple(int(part or 0) for part in match.groups()) if match else None
+-
+-
+-def read_json(path, fallback=None):
+-    try:
+-        return json.loads(path.read_text())
+-    except (OSError, ValueError):
+-        return {} if fallback is None else fallback
+-
+-
+-def atomic_json(path, value):
+-    temporary = path.with_suffix(path.suffix + ".tmp")
+-    temporary.write_text(json.dumps(value, ensure_ascii=False) + "\n")
+-    temporary.chmod(0o600)
+-    temporary.replace(path)
+-
+-
+-def request_bytes(url, timeout=20):
+-    request = urllib.request.Request(
+-        url,
+-        headers={
+-            "Accept": "application/vnd.github+json",
+-            "User-Agent": f"WeTypeX/{CURRENT_VERSION}",
+-            "X-GitHub-Api-Version": "2022-11-28",
+-        },
+-    )
+-    with urllib.request.urlopen(request, timeout=timeout) as response:
+-        return response.read()
+-
+-
+-def linux_family():
+-    values = {}
+-    try:
+-        for line in pathlib.Path("/etc/os-release").read_text().splitlines():
+-            if "=" in line:
+-                key, value = line.split("=", 1)
+-                values[key] = value.strip().strip('"')
+-    except OSError:
+-        pass
+-    names = {values.get("ID", ""), *values.get("ID_LIKE", "").split()}
+-    if "arch" in names:
+-        return "arch"
+-    if names & {"debian", "ubuntu"}:
+-        return "debian"
+-    if names & {"fedora", "rhel", "centos"}:
+-        return "fedora"
+-    return ""
+-
+-
+-def select_asset(assets, family):
+-    patterns = {
+-        "arch": re.compile(r"^fcitx5-wetypex-[^-]+-\d+-x86_64\.pkg\.tar\.zst$"),
+-        "debian": re.compile(r"^fcitx5-wetypex_[^_]+_amd64\.deb$"),
+-        "fedora": re.compile(r"^fcitx5-wetypex-[^-]+-\d+\.x86_64\.rpm$"),
+-    }
+-    pattern = patterns.get(family)
+-    if family == "debian":
+-        try:
+-            glibc = tuple(int(part) for part in os.confstr("CS_GNU_LIBC_VERSION").split()[-1].split("."))
+-        except (OSError, ValueError, AttributeError):
+-            glibc = ()
+-        if glibc and glibc < (2, 35):
+-            pattern = re.compile(r"^fcitx5-wetypex-legacy_[^_]+_amd64\.deb$")
+-    if not pattern:
+-        return None
+-    return next(
+-        (asset for asset in assets if pattern.fullmatch(asset.get("name", ""))),
+-        None,
+-    )
+-
+-
+-def notify_and_offer_install(package, version, family):
+-    notify = shutil.which("notify-send")
+-    if not notify:
+-        return
+-    command = [
+-        notify,
+-        "--app-name=WeTypeX",
+-        "--icon=fcitx5-wetypex",
+-        "--action=install=安装更新",
+-        f"WeTypeX {version} 已下载",
+-        f"已校验软件包：{package.name}",
+-    ]
+-    try:
+-        selected = subprocess.run(command, capture_output=True, text=True).stdout.strip()
+-    except OSError:
+-        return
+-    if selected != "install" or not shutil.which("pkexec"):
+-        return
+-    installers = {
+-        "arch": ["pacman", "-U", "--noconfirm", str(package)],
+-        "debian": ["apt-get", "install", "-y", str(package)],
+-        "fedora": ["dnf", "install", "-y", str(package)],
+-    }
+-    subprocess.Popen(["pkexec", *installers[family]], start_new_session=True)
+-
+-
+-def main():
+-    config_home = pathlib.Path(
+-        os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")
+-    )
+-    config = read_json(config_home / "fcitx5/wetypex.json")
+-    if not config.get("auto_update", True) and "--force" not in sys.argv:
+-        return 0
+-
+-    cache_home = pathlib.Path(
+-        os.environ.get("XDG_CACHE_HOME", pathlib.Path.home() / ".cache")
+-    )
+-    root = pathlib.Path(
+-        os.environ.get("WETYPE_UPDATE_DIR", cache_home / "fcitx5-wetypex/updates")
+-    )
+-    root.mkdir(parents=True, exist_ok=True)
+-    root.chmod(0o700)
+-    lock = open(root / "update.lock", "a+")
+-    try:
+-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+-    except BlockingIOError:
+-        lock.close()
+-        return 0
+-    try:
+-        return check_update(root)
+-    finally:
+-        lock.close()
+-
+-
+-def check_update(root):
+-    state_path = root / "state.json"
+-    state = read_json(state_path)
+-    now = int(time.time())
+-    if "--force" not in sys.argv and now < int(state.get("next_check", 0)):
+-        return 0
+-    try:
+-        release = json.loads(request_bytes(RELEASE_API))
+-        version = version_tuple(release.get("tag_name", ""))
+-        current = version_tuple(f"{CURRENT_VERSION}-{CURRENT_PACKAGE_RELEASE}")
+-        if not version or not current:
+-            raise ValueError("invalid release version")
+-        if version <= current:
+-            atomic_json(
+-                state_path,
+-                {
+-                    "checked_at": now,
+-                    "next_check": now + CHECK_INTERVAL,
+-                    "latest_version": release.get("tag_name", ""),
+-                },
+-            )
+-            return 0
+-        assets = release.get("assets", [])
+-        family = linux_family()
+-        package_asset = select_asset(assets, family)
+-        checksums = next(
+-            (item for item in assets if item.get("name") == "SHA256SUMS"), None
+-        )
+-        if not package_asset or not checksums:
+-            raise ValueError("release has no package for this distribution")
+-        package = root / package_asset["name"]
+-        partial = package.with_suffix(package.suffix + ".part")
+-        partial.write_bytes(request_bytes(package_asset["browser_download_url"], 120))
+-        partial.chmod(0o600)
+-        digest = hashlib.sha256(partial.read_bytes()).hexdigest()
+-        checksum_text = request_bytes(checksums["browser_download_url"]).decode()
+-        expected = None
+-        for line in checksum_text.splitlines():
+-            fields = line.split()
+-            if (
+-                len(fields) >= 2
+-                and pathlib.PurePosixPath(fields[-1].lstrip("*")).name == package.name
+-            ):
+-                expected = fields[0].lower()
+-                break
+-        if (
+-            not expected
+-            or not re.fullmatch(r"[0-9a-f]{64}", expected)
+-            or digest != expected
+-        ):
+-            partial.unlink(missing_ok=True)
+-            raise ValueError("release checksum mismatch")
+-        partial.replace(package)
+-        atomic_json(
+-            state_path,
+-            {
+-                "checked_at": now,
+-                "next_check": now + CHECK_INTERVAL,
+-                "latest_version": release.get("tag_name", ""),
+-                "package": str(package),
+-                "sha256": digest,
+-            },
+-        )
+-        if os.environ.get("WETYPE_UPDATE_NO_NOTIFY") != "1":
+-            notify_and_offer_install(
+-                package, release["tag_name"].lstrip("v"), family
+-            )
+-        return 0
+-    except (
+-        OSError,
+-        ValueError,
+-        KeyError,
+-        urllib.error.URLError,
+-        json.JSONDecodeError,
+-    ) as error:
+-        atomic_json(
+-            state_path,
+-            {
+-                "checked_at": now,
+-                "next_check": now + RETRY_INTERVAL,
+-                "error": str(error)[:300],
+-            },
+-        )
+-        return 1
+-
+-
+-if __name__ == "__main__":
+-    raise SystemExit(main())
++#!@NIX_PYTHON@
++"""Nix manages this package; never download or install distribution packages."""
++print("WeTypeX 由 Nix 管理，请更新 Nix 配置中的版本并重新构建。")
+diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.sh.in
+--- a/scripts/fcitx5-wetypex-voice.sh.in
++++ b/scripts/fcitx5-wetypex-voice.sh.in
+@@ -1,4 +1,6 @@
+-#!/bin/sh
++#!@NIX_BASH@
++export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
+ set -eu
+-export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+-exec python3 @CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/voice_stream.py "$@"
++export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
++exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
+diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
+--- a/scripts/setup_runtime.py
++++ b/scripts/setup_runtime.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """Install a verified, user-supplied original WeType runtime in user data."""
+ import argparse
+ import hashlib
+@@ -13,6 +13,9 @@
+ import urllib.request
+ import zipfile
+ 
++os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
++
+ UPSTREAM_VERSION='2.2.3.657'
+ UPSTREAM_RELEASE,UPSTREAM_BUILD=UPSTREAM_VERSION.rsplit('.',1)
+ UPSTREAM_ARCHIVE=f'WeType_{UPSTREAM_RELEASE}_{UPSTREAM_BUILD}.zip'
+@@ -28,13 +31,20 @@
+     with zipfile.ZipFile(archive) as z:
+         assets={}
+         system_theme_root=next((path for path in (
+-            pathlib.Path('/usr/share/fcitx5/themes'),
+-            pathlib.Path('/usr/local/share/fcitx5/themes'))
++            pathlib.Path('@NIX_OUT@/share/fcitx5/themes'),)
+             if (path/'wetypex-light/theme.conf').is_file()),None)
+         if system_theme_root:
+             for theme in ('wetypex-light','wetypex-dark'):
+-                shutil.copytree(system_theme_root/theme,
+-                                data/'fcitx5/themes'/theme,dirs_exist_ok=True)
++                # Copy data without inheriting the Nix store's read-only modes.
++                theme_source=system_theme_root/theme
++                for source in theme_source.rglob('*'):
++                    target=data/'fcitx5/themes'/theme/source.relative_to(theme_source)
++                    if source.is_dir():
++                        target.mkdir(parents=True,exist_ok=True)
++                    elif source.is_file():
++                        target.parent.mkdir(parents=True,exist_ok=True)
++                        temporary=target.with_suffix(target.suffix+'.tmp')
++                        temporary.write_bytes(source.read_bytes());temporary.replace(target)
+         for name, original in {'input':'icon_setup_sidebar_keyboard.svg',
+                                'voice':'icon_setup_sidebar_microphone.svg',
+                                'phrases':'icon_setup_sidebar_changyongyu.svg',
+@@ -159,7 +169,7 @@
+     with path.open('rb') as stream:return stream_digest(stream,'sha256')
+ 
+ def validate_runtime(target):
+-    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','/usr/lib/fcitx5-wetypex'))
++    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','@NIX_OUT@/lib/fcitx5-wetypex'))
+     host=support/'wetypex-engine-host'
+     locale=support/'locale.so'
+     if not locale.exists():locale=support/'wetypex-locale.so'
+@@ -178,12 +188,13 @@
+         return False,'unable to check UTF-8 JSON compatibility'
+     with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
+         command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
+-                 '--ro-bind','/usr','/usr','--symlink','usr/lib','/lib',
+-                 '--ro-bind','/lib64','/lib64','--symlink','usr/bin','/bin',
++                 '--ro-bind','/nix/store','/nix/store',
+                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp',
+                  '--ro-bind',str(target),'/input','--ro-bind',str(support),'/support',
+                  '--bind',work,'/work','--chdir','/work','--clearenv',
+-                 '--setenv','PATH','/usr/bin','--setenv','HOME','/work',
++                 '--setenv','PATH','@NIX_RUNTIME_PATH@','--setenv','HOME','/work',
++                 '--setenv','SSL_CERT_FILE','@NIX_CA_BUNDLE@',
++                 '--setenv','CURL_CA_BUNDLE','@NIX_CA_BUNDLE@',
+                  '--setenv','WETYPE_SUPPORT_DIR','/support',
+                  '/support/wetypex-engine-host','/input','validate']
+         try:
+diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
+--- a/scripts/voice_stream.py
++++ b/scripts/voice_stream.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """PipeWire capture and session control for the original native voice engine."""
+ import argparse
+ import array
+@@ -20,12 +20,15 @@
+ import time
+ import uuid
+ 
++os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
++
+ DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
+ STATE = Path(os.environ.get('WETYPE_STATE_DIR', DATA / 'fcitx5-wetypex/state'))
+ VOICE = STATE / 'voice'
+ ACCOUNT = Path(os.environ.get('WETYPE_ACCOUNT_STATE_DIR', DATA / 'fcitx5-wetypex/account'))
+ RUNTIME = Path(os.environ.get('WETYPE_RUNTIME_DIR', DATA / 'fcitx5-wetypex/runtime'))
+-SUPPORT = Path(os.environ.get('WETYPE_SUPPORT_DIR', '/usr/lib/fcitx5-wetypex'))
++SUPPORT = Path(os.environ.get('WETYPE_SUPPORT_DIR', '@NIX_OUT@/lib/fcitx5-wetypex'))
+ CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
+ ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
+ LIMIT = 131072
+@@ -92,16 +95,15 @@
+         if not binary.is_file() or not (RUNTIME / 'manifest.txt').is_file():
+             raise RuntimeError('请先安装并准备原版运行时')
+         command = ['bwrap', '--unshare-pid', '--die-with-parent',
+-                   '--ro-bind', '/usr', '/usr', '--symlink', 'usr/lib', '/lib',
+-                   '--ro-bind', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
++                   '--ro-bind', '/nix/store', '/nix/store',
+                    '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/etc']
+         for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
+             command += ['--ro-bind', '/etc/' + name, '/etc/' + name]
+-        for path in ('/etc/ssl', '/etc/pki', '/etc/ca-certificates'):
+-            command += ['--ro-bind-try', path, path]
+         command += ['--ro-bind', str(RUNTIME), '/input', '--ro-bind', str(SUPPORT), '/support',
+                     '--bind', str(directory), '/work', '--chdir', '/work', '--clearenv',
+-                    '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/work',
++                    '--setenv', 'PATH', '@NIX_RUNTIME_PATH@', '--setenv', 'HOME', '/work',
++                    '--setenv', 'SSL_CERT_FILE', '@NIX_CA_BUNDLE@',
++                    '--setenv', 'CURL_CA_BUNDLE', '@NIX_CA_BUNDLE@',
+                     '--setenv', 'WETYPE_SUPPORT_DIR', '/support',
+                     '--setenv', 'WETYPE_WORK_DIR', '/work/business',
+                     '--setenv', 'WETYPE_IDENTITY_FILE', '/work/identity.json',
+diff --git a/scripts/wechat_emoticons.py b/scripts/wechat_emoticons.py
+--- a/scripts/wechat_emoticons.py
++++ b/scripts/wechat_emoticons.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """Build a local candidate-only colour font from verified original artwork."""
+ import argparse
+ import io
+@@ -8,6 +8,9 @@
+ import subprocess
+ import tempfile
+ import zipfile
++
++os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
+ 
+ FAMILY = 'WeTypeX WeChat Emoticons v1'
+ ARCHIVE_PREFIX = ('WeType.app/Contents/MacOS/WeTypeSettings.app/Contents/'
+diff --git a/src/backend/darwin_locale.cpp b/src/backend/darwin_locale.cpp
+--- a/src/backend/darwin_locale.cpp
++++ b/src/backend/darwin_locale.cpp
+@@ -23,7 +23,7 @@
+   return r;
+ }
+ extern "C" void *wetype_locale_use_facet(void *locale, void *id) {
+-  static void *h = dlopen("libc++.so.1", RTLD_NOW);
++  static void *h = dlopen("@NIX_LIBCXX@", RTLD_NOW);
+   static auto fn = (void *(*)(void *, void *))dlsym(
+       h, "_ZNKSt3__16locale9use_facetERNS0_2idE");
+   void *facet = fn(locale, id);
+@@ -51,7 +51,7 @@
+   return c->object;
+ }
+ extern "C" uint32_t wetype_get_classname(const char *s, bool ignorecase) {
+-  static void *h = dlopen("libc++.so.1", RTLD_NOW);
++  static void *h = dlopen("@NIX_LIBCXX@", RTLD_NOW);
+   static auto fn = (std::ctype_base::mask (*)(const char *, bool))dlsym(
+       h, "_ZNSt3__115__get_classnameEPKcb");
+   return darwin_mask(fn(s, ignorecase));
+diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
+--- a/src/backend/macos_host.cpp
++++ b/src/backend/macos_host.cpp
+@@ -1139,7 +1139,7 @@
+   }
+   using Original = void (*)(void *, void *);
+   static Original original = [] {
+-    void *library = dlopen("libc++.so.1", RTLD_NOW | RTLD_NOLOAD);
++    void *library = dlopen("@NIX_LIBCXX@", RTLD_NOW | RTLD_NOLOAD);
+     return reinterpret_cast<Original>(
+         dlsym(library, "_ZNSt3__17promiseIvE10get_futureEv"));
+   }();
+@@ -1457,7 +1457,7 @@
+   if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
+     h = RTLD_DEFAULT;
+   if (!strcmp(n, "__cxa_throw")) {
+-    static void *abi = dlopen("libc++abi.so.1", RTLD_NOW);
++    static void *abi = dlopen("@NIX_LIBCXXABI@", RTLD_NOW);
+     return dlsym(abi, n);
+   }
+   return dlsym(h, n);
+@@ -2832,8 +2832,8 @@
+   sigaction(SIGBUS, &sa, nullptr);
+   sigaction(SIGILL, &sa, nullptr);
+   sigaction(SIGABRT, &sa, nullptr);
+-  if (!dlopen("libc++.so.1", RTLD_NOW | RTLD_GLOBAL) ||
+-      !dlopen("libc++abi.so.1", RTLD_NOW | RTLD_GLOBAL)) {
++  if (!dlopen("@NIX_LIBCXX@", RTLD_NOW | RTLD_GLOBAL) ||
++      !dlopen("@NIX_LIBCXXABI@", RTLD_NOW | RTLD_GLOBAL)) {
+     fputs(dlerror(), stderr);
+     return 2;
+   }
+diff --git a/src/backend/wcwss_bridge.cpp b/src/backend/wcwss_bridge.cpp
+--- a/src/backend/wcwss_bridge.cpp
++++ b/src/backend/wcwss_bridge.cpp
+@@ -137,6 +137,9 @@
+   curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
+   curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+   curl_easy_setopt(curl, CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS, 200L);
++  const char *caBundle = getenv("SSL_CERT_FILE");
++  curl_easy_setopt(curl, CURLOPT_CAINFO,
++                   caBundle && *caBundle ? caBundle : "@NIX_CA_BUNDLE@");
+   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
+   curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
+   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
+diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
+--- a/src/plugin/config.hpp
++++ b/src/plugin/config.hpp
+@@ -220,7 +220,7 @@
+ 
+ FCITX_CONFIGURATION(UpdateConfig,
+                     Option<bool> autoUpdate{this, "AutoUpdate",
+-                                            "有新版本时自动更新", true};)
++                                            "有新版本时自动更新", false};)
+ 
+ FCITX_CONFIGURATION(
+     WeTypeConfig, Option<InputConfig> input{this, "Input", "输入"};
+diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
+--- a/src/plugin/wetype.cpp
++++ b/src/plugin/wetype.cpp
+@@ -287,7 +287,7 @@
+   uint64_t activity_ = 0;
+   uint64_t restartAt_ = 0, restartBackoff_ = 250000;
+   bool restartNeedsOpen_ = false;
+-  uint64_t syncTick_ = 0, updateTick_ = 0;
++  uint64_t syncTick_ = 0;
+   uint64_t voiceWarmTick_ = 0;
+   uint64_t lastVoiceVersion_ = 0;
+   pid_t vModeChild_ = -1;
+@@ -647,8 +647,7 @@
+     loadKeys(shortcuts->nextPageKeys, "next_page_keys");
+     loadKeys(shortcuts->secondCandidateKeys, "second_candidate_keys");
+     loadKeys(shortcuts->thirdCandidateKeys, "third_candidate_keys");
+-    config_.update.mutableValue()->autoUpdate.setValue(
+-        boolSetting("auto_update", true));
++    config_.update.mutableValue()->autoUpdate.setValue(false);
+   }
+   void saveNativeConfig() {
+     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+@@ -2067,11 +2066,7 @@
+           if (focused && networkEnabled_ && time >= voiceWarmTick_ + 60000000)
+             primeVoice();
+           pollVModeWindow();
+-          if (networkEnabled_ && *config_.update->autoUpdate &&
+-              time >= updateTick_ + 3600000000ULL) {
+-            updateTick_ = time;
+-            startProcess({WETYPE_UPDATE});
+-          }
++          // The Nix package is updated through its declarative configuration.
+           const auto next = time + (voicePending_ ? 40000 : 100000);
+           source->setAccuracy(panelWake ? 1000 : 0);
+           source->setTime(panelWake ? std::min(next, panelWake) : next);
+diff --git a/src/settings/main.cpp b/src/settings/main.cpp
+--- a/src/settings/main.cpp
++++ b/src/settings/main.cpp
+@@ -906,7 +906,10 @@
+   auto *microphone = new QComboBox;
+   microphone->addItem("自动检测");
+   QProcess pipewire;
+-  pipewire.start(QStringLiteral("pw-dump"), QStringList{});
++  pipewire.start(QStandardPaths::findExecutable(
++                     QStringLiteral("pw-dump"),
++                     QStringLiteral("@NIX_RUNTIME_PATH@").split(QLatin1Char(':'))),
++                 QStringList{});
+   if (pipewire.waitForFinished(2000)) {
+     const auto nodes =
+         QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
+@@ -1438,10 +1441,7 @@
+         QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
+   });
+   about.body->addWidget(rowsCard(
+-      {row("有新版本时自动更新", {},
+-           toggle(wetype::settingBool(settings.value("auto_update"), true),
+-                  true, "auto_update"),
+-           48),
++      {row("软件更新", "由 Nix 管理，请更新 Nix 配置并重新构建", nullptr, 48),
+        row("我要反馈", {}, feedback, 48)}));
+   about.body->addStretch();
+   auto *copyright =
+diff --git a/tools/prepare_macos_runtime.py b/tools/prepare_macos_runtime.py
+--- a/tools/prepare_macos_runtime.py
++++ b/tools/prepare_macos_runtime.py
+@@ -1,4 +1,4 @@
+-#!/usr/bin/env python3
++#!@NIX_PYTHON@
+ """Prepare the pinned x86-64 Mach-O runtime using only the Python standard library."""
+ import argparse
+ import hashlib
