@@ -370,7 +370,7 @@ index de6e6a4..0c42c66 100644
                   '/support/wetypex-engine-host','/input','validate']
          try:
 diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
-index 5a97ef6..cb3ea6b 100644
+index 6546c8e..bda0776 100644
 --- a/scripts/voice_stream.py
 +++ b/scripts/voice_stream.py
 @@ -1,4 +1,4 @@
@@ -397,7 +397,7 @@ index 5a97ef6..cb3ea6b 100644
  CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
  ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
  LIMIT = 131072
-@@ -141,16 +145,17 @@ class Backend:
+@@ -163,16 +167,17 @@ class Backend:
          if not wrapper:
              raise RuntimeError('请先安装 Bubblewrap')
          command = [wrapper, '--unshare-pid',
