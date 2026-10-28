@@ -210,7 +210,9 @@ def local_clipboard(environment):
             if utf8_type:
                 arguments += ["--type", utf8_type]
             result = clipboard_command(arguments, environment)
-            if result and result.returncode == 0 and 0 < len(result.stdout) <= 16384:
+            if result and result.returncode == 0 and len(result.stdout) <= 16384:
+                if not result.stdout:
+                    return "empty", b"", hashlib.sha256(b"").hexdigest()
                 try:
                     result.stdout.decode("utf-8")
                 except UnicodeDecodeError:
@@ -249,8 +251,16 @@ def stop_clipboard_owner():
             clipboard_owner.wait()
     clipboard_owner = None
 
-def set_remote_clipboard(kind, content, environment):
+def set_remote_clipboard(kind, content, environment, expected=None):
     global clipboard_owner, _x11_environment_cache
+    # Decoding or normalizing a remote image can take time. Do not overwrite a
+    # local copy that happened since the baseline was read, or after a read
+    # failure. Keep the remote cursor unchanged so the next poll can retry.
+    if expected is not None:
+        current = local_clipboard(environment)
+        if (current is None or current[0] != expected[0] or
+                current[2] != expected[2]):
+            return False
     needs_surface = surface_required(environment)
     if needs_surface:
         environment = _x11_environment(environment)
@@ -316,8 +326,6 @@ while True:
     # wl-paste may create a visible temporary toplevel on compositors without
     # data-control support (notably GNOME/Mutter). Do not touch the system
     # clipboard unless the paired device group currently has clipboard sync on.
-    before_fetch = (local_clipboard(helper_environment)
-                    if last_clipboard_enabled else None)
     group = call("group-info", str(last_remote_version))
     if group.get("ok"):
         atomic_json(state_dir / "sync-state.json", group)
@@ -341,8 +349,10 @@ while True:
 
         local = None
         if clipboard_enabled:
-            after_fetch = local_clipboard(helper_environment)
-            local = after_fetch if after_fetch is not None else before_fetch
+            # Only a fresh read after the network request may authorize a
+            # receive. A previous empty selection can become new local data
+            # while fetching; a failed current read must not overwrite it.
+            local = local_clipboard(helper_environment)
             local_kind = local[0] if local else ""
             local_digest = local[2] if local else ""
             if baseline_pending and local is not None:
@@ -422,7 +432,7 @@ while True:
                     image = b""
                     last_remote_version = version
                 if image and set_remote_clipboard("image", image,
-                                                  helper_environment):
+                                                  helper_environment, local):
                     last_local_kind = "image"
                     last_local_digest = hashlib.sha256(image).hexdigest()
                     last_remote_version = version
@@ -430,7 +440,7 @@ while True:
                 encoded = remote.encode("utf-8")
                 if (len(encoded) <= 16384 and
                         set_remote_clipboard("text", encoded,
-                                             helper_environment)):
+                                             helper_environment, local)):
                     last_local_kind = "text"
                     last_local_digest = hashlib.sha256(encoded).hexdigest()
                     last_remote_version = version
