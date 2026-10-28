@@ -6,6 +6,28 @@ on:
   pull_request:
 
 jobs:
+  nix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = 2
+            cores = 2
+      - name: 检查 flake 并构建 Nix 包
+        run: |
+          nix flake check --no-build --no-write-lock-file
+          nix build .#fcitx5-wetypex --no-write-lock-file --print-build-logs
+      - name: 检查源码包中的 Nix 入口
+        run: |
+          python3 tools/package_release.py
+          mkdir -p "$RUNNER_TEMP/wetypex-source"
+          tar -xzf dist/arch/fcitx5-wetypex-*.tar.gz -C "$RUNNER_TEMP/wetypex-source"
+          source_dir=$(find "$RUNNER_TEMP/wetypex-source" -mindepth 1 -maxdepth 1 -type d)
+          nix flake check "path:$source_dir" --no-build --no-write-lock-file
+
   arch-linux:
     runs-on: ubuntu-latest
     container: archlinux:base-devel

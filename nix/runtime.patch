@@ -1,15 +1,17 @@
 diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-account.sh.in
+index 5046a76..0bdeed2 100644
 --- a/scripts/fcitx5-wetypex-account.sh.in
 +++ b/scripts/fcitx5-wetypex-account.sh.in
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
  umask 077
- 
-@@ -7,7 +9,7 @@
+
+@@ -7,7 +10,7 @@ if [ "$command_name" = voice-file ]; then
    exec @CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-voice transcribe "${2:-}"
  fi
  if [ "$command_name" = network-info ]; then
@@ -18,7 +20,7 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
    exec "$support/wetypex-engine-host" "$support" network-info
  fi
  if [ "$command_name" = sync-now ]; then
-@@ -51,7 +53,7 @@
+@@ -51,7 +54,7 @@ case "$command_name" in
      group_id="${2:-}"
      case "$group_id" in *[!0-9]*|'') echo "set-functions requires a numeric GROUP_ID" >&2; exit 64;; esac
      case "$operation_value" in *[!0-9]*|'') echo "set-functions requires a numeric function mask" >&2; exit 64;; esac
@@ -27,8 +29,8 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
  import sys
  group, mask = map(int, sys.argv[1:])
  if not 0 < group < 2**64 or not 0 <= mask < 2**64:
-@@ -133,7 +135,7 @@
- 
+@@ -133,7 +136,7 @@ esac
+
  runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
  state="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
 -support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
@@ -36,7 +38,7 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
  test -f "$runtime/manifest.txt" || {
    echo "Run fcitx5-wetypex-setup first." >&2
    exit 78
-@@ -167,16 +169,14 @@
+@@ -167,16 +170,14 @@ run_original() {
    # database. Wait for the current short operation instead of surfacing an
    # intermittent failure when two callers overlap.
    env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
@@ -45,18 +47,19 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
 +      --ro-bind /nix/store /nix/store --proc /proc --dev /dev --tmpfs /tmp \
        --dir /etc --ro-bind /etc/resolv.conf /etc/resolv.conf \
        --ro-bind /etc/hosts /etc/hosts \
-       --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
+-      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
 -      --ro-bind-try /etc/ssl /etc/ssl --ro-bind-try /etc/pki /etc/pki \
 -      --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
++      --ro-bind @NIX_NSSWITCH@ /etc/nsswitch.conf \
        --ro-bind "$runtime" /input --ro-bind "$support" /support \
        --bind "$state" /work --chdir /work \
 -      --setenv PATH /usr/bin --setenv HOME /work \
-+      --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
        --setenv WETYPE_SUPPORT_DIR /support \
        --setenv WETYPE_DEVICE_MODEL "$model" \
        --setenv WETYPE_WORK_DIR /work/business \
-@@ -193,7 +193,7 @@
+@@ -193,7 +194,7 @@ if ! output="$(run_original)"; then
    echo "Unable to initialize the original WeType account service. See $log" >&2
    exit 1
  fi
@@ -65,7 +68,7 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
  import json, sys
  data = json.load(sys.stdin)
  raise SystemExit(0 if data.get("pairing_error") == 0 and len(data.get("match_code", "")) == 6 else 1)
-@@ -203,7 +203,7 @@
+@@ -203,7 +204,7 @@ raise SystemExit(0 if data.get("pairing_error") == 0 and len(data.get("match_cod
    output="$(run_original)"
  fi
  chmod 600 "$log" "$state/identity.json" 2>/dev/null || true
@@ -75,17 +78,19 @@ diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-accou
  data = json.load(sys.stdin)
  command = sys.argv[1]
 diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
+index 48a01c0..a32bb28 100644
 --- a/scripts/fcitx5-wetypex-ai.sh.in
 +++ b/scripts/fcitx5-wetypex-ai.sh.in
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
  umask 077
  fetch_only=0
-@@ -16,14 +18,14 @@
+@@ -16,14 +19,14 @@ fi
  data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
  runtime="${WETYPE_RUNTIME_DIR:-$data_home/fcitx5-wetypex/runtime}"
  account="${WETYPE_ACCOUNT_STATE_DIR:-$data_home/fcitx5-wetypex/account}"
@@ -103,7 +108,7 @@ diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
  if [ "$fetch_only" -eq 1 ]; then
    work="$(mktemp -d "$state/request.XXXXXXXX")"
    trap 'if [ -f "$work/last-ai.log" ]; then mv -f -- "$work/last-ai.log" "$state/last-ai.log"; fi; rm -rf -- "$work"' 0
-@@ -37,18 +39,18 @@
+@@ -37,18 +40,18 @@ if [ "$fetch_only" -eq 1 ]; then
    while [ "$attempt" -lt 3 ]; do
      attempt=$((attempt + 1))
      if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
@@ -113,10 +118,10 @@ diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
        --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
 -      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind-try /etc/ssl /etc/ssl \
 -      --ro-bind-try /etc/pki /etc/pki --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
-+      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
++      --ro-bind @NIX_NSSWITCH@ /etc/nsswitch.conf \
        --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$work" /work \
 -      --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
-+      --chdir /work --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
        --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_NETWORK_LIVE 1 \
        --setenv WETYPE_CORE_UIN "$uin" --setenv WETYPE_CORE_DEVICE_CODE "$device" \
@@ -128,12 +133,14 @@ diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
  raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
  # The service emits successive rendered snapshots while the answer streams.
 diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backend.sh.in
+index 347e29f..e672926 100644
 --- a/scripts/fcitx5-wetypex-backend.sh.in
 +++ b/scripts/fcitx5-wetypex-backend.sh.in
-@@ -1,11 +1,13 @@
+@@ -1,11 +1,14 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
  umask 077
@@ -146,14 +153,14 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
  test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
  mkdir -p "$state/user"
  chmod 700 "$state"
-@@ -18,33 +20,33 @@
- 
+@@ -18,33 +21,33 @@ if [ "${WETYPE_DEBUG:-0}" != 1 ]; then exec 2>/dev/null; fi
+
  standalone=0
  if [ -f "$config_home/fcitx5/wetypex.json" ]; then
 -  standalone="$(python3 -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
 +  standalone="$(@NIX_PYTHON@ -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
  fi
- 
+
  # The original desktop enables cloud candidates only when networking is
  # available.  Pairing initializes this per-user anonymous device identity.
  if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
@@ -182,15 +189,15 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
        --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
 -      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf --ro-bind-try /etc/ssl /etc/ssl \
 -      --ro-bind-try /etc/pki /etc/pki --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
-+      --ro-bind /etc/nsswitch.conf /etc/nsswitch.conf \
++      --ro-bind @NIX_NSSWITCH@ /etc/nsswitch.conf \
        --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
 -      --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
-+      --chdir /work --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++      --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
        --setenv TZ "${TZ:-Asia/Shanghai}" --setenv WETYPE_SUPPORT_DIR /support \
        --setenv WETYPE_NETWORK_LIVE 1 --setenv WETYPE_CORE_UIN "$uin" \
        --setenv WETYPE_CORE_DEVICE_CODE "$device_code" --setenv WETYPE_DEVICE_MODEL "$model" \
-@@ -58,9 +60,10 @@
+@@ -58,9 +61,10 @@ fi
  # Offline and standalone sessions retain a private network namespace.
  # Clear the launch environment before bwrap: Focal's 0.4 lacks --clearenv.
  env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-net --unshare-pid --die-with-parent \
@@ -199,23 +206,26 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
    --proc /proc --dev /dev --tmpfs /tmp \
    --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
 -  --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
-+  --chdir /work --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
++  --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +  --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
    --setenv TZ "${TZ:-Asia/Shanghai}" --setenv WETYPE_SUPPORT_DIR /support \
    /support/wetypex-engine-host /input serve
 diff --git a/scripts/fcitx5-wetypex-setup.sh.in b/scripts/fcitx5-wetypex-setup.sh.in
+index 2d3645f..7771e3a 100644
 --- a/scripts/fcitx5-wetypex-setup.sh.in
 +++ b/scripts/fcitx5-wetypex-setup.sh.in
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,6 @@
 -#!/bin/sh
 -export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 -exec "${WETYPE_PYTHON:-python3}" "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" "$@"
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
 +exec "${WETYPE_PYTHON:-@NIX_PYTHON@}" "@NIX_OUT@/share/fcitx5-wetypex/setup_runtime.py" "$@"
 diff --git a/scripts/fcitx5-wetypex-sync.sh.in b/scripts/fcitx5-wetypex-sync.sh.in
+index 5f34d84..caa1a31 100644
 --- a/scripts/fcitx5-wetypex-sync.sh.in
 +++ b/scripts/fcitx5-wetypex-sync.sh.in
 @@ -1,4 +1,4 @@
@@ -224,17 +234,19 @@ diff --git a/scripts/fcitx5-wetypex-sync.sh.in b/scripts/fcitx5-wetypex-sync.sh.
  """Refresh the device group and request synchronization from the native core."""
  import json
  import os
-@@ -7,6 +7,9 @@
- import subprocess
+@@ -8,6 +8,10 @@ import subprocess
  import sys
  import time
-+
+
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
- 
++
  def main():
      if sys.argv[1:] not in ([], ["--refresh-state"]):
+         raise ValueError("用法: fcitx5-wetypex-sync [--refresh-state]")
 diff --git a/scripts/fcitx5-wetypex-syncd.sh.in b/scripts/fcitx5-wetypex-syncd.sh.in
+index 4a6ff64..33c1e0f 100644
 --- a/scripts/fcitx5-wetypex-syncd.sh.in
 +++ b/scripts/fcitx5-wetypex-syncd.sh.in
 @@ -1,4 +1,4 @@
@@ -243,23 +255,26 @@ diff --git a/scripts/fcitx5-wetypex-syncd.sh.in b/scripts/fcitx5-wetypex-syncd.s
  """Synchronize the Fcitx clipboard through the original WeType service."""
  import fcntl
  import base64
-@@ -13,6 +13,9 @@
- import sys
+@@ -14,6 +14,10 @@ import sys
  import time
  import tempfile
-+
+
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
- 
++
  data_home = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share"))
  state_dir = pathlib.Path(os.environ.get("WETYPE_STATE_DIR", data_home / "fcitx5-wetypex/state"))
+ account_tool = os.environ.get("WETYPE_ACCOUNT_TOOL", "@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-account")
 diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.sh.in
+index 629aff3..87779ae 100644
 --- a/scripts/fcitx5-wetypex-voice.sh.in
 +++ b/scripts/fcitx5-wetypex-voice.sh.in
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,7 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
++export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
 -export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
@@ -267,6 +282,7 @@ diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.s
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
 diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
+index de6e6a4..a86f210 100644
 --- a/scripts/setup_runtime.py
 +++ b/scripts/setup_runtime.py
 @@ -1,4 +1,4 @@
@@ -275,17 +291,18 @@ diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
  """Install a verified, user-supplied original WeType runtime in user data."""
  import argparse
  import hashlib
-@@ -13,6 +13,9 @@
+@@ -13,6 +13,10 @@ import tempfile
  import urllib.request
  import zipfile
- 
+
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
 +
  UPSTREAM_VERSION='2.2.3.657'
  UPSTREAM_RELEASE,UPSTREAM_BUILD=UPSTREAM_VERSION.rsplit('.',1)
  UPSTREAM_ARCHIVE=f'WeType_{UPSTREAM_RELEASE}_{UPSTREAM_BUILD}.zip'
-@@ -28,13 +31,20 @@
+@@ -28,13 +32,26 @@ def install_ui_resources(archive, data):
      with zipfile.ZipFile(archive) as z:
          assets={}
          system_theme_root=next((path for path in (
@@ -299,10 +316,16 @@ diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
 -                                data/'fcitx5/themes'/theme,dirs_exist_ok=True)
 +                # Copy data without inheriting the Nix store's read-only modes.
 +                theme_source=system_theme_root/theme
++                theme_target=data/'fcitx5/themes'/theme
++                if theme_target.is_symlink():
++                    continue
++                theme_target.mkdir(parents=True,exist_ok=True)
++                theme_target.chmod(theme_target.stat().st_mode | 0o700)
 +                for source in theme_source.rglob('*'):
 +                    target=data/'fcitx5/themes'/theme/source.relative_to(theme_source)
 +                    if source.is_dir():
 +                        target.mkdir(parents=True,exist_ok=True)
++                        target.chmod(target.stat().st_mode | 0o700)
 +                    elif source.is_file():
 +                        target.parent.mkdir(parents=True,exist_ok=True)
 +                        temporary=target.with_suffix(target.suffix+'.tmp')
@@ -310,16 +333,16 @@ diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
          for name, original in {'input':'icon_setup_sidebar_keyboard.svg',
                                 'voice':'icon_setup_sidebar_microphone.svg',
                                 'phrases':'icon_setup_sidebar_changyongyu.svg',
-@@ -159,7 +169,7 @@
+@@ -159,7 +176,7 @@ def digest(path):
      with path.open('rb') as stream:return stream_digest(stream,'sha256')
- 
+
  def validate_runtime(target):
 -    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','/usr/lib/fcitx5-wetypex'))
 +    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','@NIX_OUT@/lib/fcitx5-wetypex'))
      host=support/'wetypex-engine-host'
      locale=support/'locale.so'
      if not locale.exists():locale=support/'wetypex-locale.so'
-@@ -178,12 +188,13 @@
+@@ -178,12 +195,14 @@ def validate_runtime(target):
          return False,'unable to check UTF-8 JSON compatibility'
      with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
          command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
@@ -330,6 +353,7 @@ diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
                   '--ro-bind',str(target),'/input','--ro-bind',str(support),'/support',
                   '--bind',work,'/work','--chdir','/work',
 -                 '--setenv','PATH','/usr/bin','--setenv','HOME','/work',
++                 '--setenv','TZDIR','@NIX_TZDIR@',
 +                 '--setenv','PATH','@NIX_RUNTIME_PATH@','--setenv','HOME','/work',
 +                 '--setenv','SSL_CERT_FILE','@NIX_CA_BUNDLE@',
 +                 '--setenv','CURL_CA_BUNDLE','@NIX_CA_BUNDLE@',
@@ -337,6 +361,7 @@ diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
                   '/support/wetypex-engine-host','/input','validate']
          try:
 diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
+index 5a97ef6..cb3ea6b 100644
 --- a/scripts/voice_stream.py
 +++ b/scripts/voice_stream.py
 @@ -1,4 +1,4 @@
@@ -345,11 +370,12 @@ diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
  """PipeWire/PulseAudio capture and session control for the original native voice engine."""
  import argparse
  import array
-@@ -20,12 +20,15 @@
+@@ -20,12 +20,16 @@ import threading
  import time
  import uuid
- 
+
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
 +
  DATA = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share'))
@@ -362,7 +388,7 @@ diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
  CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
  ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
  LIMIT = 131072
-@@ -141,16 +144,15 @@
+@@ -141,16 +145,17 @@ class Backend:
          if not wrapper:
              raise RuntimeError('请先安装 Bubblewrap')
          command = [wrapper, '--unshare-pid',
@@ -370,13 +396,16 @@ diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
 -                   '--ro-bind', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
 +                   '--ro-bind', '/nix/store', '/nix/store',
                     '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/etc']
-         for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
+-        for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
++        for name in ('resolv.conf', 'hosts'):
              command += ['--ro-bind', '/etc/' + name, '/etc/' + name]
 -        for path in ('/etc/ssl', '/etc/pki', '/etc/ca-certificates'):
 -            command += ['--ro-bind-try', path, path]
++        command += ['--ro-bind', '@NIX_NSSWITCH@', '/etc/nsswitch.conf']
          command += ['--ro-bind', str(RUNTIME), '/input', '--ro-bind', str(SUPPORT), '/support',
                      '--bind', str(directory), '/work', '--chdir', '/work',
 -                    '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/work',
++                    '--setenv', 'TZDIR', '@NIX_TZDIR@',
 +                    '--setenv', 'PATH', '@NIX_RUNTIME_PATH@', '--setenv', 'HOME', '/work',
 +                    '--setenv', 'SSL_CERT_FILE', '@NIX_CA_BUNDLE@',
 +                    '--setenv', 'CURL_CA_BUNDLE', '@NIX_CA_BUNDLE@',
@@ -384,6 +413,7 @@ diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
                      '--setenv', 'WETYPE_WORK_DIR', '/work/business',
                      '--setenv', 'WETYPE_IDENTITY_FILE', '/work/identity.json',
 diff --git a/scripts/wechat_emoticons.py b/scripts/wechat_emoticons.py
+index 01a65a5..2c11403 100644
 --- a/scripts/wechat_emoticons.py
 +++ b/scripts/wechat_emoticons.py
 @@ -1,4 +1,4 @@
@@ -392,20 +422,22 @@ diff --git a/scripts/wechat_emoticons.py b/scripts/wechat_emoticons.py
  """Build a local candidate-only colour font from verified original artwork."""
  import argparse
  import io
-@@ -8,6 +8,9 @@
- import subprocess
+@@ -9,6 +9,10 @@ import subprocess
  import tempfile
  import zipfile
-+
+
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
++os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
- 
++
  FAMILY = 'WeTypeX WeChat Emoticons v1'
  ARCHIVE_PREFIX = ('WeType.app/Contents/MacOS/WeTypeSettings.app/Contents/'
+                   'Frameworks/App.framework/Versions/A/Resources/flutter_assets/'
 diff --git a/src/backend/darwin_locale.cpp b/src/backend/darwin_locale.cpp
+index 9988779..e70edaf 100644
 --- a/src/backend/darwin_locale.cpp
 +++ b/src/backend/darwin_locale.cpp
-@@ -23,7 +23,7 @@
+@@ -23,7 +23,7 @@ static uint32_t darwin_mask(std::ctype_base::mask m) {
    return r;
  }
  extern "C" void *wetype_locale_use_facet(void *locale, void *id) {
@@ -414,7 +446,7 @@ diff --git a/src/backend/darwin_locale.cpp b/src/backend/darwin_locale.cpp
    static auto fn = (void *(*)(void *, void *))dlsym(
        h, "_ZNKSt3__16locale9use_facetERNS0_2idE");
    void *facet = fn(locale, id);
-@@ -51,7 +51,7 @@
+@@ -51,7 +51,7 @@ extern "C" void *wetype_locale_use_facet(void *locale, void *id) {
    return c->object;
  }
  extern "C" uint32_t wetype_get_classname(const char *s, bool ignorecase) {
@@ -424,9 +456,10 @@ diff --git a/src/backend/darwin_locale.cpp b/src/backend/darwin_locale.cpp
        h, "_ZNSt3__115__get_classnameEPKcb");
    return darwin_mask(fn(s, ignorecase));
 diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
+index 4a4153f..f26bb65 100644
 --- a/src/backend/macos_host.cpp
 +++ b/src/backend/macos_host.cpp
-@@ -1139,7 +1139,7 @@
+@@ -1139,7 +1139,7 @@ extern "C" void shim_promise_void_get_future(void *output, void *promise) {
    }
    using Original = void (*)(void *, void *);
    static Original original = [] {
@@ -435,7 +468,7 @@ diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
      return reinterpret_cast<Original>(
          dlsym(library, "_ZNSt3__17promiseIvE10get_futureEv"));
    }();
-@@ -1457,7 +1457,7 @@
+@@ -1457,7 +1457,7 @@ extern "C" void *shim_dlsym(void *h, const char *n) {
    if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
      h = RTLD_DEFAULT;
    if (!strcmp(n, "__cxa_throw")) {
@@ -444,7 +477,7 @@ diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
      return dlsym(abi, n);
    }
    return dlsym(h, n);
-@@ -2832,8 +2832,8 @@
+@@ -2832,8 +2832,8 @@ int main(int argc, char **argv) {
    sigaction(SIGBUS, &sa, nullptr);
    sigaction(SIGILL, &sa, nullptr);
    sigaction(SIGABRT, &sa, nullptr);
@@ -456,9 +489,10 @@ diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
      return 2;
    }
 diff --git a/src/backend/wcwss_bridge.cpp b/src/backend/wcwss_bridge.cpp
+index 3a797c5..0e69bee 100644
 --- a/src/backend/wcwss_bridge.cpp
 +++ b/src/backend/wcwss_bridge.cpp
-@@ -137,6 +137,9 @@
+@@ -137,6 +137,9 @@ void run(const std::shared_ptr<Connection> &connection) {
    curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
    curl_easy_setopt(curl, CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS, 200L);
@@ -469,21 +503,23 @@ diff --git a/src/backend/wcwss_bridge.cpp b/src/backend/wcwss_bridge.cpp
    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
 diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
+index e733fa7..5d3d027 100644
 --- a/src/plugin/config.hpp
 +++ b/src/plugin/config.hpp
-@@ -220,7 +220,7 @@
- 
+@@ -220,7 +220,7 @@ FCITX_CONFIGURATION(
+
  FCITX_CONFIGURATION(UpdateConfig,
                      Option<bool> autoUpdate{this, "AutoUpdate",
 -                                            "有新版本时自动更新", true};)
 +                                            "有新版本时自动更新", false};)
- 
+
  FCITX_CONFIGURATION(
      WeTypeConfig, Option<InputConfig> input{this, "Input", "输入"};
 diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
+index 863d070..a411c8e 100644
 --- a/src/plugin/wetype.cpp
 +++ b/src/plugin/wetype.cpp
-@@ -291,7 +291,7 @@
+@@ -291,7 +291,7 @@ class WeType : public InputMethodEngine {
    uint64_t activity_ = 0;
    uint64_t restartAt_ = 0, restartBackoff_ = 250000;
    bool restartNeedsOpen_ = false;
@@ -492,7 +528,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
    uint64_t voiceWarmTick_ = 0;
    uint64_t lastVoiceVersion_ = 0;
    pid_t vModeChild_ = -1;
-@@ -752,8 +752,7 @@
+@@ -752,8 +752,7 @@ class WeType : public InputMethodEngine {
      loadKeys(shortcuts->nextPageKeys, "next_page_keys");
      loadKeys(shortcuts->secondCandidateKeys, "second_candidate_keys");
      loadKeys(shortcuts->thirdCandidateKeys, "third_candidate_keys");
@@ -502,7 +538,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
    }
    void saveNativeConfig() {
      const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-@@ -2222,11 +2221,7 @@
+@@ -2222,11 +2221,7 @@ public:
            if (focused && networkEnabled_ && time >= voiceWarmTick_ + 60000000)
              primeVoice();
            pollVModeWindow();
@@ -516,9 +552,10 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
            source->setAccuracy(panelWake ? 1000 : 0);
            source->setTime(panelWake ? std::min(next, panelWake) : next);
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp
+index 7340720..4088329 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -907,7 +907,10 @@
+@@ -907,7 +907,10 @@ int main(int argc, char **argv) {
    auto *microphone = new QComboBox;
    microphone->addItem("自动检测");
    QProcess pipewire;
@@ -530,7 +567,7 @@ diff --git a/src/settings/main.cpp b/src/settings/main.cpp
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1480,10 +1483,7 @@
+@@ -1480,10 +1483,7 @@ int main(int argc, char **argv) {
          QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
    });
    about.body->addWidget(rowsCard(
@@ -543,6 +580,7 @@ diff --git a/src/settings/main.cpp b/src/settings/main.cpp
    about.body->addStretch();
    auto *copyright =
 diff --git a/tools/prepare_macos_runtime.py b/tools/prepare_macos_runtime.py
+index 9ddefe2..c1f0daa 100644
 --- a/tools/prepare_macos_runtime.py
 +++ b/tools/prepare_macos_runtime.py
 @@ -1,4 +1,4 @@

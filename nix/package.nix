@@ -2,6 +2,7 @@
   lib,
   stdenv,
   fetchFromGitHub,
+  writeText,
   cmake,
   ninja,
   pkg-config,
@@ -20,7 +21,9 @@
   util-linux,
   bubblewrap,
   cacert,
+  tzdata,
   pipewire,
+  pulseaudio,
   ffmpeg,
   wl-clipboard,
   desktop-file-utils,
@@ -48,10 +51,12 @@ let
     bubblewrap
     fontconfig
     pipewire
+    pulseaudio
     ffmpeg
     wl-clipboard
     python
   ];
+  nsswitch = writeText "wetypex-nsswitch.conf" "hosts: files dns\n";
   # Keep the same fixed revision as CMake, with no configure-time download.
   kqueueSource = fetchFromGitHub {
     owner = "mheily";
@@ -115,11 +120,21 @@ stdenv.mkDerivation {
         --replace-quiet '@NIX_PYTHON@' '${python}/bin/python3' \
         --replace-quiet '@NIX_BASH@' '${bash}/bin/bash' \
         --replace-quiet '@NIX_CA_BUNDLE@' '${cacert}/etc/ssl/certs/ca-bundle.crt' \
+        --replace-quiet '@NIX_NSSWITCH@' '${nsswitch}' \
+        --replace-quiet '@NIX_TZDIR@' '${tzdata}/share/zoneinfo' \
         --replace-quiet '@NIX_LIBCXX@' '${lib.getLib llvmPackages.libcxx}/lib/libc++.so.1' \
         --replace-quiet '@NIX_LIBCXXABI@' '${lib.getLib llvmPackages.libcxx}/lib/libc++abi.so.1' \
         --replace-quiet '@NIX_OUT@' "$out"
     done < <(grep -rlZ '@NIX_' scripts src tools)
     patchShebangs scripts tools
+  '';
+
+  preFixup = ''
+    # Qt programs also invoke audio and other runtime tools directly. Their
+    # environment must work without relying on the user's system profile.
+    qtWrapperArgs+=(--prefix PATH : '${runtimePath}'
+      --set-default TZDIR '${tzdata}/share/zoneinfo'
+      --set-default SSL_CERT_FILE '${cacert}/etc/ssl/certs/ca-bundle.crt')
   '';
 
   cmakeFlags = [

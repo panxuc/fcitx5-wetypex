@@ -146,6 +146,8 @@ outputs = { nixpkgs, wetypex, ... }: {
 
 包的安装路径、动态库、证书和 Bubblewrap 沙箱已适配 Nix store；Nix 包由 flake 锁文件管理更新，内置发行版更新器关闭。更新 input 后重新构建系统即可升级。
 
+包会为录音和设置界面提供所需工具路径，并在沙箱中提供 DNS 配置和时区数据，不依赖 FHS 的 `/usr` 布局。CI 同时检查 flake 构建和源码包中的 Nix 入口；正式源码压缩包也包含 `flake.nix`、锁文件及 `nix/`。
+
 在源码仓库中可单独运行 `nix build .#fcitx5-wetypex` 或 `nix flake check` 验证包。本 flake 仅提供 Linux x86_64 输出。
 
 ### 便携归档
