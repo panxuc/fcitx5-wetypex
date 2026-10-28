@@ -104,6 +104,11 @@ stdenv.mkDerivation {
   ];
 
   postPatch = ''
+    # Distribution installers cannot update an immutable Nix store package.
+    cat > scripts/fcitx5-wetypex-update.sh.in <<'PY'
+    #!@NIX_PYTHON@
+    print("WeTypeX 由 Nix 管理，请更新 Nix 配置中的版本并重新构建。")
+    PY
     while IFS= read -r -d "" file; do
       substituteInPlace "$file" \
         --replace-quiet '@NIX_RUNTIME_PATH@' '${runtimePath}' \
