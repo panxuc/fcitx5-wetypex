@@ -182,6 +182,13 @@ def local_clipboard(environment):
         return _local_clipboard_silently(environment)
     if wl_paste:
         advertised = clipboard_command([wl_paste, "--list-types"], environment)
+        # wl-paste reports an absent selection as exit 1, not a successful
+        # empty MIME list. It is a valid empty baseline, so a first remote
+        # clipboard can be received without copying anything locally first.
+        if (advertised is not None and advertised.returncode == 1 and
+                not advertised.stdout and
+                advertised.stderr.strip() == b"Nothing is copied"):
+            return "empty", b"", hashlib.sha256(b"").hexdigest()
         if not advertised or advertised.returncode != 0:
             return None
         types = (advertised.stdout.decode("utf-8", "replace").splitlines()
