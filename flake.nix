@@ -15,6 +15,29 @@
         fcitx5-wetypex = wetypex;
         default = wetypex;
       };
-      checks.${system}.package = wetypex;
+      checks.${system} = {
+        package = wetypex;
+        minimal = wetypex.override {
+          enableAI = false;
+          enableVoice = false;
+          enableLayerShell = false;
+          enableWeTypeTheme = false;
+          defaultSettings = {
+            page_size = 7;
+            vertical = true;
+            standalone = true;
+          };
+        };
+        voiceOnly = wetypex.override {
+          enableAI = false;
+          enableVoice = true;
+          enableLayerShell = false;
+          enableWeTypeTheme = false;
+        };
+        aiOnly = wetypex.override {
+          enableAI = true;
+          enableVoice = false;
+        };
+      };
     };
 }

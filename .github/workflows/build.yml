@@ -18,8 +18,7 @@ jobs:
             cores = 2
       - name: 检查 flake 并构建 Nix 包
         run: |
-          nix flake check --no-build --no-write-lock-file
-          nix build .#fcitx5-wetypex --no-write-lock-file --print-build-logs
+          nix flake check --no-write-lock-file --print-build-logs
       - name: 检查源码包中的 Nix 入口
         run: |
           python3 tools/package_release.py

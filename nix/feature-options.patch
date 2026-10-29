@@ -1,0 +1,744 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d4cbc6a..75e14f6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,33 +23,47 @@ pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
+ pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
+ pkg_check_modules(WETYPE_WAYLAND REQUIRED IMPORTED_TARGET wayland-client)
+ find_package(Threads REQUIRED)
++option(WETYPE_ENABLE_AI "Build the Ask AI feature" ON)
++option(WETYPE_ENABLE_VOICE "Enable voice input" ON)
++set(WETYPE_DEFAULT_SETTINGS_FILE "" CACHE FILEPATH "Packaged first-run preferences")
++add_compile_definitions(
++  WETYPE_DEFAULT_SETTINGS="${WETYPE_DEFAULT_SETTINGS_FILE}"
++  WETYPE_ENABLE_AI=$<BOOL:${WETYPE_ENABLE_AI}>
++  WETYPE_ENABLE_VOICE=$<BOOL:${WETYPE_ENABLE_VOICE}>
++  WETYPE_INIT_SETTINGS="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-init-settings")
++set(WETYPE_QT_COMPONENTS Widgets Gui DBus Network Svg)
++if(WETYPE_ENABLE_AI)
++  list(APPEND WETYPE_QT_COMPONENTS WebEngineWidgets)
++endif()
+ set(WETYPE_QT_VERSION "AUTO" CACHE STRING "UI toolkit: AUTO, 5 or 6")
+ set_property(CACHE WETYPE_QT_VERSION PROPERTY STRINGS AUTO 5 6)
+ if(NOT WETYPE_QT_VERSION MATCHES "^(AUTO|5|6)$")
+   message(FATAL_ERROR "WETYPE_QT_VERSION must be AUTO, 5 or 6")
+ endif()
+ if(NOT WETYPE_QT_VERSION STREQUAL "5")
+-  find_package(Qt6 6.2 QUIET COMPONENTS Widgets Gui DBus Network Svg WebEngineWidgets)
++  find_package(Qt6 6.2 QUIET COMPONENTS ${WETYPE_QT_COMPONENTS})
+   find_package(Fcitx5Qt6WidgetsAddons QUIET)
+-  if(TARGET Qt6::WebEngineWidgets AND TARGET Qt6::Svg AND TARGET Fcitx5Qt6::WidgetsAddons)
++  if(TARGET Qt6::Svg AND TARGET Fcitx5Qt6::WidgetsAddons AND (NOT WETYPE_ENABLE_AI OR TARGET Qt6::WebEngineWidgets))
+     set(WETYPE_QT_PACKAGE Qt6)
+     set(WETYPE_UI_QT_MAJOR 6)
+   elseif(WETYPE_QT_VERSION STREQUAL "6")
+-    message(FATAL_ERROR "Qt 6.2+ with WebEngine and Fcitx5 Qt6 development files is required")
++    message(FATAL_ERROR "Qt 6.2+ UI dependencies and Fcitx5 Qt6 development files are required")
+   endif()
+ endif()
+ if(NOT WETYPE_QT_PACKAGE)
+-  find_package(Qt5 5.12 REQUIRED COMPONENTS Widgets Gui DBus Network Svg WebEngineWidgets)
++  find_package(Qt5 5.12 REQUIRED COMPONENTS ${WETYPE_QT_COMPONENTS})
+   find_package(Fcitx5Qt5WidgetsAddons REQUIRED)
+   set(WETYPE_QT_PACKAGE Qt5)
+   set(WETYPE_UI_QT_MAJOR 5)
+ endif()
+ set(QT_DEFAULT_MAJOR_VERSION ${WETYPE_UI_QT_MAJOR})
+ message(STATUS "WeTypeX UI toolkit: ${WETYPE_QT_PACKAGE}")
++if(WETYPE_ENABLE_AI)
+ add_executable(fcitx5-wetypex-ai-viewer src/ai/main.cpp)
+ target_link_libraries(fcitx5-wetypex-ai-viewer PRIVATE ${WETYPE_QT_PACKAGE}::Widgets ${WETYPE_QT_PACKAGE}::Network ${WETYPE_QT_PACKAGE}::WebEngineWidgets)
+ target_compile_definitions(fcitx5-wetypex-ai-viewer PRIVATE
+   WETYPE_AI_HELPER="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-ai")
++endif()
+ add_executable(fcitx5-wetypex-transfer src/transfer/main.cpp)
+ target_link_libraries(fcitx5-wetypex-transfer PRIVATE ${WETYPE_QT_PACKAGE}::Widgets ${WETYPE_QT_PACKAGE}::Network)
+ target_compile_definitions(fcitx5-wetypex-transfer PRIVATE
+@@ -196,11 +210,18 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/wetypex-locale.so
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/wcwss_bridge.so DESTINATION ${CMAKE_INSTALL_LIBDIR}/fcitx5-wetypex)
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/wetypex-addon.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5/addon RENAME wetypex.conf)
+ install(FILES data/wetypex-inputmethod.conf DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5/inputmethod RENAME wetypex.conf)
+-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-backend ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-account ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-syncd ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-setup ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-ai DESTINATION ${CMAKE_INSTALL_BINDIR})
+-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-voice DESTINATION ${CMAKE_INSTALL_BINDIR})
++install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-backend ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-account ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-setup DESTINATION ${CMAKE_INSTALL_BINDIR})
++install(PROGRAMS scripts/init_settings.py DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME fcitx5-wetypex-init-settings)
++if(WETYPE_ENABLE_AI)
++  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-ai DESTINATION ${CMAKE_INSTALL_BINDIR})
++  install(TARGETS fcitx5-wetypex-ai-viewer RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
++endif()
++if(WETYPE_ENABLE_VOICE)
++  install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-voice DESTINATION ${CMAKE_INSTALL_BINDIR})
++endif()
++install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-sync ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-syncd DESTINATION ${CMAKE_INSTALL_BINDIR})
+ install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-update DESTINATION ${CMAKE_INSTALL_BINDIR})
+-install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/fcitx5-wetypex-sync DESTINATION ${CMAKE_INSTALL_BINDIR})
+-install(TARGETS fcitx5-wetypex-settings fcitx5-wetypex-clipboard-set fcitx5-wetypex-ai-viewer fcitx5-wetypex-transfer fcitx5-wetypex-vmode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
++install(TARGETS fcitx5-wetypex-settings fcitx5-wetypex-clipboard-set fcitx5-wetypex-transfer fcitx5-wetypex-vmode RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+ install(FILES data/wetypex-symbols.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+ install(FILES data/wechat-emoticons.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+ install(FILES data/wechat-emoticons.json DESTINATION ${CMAKE_INSTALL_LIBDIR}/fcitx5-wetypex)
+@@ -210,7 +231,9 @@ install(FILES data/fcitx5-wetypex-settings.desktop DESTINATION ${CMAKE_INSTALL_D
+ install(DIRECTORY data/icons/hicolor/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor)
+ install(PROGRAMS scripts/setup_runtime.py tools/prepare_macos_runtime.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+ install(FILES scripts/wechat_emoticons.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+-install(FILES scripts/voice_stream.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
++if(WETYPE_ENABLE_VOICE)
++  install(FILES scripts/voice_stream.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
++endif()
+ install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-LICENSE)
+ install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-ISC-LICENSE)
+ install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-BSD-2-Clause-LICENSE)
+diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-account.sh.in
+index 0bdeed2..2d1ca1a 100644
+--- a/scripts/fcitx5-wetypex-account.sh.in
++++ b/scripts/fcitx5-wetypex-account.sh.in
+@@ -6,6 +6,10 @@ set -eu
+ umask 077
+
+ command_name="${1:-}"
++if [ "@NIX_VOICE_ENABLED@" != 1 ] && [ "$command_name" = voice-file ]; then
++  echo 'WeTypeX voice input is disabled by the package configuration.' >&2
++  exit 78
++fi
+ if [ "$command_name" = voice-file ]; then
+   exec @CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-voice transcribe "${2:-}"
+ fi
+diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backend.sh.in
+index e672926..da7de0d 100644
+--- a/scripts/fcitx5-wetypex-backend.sh.in
++++ b/scripts/fcitx5-wetypex-backend.sh.in
+@@ -7,7 +7,18 @@ umask 077
+ runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
+ state="${WETYPE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/state}"
+ account="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
+-config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
++case "${XDG_CONFIG_HOME:-}" in
++  /*) config_home="$XDG_CONFIG_HOME" ;;
++  *) config_home="$HOME/.config" ;;
++esac
++export XDG_CONFIG_HOME="$config_home"
++config_file="$config_home/fcitx5/wetypex.json"
++if [ ! -e "$config_file" ] && [ ! -L "$config_file" ]; then
++  @CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-init-settings || true
++  if [ ! -e "$config_file" ] && [ ! -L "$config_file" ]; then
++    config_file="@NIX_DEFAULT_SETTINGS@"
++  fi
++fi
+ support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+ test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
+ mkdir -p "$state/user"
+@@ -20,8 +31,8 @@ rm -f "$state/user/persistent_data/user_dict_clean_up.bin"
+ if [ "${WETYPE_DEBUG:-0}" != 1 ]; then exec 2>/dev/null; fi
+
+ standalone=0
+-if [ -f "$config_home/fcitx5/wetypex.json" ]; then
+-  standalone="$(@NIX_PYTHON@ -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
++if [ -f "$config_file" ]; then
++  standalone="$(@NIX_PYTHON@ -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_file" 2>/dev/null || printf 0)"
+ fi
+
+ # The original desktop enables cloud candidates only when networking is
+diff --git a/scripts/fcitx5-wetypex-sync.sh.in b/scripts/fcitx5-wetypex-sync.sh.in
+index caa1a31..1ee8756 100644
+--- a/scripts/fcitx5-wetypex-sync.sh.in
++++ b/scripts/fcitx5-wetypex-sync.sh.in
+@@ -16,9 +16,14 @@ def main():
+     if sys.argv[1:] not in ([], ["--refresh-state"]):
+         raise ValueError("用法: fcitx5-wetypex-sync [--refresh-state]")
+     refresh_state = sys.argv[1:] == ["--refresh-state"]
+-    config_home = pathlib.Path(os.environ.get("XDG_CONFIG_HOME") or pathlib.Path.home()/".config")
++    config_home = os.environ.get("XDG_CONFIG_HOME")
++    if not config_home or not os.path.isabs(config_home):
++        config_home = pathlib.Path.home()/".config"
++    config_path = pathlib.Path(config_home)/"fcitx5/wetypex.json"
++    if not os.path.lexists(config_path):
++        config_path = pathlib.Path("@NIX_DEFAULT_SETTINGS@")
+     try:
+-        config = json.loads((config_home/"fcitx5/wetypex.json").read_text())
++        config = json.loads(config_path.read_text())
+     except (OSError, ValueError):
+         config = {}
+     if isinstance(config, dict) and config.get("standalone", False):
+diff --git a/scripts/init_settings.py b/scripts/init_settings.py
+new file mode 100644
+index 0000000..2a000f9
+--- /dev/null
++++ b/scripts/init_settings.py
+@@ -0,0 +1,62 @@
++#!@NIX_PYTHON@
++"""Create first-run WeTypeX preferences without replacing user settings."""
++import argparse
++import json
++import os
++from pathlib import Path
++import pwd
++import tempfile
++
++MAXIMUM_SETTINGS_BYTES = 16384
++
++
++def config_home():
++    value = os.environ.get("XDG_CONFIG_HOME")
++    if value and os.path.isabs(value):
++        return Path(value)
++    home = os.environ.get("HOME")
++    if not home or not os.path.isabs(home):
++        home = pwd.getpwuid(os.getuid()).pw_dir
++    return Path(home) / ".config"
++
++
++def initialize_settings(defaults_path, config_path):
++    config_path = Path(config_path)
++    if os.path.lexists(config_path):
++        return False
++    with Path(defaults_path).open("rb") as source:
++        payload = source.read(MAXIMUM_SETTINGS_BYTES + 1)
++    if len(payload) > MAXIMUM_SETTINGS_BYTES:
++        raise ValueError("WeTypeX defaults exceed the 16 KiB preference limit")
++    defaults = json.loads(payload)
++    if not isinstance(defaults, dict):
++        raise ValueError("WeTypeX defaults must be a JSON object")
++    config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++    descriptor, temporary = tempfile.mkstemp(prefix=".wetypex-defaults-", dir=config_path.parent)
++    try:
++        with os.fdopen(descriptor, "wb") as output:
++            os.fchmod(output.fileno(), 0o600)
++            output.write(payload)
++            output.flush()
++            os.fsync(output.fileno())
++        try:
++            os.link(temporary, config_path)
++        except FileExistsError:
++            return False
++        return True
++    finally:
++        os.unlink(temporary)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.parse_args()
++    try:
++        initialize_settings("@NIX_DEFAULT_SETTINGS@", config_home() / "fcitx5/wetypex.json")
++    except (OSError, ValueError) as error:
++        parser.exit(1, "Unable to initialize WeTypeX preferences: " + str(error) + "\n")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
+index 0c42c66..fd68e08 100644
+--- a/scripts/setup_runtime.py
++++ b/scripts/setup_runtime.py
+@@ -328,7 +328,8 @@ def main():
+             with urllib.request.urlopen(URL,timeout=60) as response,archive.open('wb') as out:shutil.copyfileobj(response,out)
+         if digest(archive)!=ARCHIVE_SHA:raise ValueError(f'Archive SHA-256 mismatch; expected the verified {UPSTREAM_VERSION} package')
+         install_ui_resources(archive,data)
+-        install_voice_resources(archive,data)
++        if @NIX_VOICE_ENABLED@:
++            install_voice_resources(archive,data)
+         if args.icons_only:
+             print('Original UI assets installed in '+str(data/'fcitx5-wetypex/ui'))
+             return 0
+@@ -373,6 +374,7 @@ def main():
+         runtime.rename(target)
+         old=target.with_name(target.name+'.previous')
+         if old.exists():shutil.rmtree(old)
++    subprocess.run([str(pathlib.Path('@NIX_OUT@/bin/fcitx5-wetypex-init-settings'))],check=True)
+     print('Original runtime prepared: '+str(target))
+     print('Add “WeTypeX” in Fcitx5 settings.')
+     return 0
+diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
+index bda0776..cfe93cd 100644
+--- a/scripts/voice_stream.py
++++ b/scripts/voice_stream.py
+@@ -30,13 +30,18 @@ VOICE = STATE / 'voice'
+ ACCOUNT = Path(os.environ.get('WETYPE_ACCOUNT_STATE_DIR', DATA / 'fcitx5-wetypex/account'))
+ RUNTIME = Path(os.environ.get('WETYPE_RUNTIME_DIR', DATA / 'fcitx5-wetypex/runtime'))
+ SUPPORT = Path(os.environ.get('WETYPE_SUPPORT_DIR', '@NIX_OUT@/lib/fcitx5-wetypex'))
+-CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
++_config_home = os.environ.get('XDG_CONFIG_HOME')
++if not _config_home or not os.path.isabs(_config_home):
++    _config_home = Path.home() / '.config'
++CONFIG = Path(_config_home) / 'fcitx5/wetypex.json'
+ ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
+ LIMIT = 131072
+
+
+ def read_json(path):
+     try:
++        if path == CONFIG and not os.path.lexists(path):
++            path = Path('@NIX_DEFAULT_SETTINGS@')
+         value = json.loads(path.read_text())
+         return value if isinstance(value, dict) else {}
+     except (OSError, ValueError):
+diff --git a/src/backend/business_services.hpp b/src/backend/business_services.hpp
+index 7da45a4..4681080 100644
+--- a/src/backend/business_services.hpp
++++ b/src/backend/business_services.hpp
+@@ -402,6 +402,11 @@ static bool save_business_identity(const char *path,
+
+ #include "native_voice.hpp"
+ static void business_service() {
++  if (!WETYPE_ENABLE_VOICE &&
++      (getenv("WETYPE_VOICE_STREAM") || getenv("WETYPE_VOICE_FILE"))) {
++    fputs("Voice input is disabled in this build.\n", stderr);
++    _exit(78);
++  }
+   const char *identity_path = getenv("WETYPE_IDENTITY_FILE");
+   BusinessIdentity identity = load_business_identity(identity_path);
+   if (identity.model.empty()) {
+diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
+index f29ea3f..5b8ed46 100644
+--- a/src/backend/macos_host.cpp
++++ b/src/backend/macos_host.cpp
+@@ -2,6 +2,12 @@
+ // Unknown dependencies abort; they never silently return success.
+ #define _GNU_SOURCE 1
+ #include "../common/json.hpp"
++#ifndef WETYPE_ENABLE_AI
++#define WETYPE_ENABLE_AI 1
++#endif
++#ifndef WETYPE_ENABLE_VOICE
++#define WETYPE_ENABLE_VOICE 1
++#endif
+ #include <algorithm>
+ #include <array>
+ #include <arpa/inet.h>
+@@ -2846,6 +2852,21 @@ int main(int argc, char **argv) {
+     fprintf(stderr, "usage: host PREPARED_DIR MODE [ASCII_PINYIN]\n");
+     return 2;
+   }
++  // Reject disabled entry points before loading or initializing the original
++  // core: a direct host invocation must fail locally without network access.
++  const bool business = !strcmp(argv[2], "business-service");
++  const char *disabled = nullptr;
++  if (!WETYPE_ENABLE_AI && !strcmp(argv[2], "llm-service"))
++    disabled = "AI";
++  else if (!WETYPE_ENABLE_VOICE &&
++           (!strcmp(argv[2], "voice-service") ||
++            (business && (getenv("WETYPE_VOICE_STREAM") ||
++                          getenv("WETYPE_VOICE_FILE")))))
++    disabled = "voice input";
++  if (disabled) {
++    fprintf(stderr, "%s is disabled in this build.\n", disabled);
++    return 78;
++  }
+   service_mode = !strcmp(argv[2], "serve") ||
+                  !strcmp(argv[2], "voice-service") ||
+                  !strcmp(argv[2], "flurry-server") ||
+diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
+index 5d3d027..734ee11 100644
+--- a/src/plugin/config.hpp
++++ b/src/plugin/config.hpp
+@@ -5,6 +5,13 @@
+ #include <fcitx-config/option.h>
+ #include <fcitx-utils/key.h>
+
++#ifndef WETYPE_ENABLE_AI
++#define WETYPE_ENABLE_AI 1
++#endif
++#ifndef WETYPE_ENABLE_VOICE
++#define WETYPE_ENABLE_VOICE 1
++#endif
++
+ namespace wetype_config {
+ using namespace fcitx;
+
+@@ -139,8 +146,9 @@ FCITX_CONFIGURATION(
+         {Key("Shift_L")},
+         KeyListConstrain({KeyConstrainFlag::AllowModifierLess,
+                           KeyConstrainFlag::AllowModifierOnly})};
+-    Option<bool> aiAssistant{this, "AiAssistant", "AI 助手（=）", true};
+-    KeyListOption aiAssistantKeys{
++    ConditionalHidden<!WETYPE_ENABLE_AI, Option<bool>> aiAssistant{
++        this, "AiAssistant", "AI 助手（=）", true};
++    ConditionalHidden<!WETYPE_ENABLE_AI, KeyListOption> aiAssistantKeys{
+         this,
+         "AiAssistantKeys",
+         "AI 助手按键",
+@@ -224,7 +232,8 @@ FCITX_CONFIGURATION(UpdateConfig,
+
+ FCITX_CONFIGURATION(
+     WeTypeConfig, Option<InputConfig> input{this, "Input", "输入"};
+-    Option<VoiceConfig> voice{this, "Voice", "语音输入"};
++    ConditionalHidden<!WETYPE_ENABLE_VOICE, Option<VoiceConfig>> voice{
++        this, "Voice", "语音输入"};
+     Option<PhraseClipboardConfig> phrases{this, "PhrasesClipboard",
+                                           "常用语和剪贴板"};
+     Option<AppearanceConfig> appearance{this, "Appearance", "外观"};
+diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
+index 48f4cb2..b98b734 100644
+--- a/src/plugin/wetype.cpp
++++ b/src/plugin/wetype.cpp
+@@ -13,6 +13,7 @@
+ #include <fcitx-utils/key.h>
+ #include <fcitx-utils/keysym.h>
+ #include <fcitx-utils/misc.h>
++#include <fcitx-utils/standardpath.h>
+ #include <fcitx-utils/utf8.h>
+ #include <fcitx/action.h>
+ #include <fcitx/addonfactory.h>
+@@ -53,6 +54,11 @@
+ extern char **environ;
+ namespace {
+ using namespace fcitx;
++static bool preferencesMissing(const std::filesystem::path &path) {
++  std::error_code error;
++  return std::filesystem::symlink_status(path, error).type() ==
++         std::filesystem::file_type::not_found;
++}
+ template <typename Context, typename Flag, typename = void>
+ struct HasCursorCommit : std::false_type {};
+ template <typename Context, typename Flag>
+@@ -713,12 +719,49 @@ class WeType : public InputMethodEngine {
+       s->symbolAutoState = 0;
+     return true;
+   }
++  void initializeSettings() {
++#ifdef WETYPE_INIT_SETTINGS
++    // The local initializer creates a private file atomically and never
++    // overwrites one. Run only during construction, before the first reload.
++    const std::filesystem::path directory =
++        StandardPath::global().userDirectory(StandardPath::Type::Config);
++    // Resolve empty/relative XDG values exactly as Fcitx does, and give
++    // subprocesses the same directory used by this input-method process.
++    if (directory.empty())
++      return;
++    setenv("XDG_CONFIG_HOME", directory.c_str(), 1);
++    if (!preferencesMissing(directory / "fcitx5/wetypex.json"))
++      return;
++    const char *initializer = WETYPE_INIT_SETTINGS;
++    if (!initializer || initializer[0] != '/')
++      return;
++    char *argv[] = {const_cast<char *>(initializer), nullptr};
++    pid_t child = -1;
++    if (posix_spawn(&child, initializer, nullptr, nullptr, argv, environ) == 0)
++      while (waitpid(child, nullptr, 0) < 0 && errno == EINTR) {
++      }
++#endif
++  }
++  void enforceBuildFeatures() {
++    if (!WETYPE_ENABLE_AI)
++      config_.shortcuts.mutableValue()->aiAssistant.setValue(false);
++    if (!WETYPE_ENABLE_VOICE) {
++      auto *voice = config_.voice.mutableValue();
++      voice->launchShortcut.setValue(false);
++      voice->holdShortcut.setValue(false);
++      voice->smartPolish.setValue(false);
++    }
++  }
+   void reloadSettings() {
+     const char *config = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+     std::string path =
+         config ? config : std::string(home ? home : "") + "/.config";
+     const auto newPath = path + "/fcitx5/wetypex.json";
+     std::ifstream f(newPath);
++    if (!f && preferencesMissing(newPath)) {
++      f.clear();
++      f.open(WETYPE_DEFAULT_SETTINGS);
++    }
+     std::string bytes(16385, '\0');
+     f.read(bytes.data(), bytes.size());
+     bytes.resize(f.gcount());
+@@ -901,6 +944,7 @@ class WeType : public InputMethodEngine {
+     loadKeys(shortcuts->secondCandidateKeys, "second_candidate_keys");
+     loadKeys(shortcuts->thirdCandidateKeys, "third_candidate_keys");
+     config_.update.mutableValue()->autoUpdate.setValue(false);
++    enforceBuildFeatures();
+   }
+   void saveNativeConfig() {
+     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+@@ -913,7 +957,10 @@ class WeType : public InputMethodEngine {
+     if (error)
+       return;
+     auto path = directory / "wetypex.json";
+-    std::ifstream oldFile(path);
++    const auto readPath = preferencesMissing(path)
++                              ? std::filesystem::path(WETYPE_DEFAULT_SETTINGS)
++                              : path;
++    std::ifstream oldFile(readPath);
+     std::string oldBytes((std::istreambuf_iterator<char>(oldFile)), {});
+     auto json = wire::parse(oldBytes);
+     if (!json || !json_object_is_type(json.get(), json_type_object))
+@@ -991,6 +1038,7 @@ class WeType : public InputMethodEngine {
+     wire::put(json.get(), "device_dictionary_sync",
+               bool(*devices.dictionarySync));
+     wire::put(json.get(), "device_phrase_sync", bool(*devices.phraseSync));
++#if WETYPE_ENABLE_VOICE
+     const auto &voice = *config_.voice;
+     wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
+     wire::put(json.get(), "voice_hold_shortcut", bool(*voice.holdShortcut));
+@@ -1009,10 +1057,13 @@ class WeType : public InputMethodEngine {
+             ? "空格替换标点"
+             : "智能标点";
+     wire::put(json.get(), "voice_punctuation", std::string(punctuation));
++#endif
+     const auto &shortcuts = *config_.shortcuts;
+     wire::put(json.get(), "shift_switch", bool(*shortcuts.shiftSwitch));
+     wire::put(json.get(), "ctrl_switch", bool(*shortcuts.ctrlSwitch));
++#if WETYPE_ENABLE_AI
+     wire::put(json.get(), "ai_assistant", bool(*shortcuts.aiAssistant));
++#endif
+     wire::put(json.get(), "v_mode", bool(*shortcuts.vMode));
+     wire::put(json.get(), "half_full_switch", bool(*shortcuts.halfFull));
+     wire::put(json.get(), "punctuation_switch",
+@@ -1031,7 +1082,9 @@ class WeType : public InputMethodEngine {
+       wire::put(json.get(), name, Key::keyListToString(*option));
+     };
+     saveKeys("language_switch_keys", shortcuts.languageSwitchKeys);
++#if WETYPE_ENABLE_AI
+     saveKeys("ai_assistant_keys", shortcuts.aiAssistantKeys);
++#endif
+     saveKeys("v_mode_keys", shortcuts.vModeKeys);
+     saveKeys("half_full_keys", shortcuts.halfFullKeys);
+     saveKeys("punctuation_switch_keys", shortcuts.punctuationSwitchKeys);
+@@ -1041,10 +1094,13 @@ class WeType : public InputMethodEngine {
+     saveKeys("second_candidate_keys", shortcuts.secondCandidateKeys);
+     saveKeys("third_candidate_keys", shortcuts.thirdCandidateKeys);
+     wire::put(json.get(), "auto_update", bool(*config_.update->autoUpdate));
++    const auto serialized = wire::dump(json.get()) + '\n';
++    if (serialized.size() > 16384)
++      return;
+     auto temporary = path;
+     temporary += ".tmp";
+     std::ofstream output(temporary, std::ios::trunc);
+-    output << wire::dump(json.get()) << '\n';
++    output << serialized;
+     output.close();
+     chmod(temporary.c_str(), 0600);
+     std::filesystem::rename(temporary, path, error);
+@@ -1163,6 +1219,8 @@ class WeType : public InputMethodEngine {
+     }
+   }
+   bool voiceControl(const char *operation, bool traditional = false) {
++    if (!WETYPE_ENABLE_VOICE)
++      return false;
+     std::ifstream input(stateDirectory() / "voice/control.json");
+     std::string bytes(1025, '\0');
+     input.read(bytes.data(), bytes.size());
+@@ -1215,6 +1273,8 @@ class WeType : public InputMethodEngine {
+     return delivered;
+   }
+   void primeVoice() {
++    if (!WETYPE_ENABLE_VOICE)
++      return;
+     voiceWarmTick_ = now(CLOCK_MONOTONIC);
+     if (networkEnabled_ &&
+         (*config_.voice->launchShortcut || *config_.voice->holdShortcut) &&
+@@ -1242,6 +1302,8 @@ class WeType : public InputMethodEngine {
+     return false;
+   }
+   void startVoice(InputContext *ic, bool hold) {
++    if (!WETYPE_ENABLE_VOICE)
++      return;
+     if (voicePending_ || ic->capabilityFlags().test(CapabilityFlag::Password))
+       return;
+     auto *s = state(ic);
+@@ -1304,6 +1366,8 @@ class WeType : public InputMethodEngine {
+         panel(ic, ic->propertyFor(&factory_));
+   }
+   void receiveVoice() {
++    if (!WETYPE_ENABLE_VOICE)
++      return;
+     if (voicePending_ && voiceDaemonPid_ > 1 &&
+         kill(voiceDaemonPid_, 0) < 0 && errno == ESRCH) {
+       cancelVoice(false);
+@@ -2242,6 +2306,7 @@ public:
+       : instance_(instance), factory_([this](InputContext &ic) {
+           return new State(++nextId_, ic);
+         }) {
++    initializeSettings();
+     reloadSettings();
+     instance_->inputContextManager().registerProperty("wetypexState",
+                                                       &factory_);
+@@ -2377,11 +2442,13 @@ public:
+             if (!start())
+               scheduleRestart();
+           }
+-          if (time >= syncTick_ + (voicePending_ ? 40000 : 1000000)) {
++          if (WETYPE_ENABLE_VOICE &&
++              time >= syncTick_ + (voicePending_ ? 40000 : 1000000)) {
+             syncTick_ = time;
+             receiveVoice();
+           }
+-          if (focused && networkEnabled_ && time >= voiceWarmTick_ + 60000000)
++          if (WETYPE_ENABLE_VOICE && focused && networkEnabled_ &&
++              time >= voiceWarmTick_ + 60000000)
+             primeVoice();
+           pollVModeWindow();
+           // The Nix package is updated through its declarative configuration.
+@@ -2403,6 +2470,7 @@ public:
+   }
+   void setConfig(const RawConfig &raw) override {
+     config_.load(raw, true);
++    enforceBuildFeatures();
+     saveNativeConfig();
+     applyAppearance();
+     if (networkEnabled_) {
+@@ -2886,8 +2954,8 @@ public:
+       return;
+     if (ic->capabilityFlags().test(CapabilityFlag::Password))
+       return;
+-    if (networkEnabled_ && !s->vMode && s->preedit.empty() &&
+-        *config_.shortcuts->aiAssistant &&
++    if (WETYPE_ENABLE_AI && networkEnabled_ && !s->vMode &&
++        s->preedit.empty() && *config_.shortcuts->aiAssistant &&
+         key.checkKeyList(*config_.shortcuts->aiAssistantKeys)) {
+       const auto &surrounding = ic->surroundingText();
+       if (surrounding.isValid() && surrounding.cursor()) {
+diff --git a/src/settings/main.cpp b/src/settings/main.cpp
+index 4088329..feedd32 100644
+--- a/src/settings/main.cpp
++++ b/src/settings/main.cpp
+@@ -48,7 +48,9 @@ static QString configDir() {
+ }
+ static QJsonObject readSettings() {
+   const QString current = configDir() + "/wetypex.json";
+-  QFile file(current);
++  const QFileInfo info(current);
++  QFile file(!info.exists() && !info.isSymLink()
++                 ? QStringLiteral(WETYPE_DEFAULT_SETTINGS) : current);
+   if (!file.open(QIODevice::ReadOnly))
+     return {};
+   return QJsonDocument::fromJson(file.readAll()).object();
+@@ -84,9 +86,17 @@ static bool writeFile(const QString &name, const QByteArray &bytes) {
+ static bool writeSetting(const QString &key, const QJsonValue &value) {
+   auto settings = readSettings();
+   settings[key] = value;
+-  if (!writeFile(configDir() + "/wetypex.json",
+-                 QJsonDocument(settings).toJson()))
++  const auto bytes = QJsonDocument(settings).toJson(QJsonDocument::Compact);
++  if (bytes.size() > 16384) {
++    QMessageBox::warning(QApplication::activeWindow(), "设置未保存",
++                         "偏好内容超过 16 KiB，请减少大段配置内容后重试。");
+     return false;
++  }
++  if (!writeFile(configDir() + "/wetypex.json", bytes)) {
++    QMessageBox::warning(QApplication::activeWindow(), "设置未保存",
++                         "无法写入偏好文件，请检查配置目录的权限和可用空间。");
++    return false;
++  }
+   QDBusInterface controller("org.fcitx.Fcitx5", "/controller",
+                             "org.fcitx.Fcitx.Controller1");
+   controller.asyncCall("ReloadAddonConfig", "wetypex");
+@@ -649,6 +659,11 @@ int main(int argc, char **argv) {
+   app.setDesktopFileName("fcitx5-wetypex-settings");
+   app.setWindowIcon(appIcon());
+   const auto args = app.arguments();
++  qputenv("XDG_CONFIG_HOME", QStandardPaths::writableLocation(
++      QStandardPaths::GenericConfigLocation).toUtf8());
++  const QFileInfo preferences(configDir() + "/wetypex.json");
++  if (!preferences.exists() && !preferences.isSymLink())
++    QProcess::execute(QStringLiteral(WETYPE_INIT_SETTINGS), QStringList{});
+   const auto settings = readSettings();
+   const auto appearance = readAppearance();
+   app.setStyleSheet(R"(
+@@ -731,11 +746,15 @@ int main(int argc, char **argv) {
+     item->setSizeHint({190, 40});
+     navigation->addItem(item);
+   }
++  navigation->item(1)->setData(Qt::UserRole, QStringLiteral("voiceNavigation"));
++#if !WETYPE_ENABLE_VOICE
++  navigation->item(1)->setHidden(true);
++#endif
+   sideLayout->addWidget(navigation, 1);
+   auto *deviceNotice = new QLabel(sidebar);
+   deviceNotice->setFixedSize(8, 8);
+   deviceNotice->setStyleSheet("background:#ff5151;border-radius:4px;");
+-  deviceNotice->move(179, 282);
++  deviceNotice->move(179, WETYPE_ENABLE_VOICE ? 282 : 241);
+   deviceNotice->raise();
+   root->addWidget(sidebar);
+   auto *right = new QWidget;
+@@ -868,7 +887,9 @@ int main(int argc, char **argv) {
+                   true, "standalone"))}));
+   pages->addWidget(input.widget);
+
++#if WETYPE_ENABLE_VOICE
+   auto voice = page("语音输入");
++  voice.widget->setObjectName("voicePage");
+   auto *voiceHero = card();
+   auto *voiceHeroLayout = new QVBoxLayout(voiceHero);
+   voiceHeroLayout->setContentsMargins(16, 18, 16, 18);
+@@ -999,6 +1020,13 @@ int main(int argc, char **argv) {
+                            true, "voice_smart_polish"),
+                     52)}));
+   pages->addWidget(voice.widget);
++#else
++  // Keep every navigation row mapped to its original page index.
++  auto *voicePlaceholder = new QWidget;
++  voicePlaceholder->setObjectName("voicePage");
++  voicePlaceholder->setEnabled(false);
++  pages->addWidget(voicePlaceholder);
++#endif
+
+   auto phrases = page("", false);
+   phrases.widget->layout()->setContentsMargins(20, 0, 22, 0);
+@@ -1213,17 +1241,22 @@ int main(int argc, char **argv) {
+       new QLabel("系统默认支持“ctrl + 空格”切换中英文  修改");
+   defaultShortcut->setObjectName("rowSubtitle");
+   shortcuts.body->addWidget(defaultShortcut);
+-  shortcuts.body->addWidget(rowsCard(
+-      {row("快捷使用", {}, nullptr, 44),
+-       shortcutRow("AI 助手  Beta",
+-                   wetype::settingBool(settings.value("ai_assistant"), true),
+-                   {"="}, "输入后按「=」可使用 AI 提问、表情推荐等功能", true,
+-                   "ai_assistant"),
+-       shortcutRow(
+-           "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
+-           "按「v」打开快捷功能栏，可使用计算、剪贴板、常用语、符号等功能",
+-           true, "v_mode")}));
+-  shortcuts.body->addWidget(rowsCard(
++  QList<QWidget *> quickShortcutRows = {row("快捷使用", {}, nullptr, 44)};
++#if WETYPE_ENABLE_AI
++  auto *aiShortcutRow = shortcutRow(
++      "AI 助手  Beta",
++      wetype::settingBool(settings.value("ai_assistant"), true), {"="},
++      "输入后按「=」可使用 AI 提问、表情推荐等功能", true, "ai_assistant");
++  aiShortcutRow->setObjectName("aiShortcutRow");
++  quickShortcutRows.append(aiShortcutRow);
++#endif
++  quickShortcutRows.append(shortcutRow(
++      "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
++      "按「v」打开快捷功能栏，可使用计算、剪贴板、常用语、符号等功能", true,
++      "v_mode"));
++  shortcuts.body->addWidget(rowsCard(quickShortcutRows));
++#if WETYPE_ENABLE_VOICE
++  auto *voiceShortcutCard = rowsCard(
+       {row("语音输入", {}, nullptr, 44),
+        shortcutRow(
+            "启动语音输入",
+@@ -1235,7 +1268,10 @@ int main(int argc, char **argv) {
+            "按住说话",
+            wetype::settingBool(settings.value("voice_hold_shortcut"), true),
+            {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
+-           "voice_hold_shortcut")}));
++           "voice_hold_shortcut")});
++  voiceShortcutCard->setObjectName("voiceShortcutCard");
++  shortcuts.body->addWidget(voiceShortcutCard);
++#endif
+   shortcuts.body->addWidget(rowsCard(
+       {row("输入状态切换", {}, nullptr, 44),
+        shortcutRow(
+@@ -1495,11 +1531,16 @@ int main(int argc, char **argv) {
+   pages->addWidget(about.widget);
+
+   QObject::connect(navigation, &QListWidget::currentRowChanged, pages,
+-                   &QStackedWidget::setCurrentIndex);
++                   [=](int index) {
++                     if (index >= 0 && !navigation->item(index)->isHidden())
++                       pages->setCurrentIndex(index);
++                   });
+   navigation->setCurrentRow(0);
+   int pageArg = args.indexOf("--page");
+-  if (pageArg >= 0 && pageArg + 1 < args.size())
+-    navigation->setCurrentRow(qBound(0, args[pageArg + 1].toInt(), 7));
++  if (pageArg >= 0 && pageArg + 1 < args.size()) {
++    const int index = qBound(0, args[pageArg + 1].toInt(), 7);
++    navigation->setCurrentRow(navigation->item(index)->isHidden() ? 0 : index);
++  }
+   window.show();
+   QTimer::singleShot(0, close, [close] {
+     close->raise();

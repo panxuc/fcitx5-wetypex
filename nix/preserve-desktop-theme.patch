@@ -1,0 +1,274 @@
+diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
+index 734ee11..56b9a30 100644
+--- a/src/plugin/config.hpp
++++ b/src/plugin/config.hpp
+@@ -32,8 +32,6 @@ enum class WubiScheme { Wubi86, Wubi98, NewCentury };
+ FCITX_CONFIG_ENUM_NAME(WubiScheme, "86 五笔", "98 五笔", "新世纪五笔")
+ enum class DefaultLanguage { Chinese, English };
+ FCITX_CONFIG_ENUM_NAME(DefaultLanguage, "中文", "英文")
+-enum class ThemeMode { System, Light, Dark };
+-FCITX_CONFIG_ENUM_NAME(ThemeMode, "跟随系统", "浅色", "深色")
+ enum class CandidateLabelStyle { WeType, Fcitx };
+ FCITX_CONFIG_ENUM_NAME(CandidateLabelStyle, "微信风格", "Fcitx 默认")
+ enum class PreeditPosition { Client, Candidate };
+@@ -123,8 +121,6 @@ FCITX_CONFIGURATION(PhraseClipboardConfig,
+
+ FCITX_CONFIGURATION(
+     AppearanceConfig,
+-    Option<int, IntConstrain> candidateSize{this, "CandidateSize", "候选字大小",
+-                                            13, IntConstrain(10, 18)};
+     Option<int, IntConstrain> pageSize{this, "PageSize", "每页候选数", 5,
+                                        IntConstrain(3, 9)};
+     Option<bool> vertical{this, "Vertical", "候选词竖排", false};
+@@ -132,8 +128,7 @@ FCITX_CONFIGURATION(
+         this, "PreeditPosition", "拼音显示位置", PreeditPosition::Client};
+     Option<CandidateLabelStyle> labelStyle{this, "CandidateLabelStyle",
+                                            "候选序号样式",
+-                                           CandidateLabelStyle::WeType};
+-    Option<ThemeMode> theme{this, "Theme", "主题模式", ThemeMode::System};)
++                                           CandidateLabelStyle::WeType};)
+
+ FCITX_CONFIGURATION(
+     ShortcutConfig, Option<bool> shiftSwitch{this, "ShiftSwitch",
+diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
+index e59dfe3..56815d3 100644
+--- a/src/plugin/wetype.cpp
++++ b/src/plugin/wetype.cpp
+@@ -865,8 +865,6 @@ class WeType : public InputMethodEngine {
+     phrases->clipboard.setValue(clipboardEnabled_);
+     auto *appearance = config_.appearance.mutableValue();
+     appearance->pageSize.setValue(pageSize_);
+-    appearance->candidateSize.setValue(
+-        std::clamp(int(wire::number(j.get(), "candidate_size", 13)), 10, 18));
+     appearance->vertical.setValue(vertical_);
+     appearance->preeditPosition.setValue(
+         wire::str(j.get(), "preedit_position") == "candidate"
+@@ -876,8 +874,6 @@ class WeType : public InputMethodEngine {
+         wire::str(j.get(), "candidate_label_style") == "fcitx"
+             ? wetype_config::CandidateLabelStyle::Fcitx
+             : wetype_config::CandidateLabelStyle::WeType);
+-    appearance->theme.setValue(static_cast<wetype_config::ThemeMode>(
+-        std::clamp(int(wire::number(j.get(), "theme_mode", 0)), 0, 2)));
+     auto *devices = config_.devices.mutableValue();
+     devices->clipboardSync.setValue(
+         json_object_get_boolean(wire::get(j.get(), "device_clipboard_sync")));
+@@ -1017,7 +1013,6 @@ class WeType : public InputMethodEngine {
+     wire::put(json.get(), "fuzzy_eng_ong", bool(*input.fuzzyEngOng));
+     const auto &appearance = *config_.appearance;
+     wire::put(json.get(), "page_size", int64_t(*appearance.pageSize));
+-    wire::put(json.get(), "candidate_size", int64_t(*appearance.candidateSize));
+     wire::put(json.get(), "vertical", bool(*appearance.vertical));
+     wire::put(json.get(), "preedit_position",
+               std::string(*appearance.preeditPosition ==
+@@ -1029,7 +1024,6 @@ class WeType : public InputMethodEngine {
+                                   wetype_config::CandidateLabelStyle::Fcitx
+                               ? "fcitx"
+                               : "wetype"));
+-    wire::put(json.get(), "theme_mode", int64_t(*appearance.theme));
+     wire::put(json.get(), "clipboard_enabled",
+               bool(config_.phrases->clipboard.value()));
+     const auto &devices = *config_.devices;
+@@ -1100,56 +1094,6 @@ class WeType : public InputMethodEngine {
+     std::filesystem::rename(temporary, path, error);
+     reloadSettings();
+   }
+-  void applyAppearance() {
+-    const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+-    std::filesystem::path path =
+-        configHome ? configHome
+-                   : std::filesystem::path(home ? home : "") / ".config";
+-    path /= "fcitx5/conf/classicui.conf";
+-    std::error_code error;
+-    std::filesystem::create_directories(path.parent_path(), error);
+-    if (error)
+-      return;
+-    std::ifstream input(path);
+-    std::vector<std::string> lines;
+-    std::string line;
+-    while (std::getline(input, line))
+-      lines.push_back(line);
+-    const auto &appearance = *config_.appearance;
+-    std::map<std::string, std::string> values = {
+-        {"Theme", *appearance.theme == wetype_config::ThemeMode::Dark
+-                      ? "wetypex-dark"
+-                      : "wetypex-light"},
+-        {"DarkTheme", "wetypex-dark"},
+-        {"UseDarkTheme", *appearance.theme == wetype_config::ThemeMode::System
+-                             ? "True"
+-                             : "False"},
+-        {"UseAccentColor", "False"},
+-        {"PreferTextIcon", "False"},
+-        {"Font",
+-         "Noto Sans CJK SC " + std::to_string(*appearance.candidateSize)}};
+-    for (auto &[key, value] : values) {
+-      bool found = false;
+-      for (auto &existing : lines)
+-        if (existing.rfind(key + "=", 0) == 0) {
+-          existing = key + "=" + value;
+-          found = true;
+-          break;
+-        }
+-      if (!found)
+-        lines.push_back(key + "=" + value);
+-    }
+-    auto temporary = path;
+-    temporary += ".tmp";
+-    std::ofstream output(temporary, std::ios::trunc);
+-    for (auto &entry : lines)
+-      output << entry << '\n';
+-    output.close();
+-    chmod(temporary.c_str(), 0600);
+-    std::filesystem::rename(temporary, path, error);
+-    if (!error)
+-      instance_->reloadAddonConfig("classicui");
+-  }
+   void applyDeviceFunctions() {
+     std::ifstream input(stateDirectory() / "sync-state.json");
+     std::string bytes((std::istreambuf_iterator<char>(input)), {});
+@@ -2466,7 +2410,6 @@ public:
+     config_.load(raw, true);
+     enforceBuildFeatures();
+     saveNativeConfig();
+-    applyAppearance();
+     if (networkEnabled_) {
+       applyDeviceFunctions();
+       startSync();
+diff --git a/src/settings/main.cpp b/src/settings/main.cpp
+index ae04939..4f2121d 100644
+--- a/src/settings/main.cpp
++++ b/src/settings/main.cpp
+@@ -240,32 +240,6 @@ static bool editHotword(QWidget *owner, const QJsonObject &existing = {}) {
+   });
+   return dialog.exec() == QDialog::Accepted;
+ }
+-static QMap<QString, QString> readAppearance() {
+-  QMap<QString, QString> result;
+-  QFile file(configDir() + "/conf/classicui.conf");
+-  if (!file.open(QIODevice::ReadOnly))
+-    return result;
+-  for (const auto &line : QString::fromUtf8(file.readAll()).split('\n')) {
+-    if (line.startsWith('#'))
+-      continue;
+-    int equals = line.indexOf('=');
+-    if (equals <= 0)
+-      continue;
+-    auto value = line.mid(equals + 1).trimmed();
+-    if (value.startsWith('"') && value.endsWith('"'))
+-      value = value.mid(1, value.size() - 2);
+-    result[line.left(equals).trimmed()] = value;
+-  }
+-  return result;
+-}
+-static void setIni(QString &text, const QString &key, const QString &value) {
+-  QRegularExpression expression("^" + QRegularExpression::escape(key) + "=.*$",
+-                                QRegularExpression::MultilineOption);
+-  if (text.contains(expression))
+-    text.replace(expression, key + "=" + value);
+-  else
+-    text += key + "=" + value + "\n";
+-}
+ static QFrame *rowsCard(const QList<QWidget *> &rows) {
+   auto *frame = card();
+   auto *layout = new QVBoxLayout(frame);
+@@ -541,40 +515,6 @@ static QWidget *shortcutRow(const QString &title, bool checked,
+                      [setting](bool value) { writeSetting(setting, value); });
+   return container;
+ }
+-static void applyClassicTheme(int mode, int size, QLabel *status) {
+-  QString path = configDir() + "/conf/classicui.conf";
+-  QString backup = configDir() + "/wetype-appearance-backup.json";
+-  QFile file(path);
+-  QString text;
+-  if (file.open(QIODevice::ReadOnly))
+-    text = QString::fromUtf8(file.readAll());
+-  if (!QFile::exists(backup)) {
+-    QJsonObject object;
+-    object["existed"] = QFile::exists(path);
+-    object["content"] = text;
+-    if (!writeFile(backup, QJsonDocument(object).toJson())) {
+-      status->setText("无法备份原主题，未更改配置");
+-      return;
+-    }
+-  }
+-  setIni(text, "Theme", mode == 2 ? "wetypex-dark" : "wetypex-light");
+-  setIni(text, "DarkTheme", "wetypex-dark");
+-  setIni(text, "UseDarkTheme", mode == 0 ? "True" : "False");
+-  setIni(text, "UseAccentColor", "False");
+-  setIni(text, "PreferTextIcon", "False");
+-  setIni(text, "Font", "Noto Sans CJK SC " + QString::number(size));
+-  if (!writeFile(path, text.toUtf8())) {
+-    status->setText("保存外观失败");
+-    return;
+-  }
+-  QDBusInterface controller("org.fcitx.Fcitx5", "/controller",
+-                            "org.fcitx.Fcitx.Controller1");
+-  auto reply = controller.call("ReloadAddonConfig", "classicui");
+-  status->setText(reply.type() == QDBusMessage::ErrorMessage
+-                      ? "配置已保存，Fcitx5 下次启动时生效"
+-                      : "外观已应用");
+-}
+-
+ using ToggleSpec = std::tuple<QString, QString, bool>;
+ static void runToggleDialog(QWidget *owner, const QString &title,
+                             const QList<ToggleSpec> &options) {
+@@ -665,7 +605,6 @@ int main(int argc, char **argv) {
+   if (!preferences.exists() && !preferences.isSymLink())
+     QProcess::execute(QStringLiteral(WETYPE_INIT_SETTINGS), QStringList{});
+   const auto settings = readSettings();
+-  const auto appearance = readAppearance();
+   app.setStyleSheet(R"(
+     * { font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif; font-size:14px; color:#202124; }
+     QWidget#windowSurface,QWidget#contentPage,QScrollArea#pageScroll,QScrollArea#pageScroll>QWidget>QWidget { background:#f7f7f7; }
+@@ -1151,31 +1090,8 @@ int main(int argc, char **argv) {
+   preview->setStyleSheet(
+       "background:#ccefd3;border-radius:10px;font-size:18px;");
+   visual.body->addWidget(preview);
+-  auto *candidateSize = new QSlider(Qt::Horizontal);
+-  candidateSize->setRange(10, 18);
+-  candidateSize->setValue(settings.value("candidate_size").toInt(13));
+-  auto *sliderBox = new QWidget;
+-  sliderBox->setFixedHeight(120);
+-  auto *sliderLayout = new QVBoxLayout(sliderBox);
+-  sliderLayout->setContentsMargins(15, 10, 15, 8);
+-  sliderLayout->addWidget(new QLabel("候选字大小"));
+-  sliderLayout->addWidget(candidateSize);
+-  auto *ticks =
+-      new QLabel("最小　　　　　　　　　　　 默认　　　　　　　　　　　最大");
+-  ticks->setObjectName("rowSubtitle");
+-  sliderLayout->addWidget(ticks);
+-  auto *sliderCard = card();
+-  auto *sliderCardLayout = new QVBoxLayout(sliderCard);
+-  sliderCardLayout->setContentsMargins(0, 0, 0, 0);
+-  sliderCardLayout->addWidget(sliderBox);
+-  visual.body->addWidget(sliderCard);
+-  auto *theme = new QComboBox;
+-  theme->addItems({"跟随系统", "浅色", "深色"});
+-  int themeMode = appearance.value("UseDarkTheme", "True") == "True" ? 0
+-                  : appearance.value("Theme").contains("dark")       ? 2
+-                                                                     : 1;
+-  theme->setCurrentIndex(themeMode);
+-  visual.body->addWidget(rowsCard({row("主题模式", {}, theme, 48)}));
++  visual.body->addWidget(rowsCard({row(
++      "候选窗外观", "皮肤、字号和深浅模式沿用桌面主题设置", nullptr, 64)}));
+   auto *preeditPosition = new QComboBox;
+   preeditPosition->addItems({"输入框内", "候选框内"});
+   preeditPosition->setCurrentIndex(
+@@ -1214,18 +1130,6 @@ int main(int argc, char **argv) {
+                                              : QStringLiteral("wetype"));
+                      updatePreview();
+                    });
+-  auto *appearanceStatus = new QLabel;
+-  appearanceStatus->setObjectName("rowSubtitle");
+-  visual.body->addWidget(appearanceStatus);
+-  auto applyVisual = [=] {
+-    writeSetting("candidate_size", candidateSize->value());
+-    writeSetting("theme_mode", theme->currentIndex());
+-    applyClassicTheme(theme->currentIndex(), candidateSize->value(),
+-                      appearanceStatus);
+-  };
+-  QObject::connect(candidateSize, &QSlider::sliderReleased, applyVisual);
+-  QObject::connect(theme, qOverload<int>(&QComboBox::currentIndexChanged),
+-                   [=](int) { applyVisual(); });
+   pages->addWidget(visual.widget);
+
+   auto shortcuts = page("快捷键");
