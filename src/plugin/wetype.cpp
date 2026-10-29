@@ -2295,6 +2295,12 @@ public:
           if (!languageModifier && !languageSwitchKey(key.key()) && !pendingSwitch &&
               !compositionShortcut)
             return;
+          // Fcitx's global trigger must not see this modifier, but the client
+          // still needs both halves of a chord such as Shift+Tab. Forward the
+          // physical modifier event before consuming it from Fcitx.
+          if (languageModifier ||
+              (bareModifier(key.key()) && languageSwitchKey(key.key())))
+            ic->forwardKey(key.key(), key.isRelease(), key.time());
           keyEvent(*entry, key);
           key.filterAndAccept();
         });
