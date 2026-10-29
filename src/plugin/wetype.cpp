@@ -324,7 +324,7 @@ class WeType : public InputMethodEngine {
   std::string voiceToken_, voiceText_, voicePhase_, voiceError_;
   int voiceLevel_ = 0;
   pid_t syncChild_ = -1;
-  bool replayingCursorKeys_ = false;
+  bool replayingKeys_ = false;
   static bool waylandV2(InputContext *ic) {
     return std::string_view(ic->frontend()) == "wayland_v2";
   }
@@ -375,8 +375,8 @@ class WeType : public InputMethodEngine {
       ic->forwardKey(Key(steps < 0 ? FcitxKey_Left : FcitxKey_Right));
   }
   void replayCursorKeys(InputContext *ic, std::vector<DeferredKey> keys) {
-    const bool previous = replayingCursorKeys_;
-    replayingCursorKeys_ = true;
+    const bool previous = replayingKeys_;
+    replayingKeys_ = true;
     const auto ref = ic->watch();
     for (const auto &key : keys) {
       auto *target = ref.get();
@@ -396,7 +396,7 @@ class WeType : public InputMethodEngine {
           target->forwardKey(key.key, key.release, key.time);
       }
     }
-    replayingCursorKeys_ = previous;
+    replayingKeys_ = previous;
   }
   bool resolveCursorMove(InputContext *ic, State *s) {
     if (!s->pendingCursorSteps)
@@ -2227,6 +2227,8 @@ class WeType : public InputMethodEngine {
     auto deferred = std::move(s->deferredKeys);
     s->deferredKeys.clear();
     auto ref = ic->watch();
+    const bool previousReplay = replayingKeys_;
+    replayingKeys_ = true;
     for (const auto &key : deferred) {
       auto *target = ref.get();
       if (!target || !target->hasFocus() ||
@@ -2236,6 +2238,7 @@ class WeType : public InputMethodEngine {
       if (!target->keyEvent(event))
         target->forwardKey(key.key, key.release, key.time);
     }
+    replayingKeys_ = previousReplay;
   }
 
 public:
@@ -2292,11 +2295,22 @@ public:
           const bool compositionShortcut =
               !s->english && (!s->preedit.empty() || s->vMenu != VMenu::None) &&
               !key.key().isModifier() && compositionShortcutKey(key.key());
-          if (!languageModifier && !languageSwitchKey(key.key()) && !pendingSwitch &&
-              !compositionShortcut)
+          if (!languageModifier && !languageSwitchKey(key.key()) &&
+              !pendingSwitch && !compositionShortcut)
             return;
-          keyEvent(*entry, key);
-          key.filterAndAccept();
+          if (key.key().isModifier() && !replayingKeys_) {
+            // Apply our switch logic without accepting the physical event.
+            // Filtering alone skips Fcitx's global trigger and lets the
+            // frontend deliver the original press/release to the client.
+            // forwardKey() may synthesize an immediate release on Wayland.
+            auto modifier = key;
+            keyEvent(*entry, modifier);
+            key.filter();
+          } else {
+            // Replayed modifiers already reached the client physically.
+            keyEvent(*entry, key);
+            key.filterAndAccept();
+          }
         });
     numericWatcher_ = instance_->watchEvent(
         EventType::InputContextSurroundingTextUpdated, EventWatcherPhase::Default,
@@ -2665,7 +2679,7 @@ public:
       sym = KeySym(FcitxKey_0 + (sym - FcitxKey_KP_0));
     if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
-    if (!replayingCursorKeys_) {
+    if (!replayingKeys_) {
       s->physicalModifiers = e.rawKey().states().toInteger() &
                              uint32_t(KeyState::SimpleMask);
       const uint8_t shift = sym == FcitxKey_Shift_L ? 1 :
