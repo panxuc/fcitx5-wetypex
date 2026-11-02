@@ -2488,8 +2488,10 @@ public:
       return;
     }
     current->active = true;
-    // activate() runs on every focus-in; seed language state only once.
-    if (!current->languageInitialized) {
+    // Focus round trips preserve a deliberate language choice. Explicitly
+    // entering this input method starts in the configured default language.
+    if (!current->languageInitialized ||
+        e.type() == EventType::InputContextSwitchInputMethod) {
       current->english = *config_.input->defaultLanguage ==
                          wetype_config::DefaultLanguage::English;
       current->languageInitialized = true;

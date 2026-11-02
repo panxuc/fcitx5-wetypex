@@ -210,6 +210,11 @@ public:
     setAttribute(Qt::WA_TranslucentBackground);
     setFixedSize(715, 569);
   }
+  ~Window() override {
+    for (auto *process :
+         findChildren<QProcess *>(QString(), Qt::FindDirectChildrenOnly))
+      wetype::stopProcess(*process, this);
+  }
 
 protected:
   void mousePressEvent(QMouseEvent *event) override {

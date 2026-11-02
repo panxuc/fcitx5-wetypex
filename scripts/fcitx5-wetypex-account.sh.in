@@ -38,6 +38,11 @@ case "$command_name" in
       exit 64
     }
     ;;
+  pending-file-invite)
+    operation_name=WETYPE_GROUP_INFO
+    operation_value=0
+    pending_file_invite=1
+    ;;
   group-info)
     operation_name=WETYPE_GROUP_INFO
     operation_value="${2:-0}"
@@ -126,7 +131,7 @@ PY
     case "$operation_value" in *[!0-9]*|'') echo "unbind requires a device UIN" >&2; exit 64 ;; esac
     ;;
   *)
-    echo "usage: fcitx5-wetypex-account network-info | sync-now | pairing-code | pairing-status CODE | confirm-bind BIND_ID | group-info [CURRENT_CLIPBOARD_VERSION] | set-functions GROUP_ID MASK | send-clipboard GROUP_ID TEXT | send-image GROUP_ID PNG_FILE | voice-file OPUS_FILE | p2p-code [TRANSFER_INFO_JSON] | p2p-peer CODE | p2p-init UIN [TRANSFER_INFO_JSON] | unbind UIN" >&2
+    echo "usage: fcitx5-wetypex-account network-info | sync-now | pairing-code | pairing-status CODE | confirm-bind BIND_ID | pending-file-invite | group-info [CURRENT_CLIPBOARD_VERSION] | set-functions GROUP_ID MASK | send-clipboard GROUP_ID TEXT | send-image GROUP_ID PNG_FILE | voice-file OPUS_FILE | p2p-code [TRANSFER_INFO_JSON] | p2p-peer CODE | p2p-init UIN [TRANSFER_INFO_JSON] | unbind UIN" >&2
     exit 64
     ;;
 esac
@@ -185,6 +190,7 @@ run_original() {
       --setenv WETYPE_GROUP_ID "${group_id:-0}" \
       --setenv WETYPE_VOICE_POLISH "${WETYPE_VOICE_POLISH:-1}" \
       --setenv WETYPE_P2P_INFO_FILE /work/business/p2p-info.json \
+      ${pending_file_invite:+--setenv WETYPE_PENDING_FILE_INVITE 1} \
       --setenv "$operation_name" "$operation_value" \
       /support/wetypex-engine-host /input business-service 2>"$log"
 }
@@ -227,6 +233,19 @@ elif command == "confirm-bind":
               "group_id": data.get("group_id", 0),
               "error": transport_error,
               "service_error": service_error}
+elif command == "pending-file-invite":
+    service_error = data.get("response_error_code", -1)
+    peers = {d.get("uin") for d in data.get("devices", [])}
+    invites = [i for i in data.get("pending_invites", [])
+               if isinstance(i, dict) and i.get("sender_uin") in peers
+               and i.get("sender_uin") != data.get("uin")
+               and isinstance(i.get("transfer_code"), str)
+               and 0 < len(i["transfer_code"]) <= 1024
+               and all(32 < ord(c) < 127 for c in i["transfer_code"])]
+    result = {"ok": transport_error == 0 and service_error == 0,
+              "pending_invites": invites, "self_uin": data.get("uin", 0),
+              "devices": data.get("devices", []),
+              "error": transport_error, "service_error": service_error}
 elif command == "group-info":
     service_error = data.get("response_error_code", -1)
     result = {"ok": transport_error == 0 and service_error == 0,
