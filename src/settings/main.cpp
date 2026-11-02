@@ -413,6 +413,11 @@ class PairingOverlay final : public QWidget {
   }
 
 public:
+  ~PairingOverlay() override {
+    poll_.stop();
+    wetype::stopProcess(process_, this);
+  }
+
   explicit PairingOverlay(QWidget *parent) : QWidget(parent), process_(this) {
     setGeometry(parent->rect());
     setObjectName("pairingOverlay");
@@ -644,6 +649,7 @@ static void runLanguageDialog(QWidget *owner) {
 
 int main(int argc, char **argv) {
   qunsetenv("WAYLAND_SOCKET");
+  wetype::initializeHighDpi();
   QApplication app(argc, argv);
   app.setApplicationName("fcitx5-wetypex-settings");
   app.setDesktopFileName("fcitx5-wetypex-settings");
@@ -1216,10 +1222,10 @@ int main(int argc, char **argv) {
                    wetype::settingBool(settings.value("ai_assistant"), true),
                    {"="}, "输入后按「=」可使用 AI 提问、表情推荐等功能", true,
                    "ai_assistant"),
-       shortcutRow(
-           "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
-           "按「v」打开快捷功能栏，可使用计算、剪贴板、常用语、符号等功能",
-           true, "v_mode")}));
+       shortcutRow("V 模式",
+                   wetype::settingBool(settings.value("v_mode"), true), {"V"},
+                   "全拼中文空组合下按小写 v 打开；关闭后可直接输入 v 开头的词",
+                   true, "v_mode")}));
   shortcuts.body->addWidget(rowsCard(
       {row("语音输入", {}, nullptr, 44),
        shortcutRow(

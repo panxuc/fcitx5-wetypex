@@ -512,7 +512,7 @@ static bool run_flurry_loopback_test() {
   // the operating system owns final teardown of the two short-lived peers.
   return passed;
 }
-static int run_flurry_server() {
+static int run_flurry_server(const std::string &initialCommand = {}) {
   const char *download = getenv("WETYPE_FLURRY_DOWNLOAD_DIR");
   const char *temporary = getenv("WETYPE_FLURRY_TEMP_DIR");
   if (!download || !*download || !temporary || !*temporary) {
@@ -560,20 +560,24 @@ static int run_flurry_server() {
               "19UploadDirectoryInfoEm"));
   FlurryLiveDelegate delegate;
   alignas(16) unsigned char server[32]{};
-  constructor(server, download, temporary, &delegate, 0);
+  // We advertise capability 0x2 (range ACK support). Match that promise for
+  // direct transfers too, otherwise the peer can report failure after saving.
+  constructor(server, download, temporary, &delegate, 1);
   auto ready = wire::object();
   wire::put(ready.get(), "event", "ready");
   wire::put(ready.get(), "port", int64_t(port));
   wire::put(ready.get(), "ca_cert", flurry_ca_cert);
   wire::put(ready.get(), "server_name", flurry_server_name);
-  puts(wire::dump(ready.get()).c_str());
-  fflush(stdout);
+  if (initialCommand.empty()) {
+    puts(wire::dump(ready.get()).c_str());
+    fflush(stdout);
+  }
   if (const char *ready_path = getenv("WETYPE_FLURRY_READY_FILE")) {
     std::ofstream output(ready_path, std::ios::trunc);
     output << wire::dump(ready.get()) << '\n';
   }
-  std::string command;
-  if (!std::getline(std::cin, command))
+  std::string command = initialCommand;
+  if (command.empty() && !std::getline(std::cin, command))
     return 2;
   auto role = wire::parse(command);
   const auto action = wire::str(role.get(), "action");
@@ -602,6 +606,8 @@ static int run_flurry_server() {
     return 2;
   }
   emit_flurry_event("role_started");
+  if (!initialCommand.empty())
+    emit_flurry_grpc_ready(port);
   while (std::getline(std::cin, command)) {
     auto request = wire::parse(command);
     const auto request_action = wire::str(request.get(), "action");
@@ -624,28 +630,43 @@ static int run_flurry_server() {
       upload_files(server, &file, 1);
       continue;
     }
-    std::filesystem::path root(path);
+    std::error_code traversal_error;
+    auto root =
+        std::filesystem::absolute(path, traversal_error).lexically_normal();
+    if (root.filename().empty() && root != root.root_path())
+      root = root.parent_path();
     const auto root_name = root.filename().string();
+    if (traversal_error || root_name.empty()) {
+      emit_flurry_event("read_error", path.c_str(), 0, 0,
+                        int(FlurryStatusCode::FilesystemFailed),
+                        "请选择一个普通文件夹");
+      continue;
+    }
     std::vector<std::string> file_paths, file_relatives, directory_paths,
         directory_relatives;
     directory_paths.push_back(root.string());
     directory_relatives.push_back(root_name);
-    std::error_code traversal_error;
     for (std::filesystem::recursive_directory_iterator
              iterator(root, traversal_error),
          end;
          !traversal_error && iterator != end;
          iterator.increment(traversal_error)) {
-      auto relative =
-          (std::filesystem::path(root_name) /
-           std::filesystem::relative(iterator->path(), root, traversal_error))
-              .generic_string();
+      const auto type = iterator->symlink_status(traversal_error);
       if (traversal_error)
         break;
-      if (iterator->is_directory()) {
+      if (!std::filesystem::is_directory(type) &&
+          !std::filesystem::is_regular_file(type)) {
+        traversal_error =
+            std::make_error_code(std::errc::operation_not_supported);
+        break;
+      }
+      auto relative = (std::filesystem::path(root_name) /
+                       iterator->path().lexically_relative(root))
+                          .generic_string();
+      if (std::filesystem::is_directory(type)) {
         directory_paths.push_back(iterator->path().string());
         directory_relatives.push_back(std::move(relative));
-      } else if (iterator->is_regular_file()) {
+      } else {
         file_paths.push_back(iterator->path().string());
         file_relatives.push_back(std::move(relative));
       }
@@ -653,7 +674,9 @@ static int run_flurry_server() {
     if (traversal_error) {
       emit_flurry_event("read_error", path.c_str(), 0, 0,
                         int(FlurryStatusCode::FilesystemFailed),
-                        traversal_error.message().c_str());
+                        traversal_error == std::errc::operation_not_supported
+                            ? "目录包含符号链接或其他不支持的文件类型"
+                            : traversal_error.message().c_str());
       continue;
     }
     std::vector<FlurryUploadFileInfo> files;
@@ -721,6 +744,11 @@ static int run_flurry_wxp2p_server() {
       const auto action = wire::str(request.get(), "action");
       if (action == "quit")
         _exit(0);
+      // A paired sender can offer direct gRPC without WXP2P dispatch. Keep
+      // this process and its already-published certificate when taking that
+      // path.
+      if (action == "server")
+        return run_flurry_server(pendingCommand);
       if (action == "wxp2p_start") {
         dispatchPath = wire::str(request.get(), "dispatch_path");
         remoteCaPath = wire::str(request.get(), "remote_ca_file");

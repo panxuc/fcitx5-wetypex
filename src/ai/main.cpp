@@ -111,6 +111,12 @@ QString statusPage(const QString &query, const QString &message, bool animated) 
 
 class AiWindow final : public QWidget {
 public:
+  ~AiWindow() override {
+    for (auto *process :
+         findChildren<QProcess *>(QString(), Qt::FindDirectChildrenOnly))
+      wetype::stopProcess(*process, this);
+  }
+
   explicit AiWindow(const QString &initialResponse, const QString &initialQuery,
                     const QString &initialAsk) {
     setWindowFlag(Qt::FramelessWindowHint);
@@ -376,6 +382,7 @@ int main(int argc, char **argv) {
     webEngineFlags += "--disable-gpu";
   }
   qputenv("QTWEBENGINE_CHROMIUM_FLAGS", webEngineFlags);
+  wetype::initializeHighDpi();
   QApplication app(argc, argv);
   app.setApplicationName(QStringLiteral("fcitx5-wetypex-ai"));
   app.setDesktopFileName(QStringLiteral("fcitx5-wetypex-ai"));

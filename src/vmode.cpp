@@ -376,6 +376,7 @@ int main(int argc, char **argv) {
   // an ordinary Wayland toplevel that could steal the original client's focus.
   if (wayland && !layerShell)
     return 69;
+  wetype::initializeHighDpi();
   QApplication app(argc, argv);
   app.setApplicationName("fcitx5-wetypex-vmode");
   app.setDesktopFileName(QStringLiteral("fcitx5-wetypex-vmode"));

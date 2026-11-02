@@ -686,10 +686,10 @@ index 4088329..feedd32 100644
 -                   wetype::settingBool(settings.value("ai_assistant"), true),
 -                   {"="}, "输入后按「=」可使用 AI 提问、表情推荐等功能", true,
 -                   "ai_assistant"),
--       shortcutRow(
--           "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
--           "按「v」打开快捷功能栏，可使用计算、剪贴板、常用语、符号等功能",
--           true, "v_mode")}));
+-       shortcutRow("V 模式",
+-                   wetype::settingBool(settings.value("v_mode"), true), {"V"},
+-                   "全拼中文空组合下按小写 v 打开；关闭后可直接输入 v 开头的词",
+-                   true, "v_mode")}));
 -  shortcuts.body->addWidget(rowsCard(
 +  QList<QWidget *> quickShortcutRows = {row("快捷使用", {}, nullptr, 44)};
 +#if WETYPE_ENABLE_AI
@@ -702,7 +702,7 @@ index 4088329..feedd32 100644
 +#endif
 +  quickShortcutRows.append(shortcutRow(
 +      "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
-+      "按「v」打开快捷功能栏，可使用计算、剪贴板、常用语、符号等功能", true,
++      "全拼中文空组合下按小写 v 打开；关闭后可直接输入 v 开头的词", true,
 +      "v_mode"));
 +  shortcuts.body->addWidget(rowsCard(quickShortcutRows));
 +#if WETYPE_ENABLE_VOICE

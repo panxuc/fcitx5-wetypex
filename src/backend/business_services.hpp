@@ -563,7 +563,8 @@ static void business_service() {
     } else if (operation_subcommand == 32) {
       protobuf_string(request, 3, getenv("WETYPE_CONFIRM_BIND_ID"));
     } else if (operation_subcommand == 34) {
-      protobuf_uint(request, 3, 31); // devices, clipboard, hotwords and dict
+      // Read pending invitations without consuming any transfer code.
+      protobuf_uint(request, 3, getenv("WETYPE_PENDING_FILE_INVITE") ? 65 : 31);
       // GetGroupInfoReq.current_clipboard_version.  Both native desktop
       // clients send their last accepted version as the synchronization
       // cursor. The client still compares the response because the service
@@ -865,6 +866,7 @@ static void business_service() {
   std::string response_clipboard_binary;
   std::string response_clipboard;
   auto devices = wire::Json(json_object_new_array());
+  auto pendingInvites = wire::Json(json_object_new_array());
   if (operation_subcommand == 34) {
     response_error_code =
         protobuf_uint_field(business_task_response, 2, UINT64_MAX);
@@ -873,6 +875,19 @@ static void business_service() {
       group = std::move(groups.front());
       response_group_id = protobuf_uint_field(group, 1, 0);
       response_func_switch = protobuf_uint_field(group, 5, 0);
+      if (getenv("WETYPE_PENDING_FILE_INVITE")) {
+        const auto invites = protobuf_messages_field(group, 7);
+        for (size_t i = 0; i < std::min<size_t>(invites.size(), 32); ++i) {
+          auto invite = wire::object();
+          wire::put(invite.get(), "transfer_code",
+                    protobuf_string_field(invites[i], 1));
+          wire::put(invite.get(), "device_name",
+                    protobuf_string_field(invites[i], 2));
+          wire::put(invite.get(), "sender_uin",
+                    int64_t(protobuf_uint_field(invites[i], 3, 0)));
+          json_object_array_add(pendingInvites.get(), invite.release());
+        }
+      }
       auto hotwords = protobuf_messages_field(group, 4);
       if (!hotwords.empty())
         response_hotword_version = protobuf_uint_field(hotwords.front(), 1, 0);
@@ -1035,6 +1050,9 @@ static void business_service() {
   wire::put(report.get(), "peer_dispatch_buf", response_peer_dispatch_buf);
   json_object_object_add(report.get(), "peer", response_peer.release());
   json_object_object_add(report.get(), "devices", devices.release());
+  if (getenv("WETYPE_PENDING_FILE_INVITE"))
+    json_object_object_add(report.get(), "pending_invites",
+                           pendingInvites.release());
   puts(wire::dump(report.get()).c_str());
   fflush(stdout);
   // The original report service owns delayed timers that may outlive this
