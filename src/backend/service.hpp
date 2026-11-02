@@ -128,7 +128,7 @@ static void read_service_candidates(void *iterator,
                                     std::vector<ServiceCandidate> &output,
                                     bool wechat) {
   output.clear();
-  for (unsigned rank = 0; iterator && rank < 50; rank++) {
+  for (unsigned rank = 0; iterator && rank < 50 && output.size() < 50; rank++) {
     alignas(16) unsigned char c[512]{};
     if (!((bool (*)(void *, void *))syms.at("_wxime_candidate_next"))(iterator,
                                                                       c))
@@ -158,7 +158,40 @@ static void read_service_candidates(void *iterator,
     candidate.cloud = marker == 0xfffd && origin == 11000;
     if (id && n)
       candidate.id.assign(id, id + n);
-    output.push_back(std::move(candidate));
+    // Calendar candidates carry their display formats as linked C API info
+    // nodes, not in the base word (which remains "日期" or "时间").
+    // NewAndCopyCandidateInfoToCStruct: type +0, next +8; TimeFormat (9)
+    // stores UTF-8 text +16 and its byte count +24.
+    const void *info = nullptr;
+    memcpy(&info, c + 0x30, sizeof(info));
+    const auto formatBegin = output.size();
+    bool expanded = false;
+    for (unsigned count = 0; info && count < 128; ++count) {
+      const auto *node = static_cast<const unsigned char *>(info);
+      uint32_t type = 0, length = 0;
+      const char *value = nullptr;
+      memcpy(&type, node, sizeof(type));
+      if (type == 9 && output.size() < 50) {
+        memcpy(&value, node + 16, sizeof(value));
+        memcpy(&length, node + 24, sizeof(length));
+        if (length > 65536 || (!value && length))
+          _exit(89);
+        if (length) {
+          auto formatted = candidate;
+          formatted.text.assign(value, length);
+          formatted.engineText = formatted.text;
+          output.push_back(std::move(formatted));
+          expanded = true;
+        }
+      }
+      memcpy(&info, node + 8, sizeof(info));
+    }
+    if (expanded) {
+      // Date/time shortcuts lead the list even when learned ordinary words
+      // precede the calendar record. Keep those words selectable afterwards.
+      std::rotate(output.begin(), output.begin() + formatBegin, output.end());
+    } else
+      output.push_back(std::move(candidate));
   }
 }
 static void service_listener(uint64_t, int32_t *types, void **payloads,
@@ -565,6 +598,8 @@ static void service_loop() {
         // SessionCreator gates construction of VModeV2 on config +0x125.
         // The UI later activates that wrapper with session bool option 0x11.
         config[0x125] = wire::number(request.get(), "v_mode", 1);
+        // Calendar::Impl enables the original English date/time aliases.
+        config[0x127] = 1;
         *(uint32_t *)(config + 0xb8) =
             wire::number(request.get(), "traditional", 0) ? 1 : 0;
         state->keyboard = keyboard;
