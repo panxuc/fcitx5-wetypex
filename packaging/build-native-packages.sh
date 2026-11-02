@@ -39,6 +39,7 @@ docker run --rm "${docker_network_args[@]}" --user "$(id -u):$(id -g)" \
     env WETYPEX_LAYER_SHELL=ON /src/packaging/container-stage.sh /out/fedora-root lib64
 
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/debian-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
     "$project_root/packaging/nfpm.yaml" >"$output/nfpm-debian.yaml"
@@ -46,6 +47,7 @@ nfpm package --config "$output/nfpm-debian.yaml" --packager deb \
     --target "$output/debian/"
 
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/fedora-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
     "$project_root/packaging/nfpm.yaml" >"$output/nfpm-fedora.yaml"
@@ -61,6 +63,7 @@ docker run --rm "${docker_network_args[@]}" --user "$(id -u):$(id -g)" \
     -v "$project_root:/src:ro" -v "$output:/out" \
     wetypex-build-ubuntu20 env WETYPEX_LAYER_SHELL=OFF /src/packaging/container-stage.sh /out/ubuntu20-root lib
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/ubuntu20-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
     -e 's/libc6 (>= 2.35)/libc6 (>= 2.31)/' \

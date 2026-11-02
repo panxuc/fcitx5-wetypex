@@ -79,6 +79,14 @@ jobs:
         shell: bash
         run: |
           version=${RELEASE_TAG#v}
+          test "$(dpkg-deb -f dist/debian/*.deb Version)" = "$version"
+          test "$(dpkg-deb -f dist/ubuntu20/*.deb Version)" = "$version"
+          rpm_version=$(docker run --rm -v "$PWD/dist:/out:ro" wetypex-build-fedora \
+            bash -euc 'rpm -qp --queryformat "%{VERSION}-%{RELEASE}" /out/fedora/*.rpm')
+          test "$rpm_version" = "$version"
+          arch_version=$(tar --zstd -xOf dist/arch/*.pkg.tar.zst .PKGINFO | \
+            sed -n 's/^pkgver = //p')
+          test "$arch_version" = "$version"
           tar --zstd -C dist/debian-root -cf \
             "dist/fcitx5-wetypex-${version}-linux-x86_64.tar.zst" .
           (
