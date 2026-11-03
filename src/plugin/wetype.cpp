@@ -67,6 +67,20 @@ template <typename System>
 struct HasXkbMask<System, std::void_t<decltype(
     std::declval<const System &>().xkbStateMask(std::string{}))>>
     : std::true_type {};
+template <typename Owner, typename = void>
+struct HasCustomImInfo : std::false_type {};
+template <typename Owner>
+struct HasCustomImInfo<Owner, std::void_t<decltype(
+    std::declval<Owner &>().showCustomInputMethodInformation(
+        nullptr, std::string{}))>>
+    : std::true_type {};
+// Fcitx 5.1.11 added this transient popup at the text cursor. Older
+// releases have no comparable hint, so they switch silently as before.
+template <typename Owner>
+void showLanguageInfo(Owner *instance, InputContext *ic, bool english) {
+  if constexpr (HasCustomImInfo<Owner>::value)
+    instance->showCustomInputMethodInformation(ic, english ? "英" : "中");
+}
 struct PunctuationEntry {
   char ascii;
   const char *full;
@@ -2678,6 +2692,7 @@ public:
     ic->inputPanel().reset();
     panel(ic, s);
     ic->updateUserInterface(UserInterfaceComponent::StatusArea);
+    showLanguageInfo(instance_, ic, s->english);
   }
   void keyEvent(const InputMethodEntry &, KeyEvent &e) override {
     auto key = e.key();
