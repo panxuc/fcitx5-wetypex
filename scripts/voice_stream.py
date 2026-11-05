@@ -61,6 +61,64 @@ def punctuation(text, mode):
     return text
 
 
+def clipboard_helper():
+    """Return a helper command that can hold a system clipboard selection."""
+    helper = os.environ.get('WETYPE_CLIPBOARD_HELPER')
+    if helper and os.access(helper, os.X_OK):
+        return helper
+    return shutil.which('fcitx5-wetypex-clipboard-set')
+
+
+def copy_to_clipboard(text):
+    """Publish a final result so clients that ignore commits can paste it."""
+    if not text:
+        return
+    payload = text.encode('utf-8')
+    if len(payload) > 65536:
+        return
+    environment = dict(os.environ, QT_IM_MODULE='none')
+    if os.environ.get('WAYLAND_DISPLAY') and shutil.which('wl-copy'):
+        # data-control clients own the selection without a surface or serial,
+        # so nothing can steal focus from the input context while it ends.
+        try:
+            result = subprocess.run(
+                ['wl-copy', '--type', 'text/plain;charset=utf-8'],
+                input=payload, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=4, env=environment)
+            if result.returncode == 0:
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    helper = clipboard_helper()
+    if not helper:
+        return
+    if os.environ.get('WAYLAND_DISPLAY') and os.environ.get('DISPLAY'):
+        # Qt cannot own a Wayland selection without a focused surface. The
+        # XWayland connection keeps the copy silent and does not take focus.
+        environment['QT_QPA_PLATFORM'] = 'xcb'
+    try:
+        owner = subprocess.Popen([helper, '--notify-ready'],
+                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                 stderr=subprocess.DEVNULL, env=environment)
+    except OSError:
+        return
+    try:
+        owner.stdin.write(payload)
+        owner.stdin.close()
+        readable, _, _ = select.select([owner.stdout], [], [], 4)
+        if readable and owner.stdout.readline() == b'ready\n':
+            # The helper keeps the selection until another client replaces it.
+            return
+    except (OSError, ValueError):
+        pass
+    if owner.poll() is None:
+        owner.kill()
+    try:
+        owner.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def recorder_options():
     try:
         result = subprocess.run(['pw-record', '--help'], capture_output=True,
@@ -513,6 +571,13 @@ class Service:
                 self.publish(job, 'final' if text else 'error', text,
                              error='' if text else (job.error or '没有识别到语音'), reason=event.get('reason'))
                 job.done.set()
+                # The plugin already commits the text to the input method's
+                # client. Key-only clients such as terminal emulators can drop
+                # that commit, so keep a copy the user can paste instead.
+                if (text and job.session and
+                        job.config.get('voice_copy_to_clipboard', True)):
+                    threading.Thread(target=copy_to_clipboard, args=(text,),
+                                     daemon=True).start()
 
     def backend_failed(self, backend):
         with self.condition:

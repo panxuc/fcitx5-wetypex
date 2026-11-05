@@ -30,6 +30,14 @@ ${XDG_CONFIG_HOME:-$HOME/.config}/fcitx5/wetypex.json
 
 外观设置会更新 Fcitx5 Classic UI 的 WeTypeX 主题项。其他输入法共用同一个 Classic UI 时，主题切换也会影响其候选窗口。
 
+## 语音输入
+
+- 麦克风：默认“自动检测”使用当前默认输入源，也可指定 PipeWire 节点或 PulseAudio 音源。
+- 标点设置：智能标点、添加完整标点、句末不加句号、空格替换标点，对应 `voice_punctuation`。
+- 语音智能整理：把整理开关交给原版引擎的 aggressive polish，对应 `voice_smart_polish`。
+- 识别后复制到剪贴板：默认开启，最终结果在提交给输入框的同时写入系统剪贴板，对应 `voice_copy_to_clipboard`。终端等只处理按键事件的窗口可能丢弃提交的文本，此时直接粘贴即可。设备剪贴板同步开启时，这份内容也会作为一次本地复制参与同步。
+- 启动语音与按住说话的快捷键见下表，键位分别对应 `voice_launch_key` 和 `voice_hold_key`。
+
 ## 快捷键
 
 快捷键使用 Fcitx5 原生 `Key` / `List|Key` 类型，可在系统配置页直接捕获。默认值包括：

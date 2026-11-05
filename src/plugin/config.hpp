@@ -107,7 +107,9 @@ FCITX_CONFIGURATION(
     Option<std::string> microphone{this, "Microphone", "麦克风", "自动检测"};
     Option<VoicePunctuationMode> punctuation{this, "Punctuation", "标点设置",
                                              VoicePunctuationMode::Smart};
-    Option<bool> smartPolish{this, "SmartPolish", "语音智能整理", true};)
+    Option<bool> smartPolish{this, "SmartPolish", "语音智能整理", true};
+    Option<bool> copyToClipboard{this, "CopyToClipboard",
+                                 "识别后复制到剪贴板", true};)
 
 FCITX_CONFIGURATION(PhraseClipboardConfig,
                     Option<bool> clipboard{this, "Clipboard",

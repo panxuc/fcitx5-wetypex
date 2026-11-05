@@ -76,6 +76,16 @@ parec --file-format=wav --rate=16000 --channels=1 --format=s16le > /tmp/wetypex-
 
 录制几秒后按 `Ctrl+C`，确认 WAV 非空。随后运行 `fcitx5-wetypex-voice status`，检查 `capture_backend`、`native_ready`、`vad`、`state` 和时间字段。录音错误见 `state/voice/capture.log`，原版宿主错误见 `state/voice/backend.log`。识别需要联网；首次使用会初始化设备身份。编码和分块由原版引擎完成，FFmpeg 用于已有音频解码以及缺少 `parec` 时的旧音频接口采集。原版 VAD 模型可用 `--icons-only` 更新，具体操作见[流式语音输入](voice-input.md)。
 
+## 语音结果没有出现在应用里
+
+语音最终结果通过输入法的提交通道写入输入框，同时（默认）写入系统剪贴板。终端类窗口通常只处理真实按键事件，提交文本可能被丢弃，表现是“语音面板显示已识别，但终端里没有字”。先按 `Ctrl + Shift + V` 粘贴验证：如果剪贴板里有完整结果，说明识别和提交都已执行，被吞掉的是终端一侧。
+
+在 VS Code 集成终端中可先用以下方式区分原因：
+
+- 先在终端按一个空格再启动语音，若此时文本能正常上屏，说明该终端只在已有输入事件后才处理提交文本；临时方案是保留空格后用退格或方向键删除。
+- 确认 VS Code 使用的输入协议：原生 Wayland 需 `--ozone-platform=wayland --enable-wayland-ime`，否则走 XWayland 的 GTK 输入法模块。具体参数见下面的 Electron 小节。
+- 关闭“识别后复制到剪贴板”后对比，可以确认文本是在提交阶段丢失，而不是根本没有识别结果。
+
 ## 输入框周期性失焦，候选框消失并留下拼音
 
 Ubuntu 26.04、Plasma/KWin 6.6.6、wl-clipboard 2.2.1 下曾观察到，设备剪贴板同步轮询时 `wl-paste` 的临时窗口获得焦点，打断未完成的拼音；普通 Fcitx 拼音和浏览器也会受影响。旧版 wl-clipboard 只支持 `wlr-data-control`，而部分 KWin 版本只公布 `ext-data-control`；wl-clipboard 从 2.3 开始支持后者。只在日志里看到 `data_control` 字样不足以确认两者兼容。

@@ -863,6 +863,8 @@ class WeType : public InputMethodEngineV2 {
     voice->launchShortcut.setValue(boolSetting("voice_launch_shortcut", true));
     voice->holdShortcut.setValue(boolSetting("voice_hold_shortcut", true));
     voice->smartPolish.setValue(boolSetting("voice_smart_polish", true));
+    voice->copyToClipboard.setValue(
+        boolSetting("voice_copy_to_clipboard", true));
     auto stringSetting = [&](const char *name, const char *fallback) {
       auto value = wire::str(j.get(), name);
       return value.empty() ? std::string(fallback) : value;
@@ -1013,6 +1015,8 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
     wire::put(json.get(), "voice_hold_shortcut", bool(*voice.holdShortcut));
     wire::put(json.get(), "voice_smart_polish", bool(*voice.smartPolish));
+    wire::put(json.get(), "voice_copy_to_clipboard",
+              bool(*voice.copyToClipboard));
     wire::put(json.get(), "voice_launch_key",
               Key::keyListToString(*voice.launchKey));
     wire::put(json.get(), "voice_hold_key",
