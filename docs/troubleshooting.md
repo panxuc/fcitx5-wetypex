@@ -76,15 +76,46 @@ parec --file-format=wav --rate=16000 --channels=1 --format=s16le > /tmp/wetypex-
 
 录制几秒后按 `Ctrl+C`，确认 WAV 非空。随后运行 `fcitx5-wetypex-voice status`，检查 `capture_backend`、`native_ready`、`vad`、`state` 和时间字段。录音错误见 `state/voice/capture.log`，原版宿主错误见 `state/voice/backend.log`。识别需要联网；首次使用会初始化设备身份。编码和分块由原版引擎完成，FFmpeg 用于已有音频解码以及缺少 `parec` 时的旧音频接口采集。原版 VAD 模型可用 `--icons-only` 更新，具体操作见[流式语音输入](voice-input.md)。
 
-## 语音结果没有出现在应用里
+## 语音结果没有出现在应用里（终端吞字）
 
-语音最终结果通过输入法的提交通道写入输入框，同时（默认）写入系统剪贴板。终端类窗口通常只处理真实按键事件，提交文本可能被丢弃，表现是“语音面板显示已识别，但终端里没有字”。先按 `Ctrl + Shift + V` 粘贴验证：如果剪贴板里有完整结果，说明识别和提交都已执行，被吞掉的是终端一侧。
+语音最终结果由插件通过输入法的提交通道写入输入框，并默认同时写入系统剪贴板。终端类窗口只在按键事件里读取文本：在原生 Wayland 的 text-input-v3 通道上，识别结束后没有按键的异步提交可能被客户端丢弃。表现是候选面板和预编辑正常、输出最终文字时却什么也没有；先随便敲一个字符再语音就能写入。这一侧发生在客户端，输入法无法补发按键。
 
-在 VS Code 集成终端中可先用以下方式区分原因：
+先确认不是识别失败：说完一句按 `Ctrl + Shift + V`，如果剪贴板里有完整结果，说明识别和提交都已执行，被丢弃的是终端。
 
-- 先在终端按一个空格再启动语音，若此时文本能正常上屏，说明该终端只在已有输入事件后才处理提交文本；临时方案是保留空格后用退格或方向键删除。
-- 确认 VS Code 使用的输入协议：原生 Wayland 需 `--ozone-platform=wayland --enable-wayland-ime`，否则走 XWayland 的 GTK 输入法模块。具体参数见下面的 Electron 小节。
-- 关闭“识别后复制到剪贴板”后对比，可以确认文本是在提交阶段丢失，而不是根本没有识别结果。
+### VS Code 集成终端
+
+已验证的解决办法：把 VS Code 切到 XWayland，让它通过 Gtk 输入法模块（`im-fcitx5.so`）走 Fcitx5 的 dbus 前端，提交与按键在同一条有序通道上。Arch 的 `code` 启动脚本会读取 `~/.config/code-flags.conf`，写入：
+
+```text
+--ozone-platform=x11
+```
+
+然后完全退出 VS Code（关闭所有窗口，新建窗口不会重读该文件）再打开。运行时确认走的是哪条通道（先在终端里点一下再执行）：
+
+```bash
+dbus-send --session --print-reply=literal --dest=org.fcitx.Fcitx5 /controller \
+  org.fcitx.Fcitx.Controller1.DebugInfo | grep "program:code"
+```
+
+`frontend:dbus` 在 `[x11::0]` 分组下，说明已走 Gtk 模块（本方案）；`frontend:wayland` 说明仍是 text-input-v3。
+
+代价是 VS Code 退回 XWayland：HiDPI 缩放和 Wayland 特有的窗口行为会有差别。需要 Gtk 模块包，Arch 为 `fcitx5-gtk`，Debian/Ubuntu 为 `fcitx5-frontend-gtk3` 与 `fcitx5-frontend-gtk4`。
+
+只在编辑区使用输入法、终端里可以接受手动粘贴时，也可以保留原生 Wayland：
+
+```text
+--ozone-platform=wayland
+--enable-wayland-ime
+--wayland-text-input-version=3
+```
+
+这组参数让编辑区的内嵌预编辑和光标定位正常，但不保证终端接受异步提交。两者可以随时互相切换，改完都要完整重启应用。
+
+### 其他终端和编辑器
+
+`frontend:dbus` 的应用（Gtk/Qt 应用、Gtk 输入法模块下的 Electron）通常不会丢字；`frontend:wayland` 且内部用隐藏输入框接收文本的终端容易丢。对后者优先用“识别后复制到剪贴板”加粘贴，或按上面的方式把该应用单独切到 XWayland。
+
+输入法重新启动（升级、`fcitx5 -r`、重新登录前的重启）后，text-input-v3 的连接由客户端建立，旧窗口不会自动重建，也会出现“编辑区可输入、终端丢字”。升级后先启动输入法再启动应用可以避免。
 
 ## 输入框周期性失焦，候选框消失并留下拼音
 
@@ -122,7 +153,9 @@ wl-copy --version
 env -u GTK_IM_MODULE -u QT_IM_MODULE application --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 ```
 
-这里的 `application` 换成应用实际可执行文件。KWin 6.8 提供 text-input-v2/v3，旧版本上建议的 v1 参数不适用于这个组合。已用 KWin 6.8 的独立会话和原生 Wayland VS Code 验证 v3 路线：应用发送的光标矩形随编辑位置更新，候选框跟随插入点。
+这里的 `application` 换成应用实际可执行文件。KWin 6.8 提供 text-input-v2/v3，旧版本上建议的 v1 参数不适用于这个组合。已用 KWin 6.8 的独立会话和原生 Wayland VS Code 验证 v3 路线：应用发送的光标矩形随编辑位置更新，候选框跟随插入点。Arch 的 `code` 启动脚本会读取 `~/.config/code-flags.conf`，不需要包装脚本；改完需完全退出应用再打开。
+
+如果问题是终端里收到的语音或输入法文本被丢弃（候选正常、文字不出现），光有 v3 参数不能解决，需要把该应用切到 XWayland，做法和判断方法见[语音结果没有出现在应用里](#语音结果没有出现在应用里终端吞字)。
 
 部分应用内置的 Electron/Chromium 版本较旧，或启动器会覆盖参数。此时对该应用使用 XWayland，并提供对应的 Gtk 输入法模块：
 
