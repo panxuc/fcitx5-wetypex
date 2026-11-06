@@ -379,6 +379,14 @@ static bool service_select(ServiceSession &s, unsigned rank,
 // Caller holds the session mutex; normal replies and callback updates share
 // the same snapshot and candidate IDs. Commits are drained exactly once.
 static void service_snapshot(ServiceSession &s, json_object *response) {
+  // Wubi can commit the previous four-code word while keeping the fifth key
+  // as a new composition. The native PendingInput event owns that remaining
+  // spelling; the locally accumulated keys still include the committed code.
+  if (s.keyboard == 5 && !s.vMode && !s.commits.empty()) {
+    s.preedit = s.pendingRaw;
+    s.selected.clear();
+    s.cursor = s.preedit.size();
+  }
   // PendingInput entries can combine letters (e.g. "zh"). Their
   // count is not the number of typed ASCII bytes.
   if (!s.pending && (!s.keyboard || !s.commits.empty())) {
@@ -579,8 +587,9 @@ static void service_loop() {
             wire::number(request.get(), "double_scheme", 0), 0, 7);
         memcpy(config + 0x20, &doublePin, sizeof(doublePin));
         // SessionCreator copies config[0x24..0x2a] into
-        // WubiSessionV2::InitArgs. The first four bytes are the WubiSolution
-        // enum (86/98/New Century).
+        // WubiSessionV2::InitArgs: mixed pinyin, unique-result and next-code
+        // commit are the bytes at 0x24/0x25/0x26. WubiSolution is the byte at
+        // 0x28; dictionary registration must select the same scheme.
         uint32_t wubiSolution = std::clamp<int>(
             wire::number(request.get(), "wubi_solution", 0), 0, 2);
         if (keyboard == 5 &&
@@ -591,10 +600,10 @@ static void service_loop() {
           transport.reply(source, wire::dump(response.get()));
           continue;
         }
-        memcpy(config + 0x24, &wubiSolution, sizeof(wubiSolution));
-        config[0x28] = wire::number(request.get(), "wubi_pinyin", 0);
-        config[0x29] = wire::number(request.get(), "wubi_unique_commit", 0);
-        config[0x2a] = wire::number(request.get(), "wubi_next_commit", 0);
+        config[0x24] = wire::number(request.get(), "wubi_pinyin", 0);
+        config[0x25] = wire::number(request.get(), "wubi_unique_commit", 0);
+        config[0x26] = wire::number(request.get(), "wubi_next_commit", 0);
+        config[0x28] = static_cast<unsigned char>(wubiSolution);
         config[0xaf] = wire::number(request.get(), "wubi_wildcard_comment", 0);
         if (wire::number(request.get(), "smart_input", 1)) {
           // InputAugmenter: transpose, neighbouring-key, insertion and skip
