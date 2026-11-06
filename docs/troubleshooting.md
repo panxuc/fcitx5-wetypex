@@ -76,6 +76,16 @@ parec --file-format=wav --rate=16000 --channels=1 --format=s16le > /tmp/wetypex-
 
 录制几秒后按 `Ctrl+C`，确认 WAV 非空。随后运行 `fcitx5-wetypex-voice status`，检查 `capture_backend`、`native_ready`、`vad`、`state` 和时间字段。录音错误见 `state/voice/capture.log`，原版宿主错误见 `state/voice/backend.log`。识别需要联网；首次使用会初始化设备身份。编码和分块由原版引擎完成，FFmpeg 用于已有音频解码以及缺少 `parec` 时的旧音频接口采集。原版 VAD 模型可用 `--icons-only` 更新，具体操作见[流式语音输入](voice-input.md)。
 
+## 语音已识别，但应用没有显示文字
+
+部分终端和编辑器对输入法异步提交的处理存在差异。如果语音面板显示了识别结果，输入框却没有文字，可开启“语音输入 → 识别后复制到剪贴板”，识别后在目标应用粘贴。剪贴板有文字说明识别与复制成功，不能据此断定应用已经接收提交。
+
+插件只为当前仍聚焦、会话有效的最终结果请求复制。已取消、失焦或过期的结果、文件转写和中间预编辑都不会覆盖剪贴板。复制失败不会阻断正常提交。
+
+Wayland 下优先使用兼容的 data-control 协议；旧版 wl-clipboard 与当前桌面协议不匹配时，尝试通过 XWayland 静默复制。没有这些通道时跳过复制，不创建窗口或抢焦点。检查 `wl-copy --version`、`fcitx5-wetypex-clipboard-set --wayland-clipboard-protocols` 与应用实际使用的输入法通道。
+
+VS Code 用户也可以按下文的 Electron/Chromium 说明，单独尝试原生 Wayland 或 XWayland，完整退出应用后再启动。应用版本和启动方式会影响结果；无需更改整个桌面的输入法环境。
+
 ## 输入框周期性失焦，候选框消失并留下拼音
 
 Ubuntu 26.04、Plasma/KWin 6.6.6、wl-clipboard 2.2.1 下曾观察到，设备剪贴板同步轮询时 `wl-paste` 的临时窗口获得焦点，打断未完成的拼音；普通 Fcitx 拼音和浏览器也会受影响。旧版 wl-clipboard 只支持 `wlr-data-control`，而部分 KWin 版本只公布 `ext-data-control`；wl-clipboard 从 2.3 开始支持后者。只在日志里看到 `data_control` 字样不足以确认两者兼容。
@@ -112,7 +122,9 @@ wl-copy --version
 env -u GTK_IM_MODULE -u QT_IM_MODULE application --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 ```
 
-这里的 `application` 换成应用实际可执行文件。KWin 6.8 提供 text-input-v2/v3，旧版本上建议的 v1 参数不适用于这个组合。已用 KWin 6.8 的独立会话和原生 Wayland VS Code 验证 v3 路线：应用发送的光标矩形随编辑位置更新，候选框跟随插入点。
+这里的 `application` 换成应用实际可执行文件。KWin 6.8 提供 text-input-v2/v3，旧版本上建议的 v1 参数不适用于这个组合。已用 KWin 6.8 的独立会话和原生 Wayland VS Code 验证 v3 路线：应用发送的光标矩形随编辑位置更新，候选框跟随插入点。支持读取 `~/.config/code-flags.conf` 的 Arch 启动脚本也可在该文件中配置这些参数；修改后需完整退出应用再打开。
+
+如果候选正常、文字没有出现，参见[语音已识别，但应用没有显示文字](#语音已识别但应用没有显示文字)，确认识别结果并检查应用的提交通道。
 
 部分应用内置的 Electron/Chromium 版本较旧，或启动器会覆盖参数。此时对该应用使用 XWayland，并提供对应的 Gtk 输入法模块：
 

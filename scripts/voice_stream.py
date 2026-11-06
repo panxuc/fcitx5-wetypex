@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import select
 import shutil
 import signal
@@ -17,6 +18,7 @@ import struct
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 import uuid
 
@@ -59,6 +61,102 @@ def punctuation(text, mode):
         import re
         text = re.sub(r'[，。！？；：、,.!?;:]+', ' ', text)
     return text
+
+
+def clipboard_helper():
+    """Return a helper command that can hold a system clipboard selection."""
+    helper = os.environ.get('WETYPE_CLIPBOARD_HELPER')
+    if helper and os.access(helper, os.X_OK):
+        return helper
+    sibling = Path(__file__).resolve().parents[2] / 'bin/fcitx5-wetypex-clipboard-set'
+    return str(sibling) if sibling.is_file() and os.access(sibling, os.X_OK) else shutil.which('fcitx5-wetypex-clipboard-set')
+
+
+def copy_to_clipboard(text, valid=lambda: True):
+    """Publish a final result so clients that ignore commits can paste it."""
+    if not text:
+        return False, None
+    try:
+        payload = text.encode('utf-8')
+    except UnicodeError:
+        return False, None
+    if len(payload) > 65536:
+        return False, None
+    environment = dict(os.environ, QT_IM_MODULE='none')
+    helper = clipboard_helper()
+    wl_copy = shutil.which('wl-copy')
+    protocols = set()
+    if environment.get('WAYLAND_DISPLAY') and helper and wl_copy:
+        # Probe globals before invoking wl-copy: older tools can otherwise
+        # create a focused surface on compositors with only ext-data-control.
+        try:
+            probe = subprocess.run([helper, '--wayland-clipboard-protocols'],
+                                   capture_output=True, timeout=1, env=environment)
+            version = subprocess.run([wl_copy, '--version'], capture_output=True,
+                                     timeout=1, env=environment)
+            match = re.search(rb'wl-clipboard (\d+)\.(\d+)', version.stdout)
+            if probe.returncode == 0 and version.returncode == 0 and match:
+                supported = {'zwlr_data_control_manager_v1'} if tuple(map(int, match.groups())) >= (2, 0) else set()
+                if tuple(map(int, match.groups())) >= (2, 3):
+                    supported.add('ext_data_control_manager_v1')
+                protocols = supported.intersection(probe.stdout.decode('ascii', 'replace').splitlines())
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if protocols and valid():
+        # data-control clients own the selection without a surface or serial,
+        # so nothing can steal focus from the input context while it ends.
+        try:
+            result = subprocess.run(
+                [wl_copy, '--type', 'text/plain;charset=utf-8'],
+                input=payload, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, timeout=4, env=environment)
+            if result.returncode == 0:
+                return True, None
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if not helper or not valid():
+        return False, None
+    if environment.get('WAYLAND_DISPLAY'):
+        if not environment.get('DISPLAY'):
+            return False, None
+        # Qt cannot own a Wayland selection without a focused surface. The
+        # XWayland connection keeps the copy silent and does not take focus.
+        environment['QT_QPA_PLATFORM'] = 'xcb'
+    try:
+        # A regular anonymous file avoids blocking on a full stdin pipe while
+        # Qt initializes. Readiness still has a strict deadline.
+        with tempfile.TemporaryFile() as content:
+            content.write(payload)
+            content.seek(0)
+            owner = subprocess.Popen([helper, '--notify-ready'],
+                                     stdin=content, stdout=subprocess.PIPE,
+                                     stderr=subprocess.DEVNULL, env=environment)
+    except OSError:
+        return False, None
+    try:
+        deadline = time.monotonic() + 4
+        reply = b''
+        while valid() and time.monotonic() < deadline and len(reply) < 64:
+            readable, _, _ = select.select([owner.stdout], [], [], min(.1, deadline - time.monotonic()))
+            if not readable:
+                continue
+            block = os.read(owner.stdout.fileno(), 64 - len(reply))
+            if not block:
+                break
+            reply += block
+            if reply == b'ready\n':
+                return True, owner
+    except (OSError, ValueError):
+        pass
+    finally:
+        owner.stdout.close()
+    if owner.poll() is None:
+        owner.kill()
+    try:
+        owner.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        pass
+    return False, None
 
 
 def recorder_options():
@@ -428,6 +526,33 @@ class Service:
         self.shutdown = False
         self.pending_controls = {}
         self.last_start = {}
+        self.clipboard_queue = queue.Queue(maxsize=1)
+        self.clipboard_thread = None
+        self.clipboard_owner = None
+        self.copied_token = None
+
+    def copy_results(self):
+        while True:
+            job, text = self.clipboard_queue.get()
+            def valid():
+                with self.condition:
+                    return not self.shutdown and self.job is job and not job.cancelled
+            if valid():
+                try:
+                    success, owner = copy_to_clipboard(text, valid)
+                except (OSError, ValueError, subprocess.SubprocessError):
+                    continue
+                if success:
+                    with self.condition:
+                        previous, self.clipboard_owner = self.clipboard_owner, owner
+                    if previous:
+                        if previous.poll() is None:
+                            previous.terminate()
+                        try:
+                            previous.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            previous.kill()
+                            previous.wait()
 
     def publish(self, job, state, text='', **extra):
         with self.condition:
@@ -513,6 +638,8 @@ class Service:
                 self.publish(job, 'final' if text else 'error', text,
                              error='' if text else (job.error or '没有识别到语音'), reason=event.get('reason'))
                 job.done.set()
+                # The focused input context acknowledges an accepted final
+                # result with 'copy'. Discarded/stale results never copy.
 
     def backend_failed(self, backend):
         with self.condition:
@@ -535,6 +662,22 @@ class Service:
                     self.publish(self.job, 'cancelled')
                     self.job.cancel()
                 self.shutdown = True
+                return {'ok': True}
+            if op == 'copy':
+                job = self.job
+                if (not job or job.token != request.get('token') or not job.session or
+                        job.cancelled or not job.done.is_set() or self.latest.get('state') != 'final' or
+                        not job.config.get('voice_copy_to_clipboard', True) or self.copied_token == job.token):
+                    return {'ok': True, 'skipped': True}
+                self.copied_token = job.token
+                if self.clipboard_thread is None:
+                    self.clipboard_thread = threading.Thread(target=self.copy_results, daemon=True)
+                    self.clipboard_thread.start()
+                try:
+                    self.clipboard_queue.get_nowait()
+                except queue.Empty:
+                    pass
+                self.clipboard_queue.put_nowait((job, self.latest.get('text', '')))
                 return {'ok': True}
             if op in ('start', 'transcribe'):
                 stamp = str(request.get('token', '')).split('-', 1)
@@ -656,6 +799,8 @@ def serve():
                     server.handle_request()
                     service = server.service
                     with service.condition:
+                        if service.clipboard_owner and service.clipboard_owner.poll() is not None:
+                            service.clipboard_owner = None
                         job = service.job
                         if job and not job.done.is_set() and job.pid:
                             try:
@@ -679,6 +824,14 @@ def serve():
                     service.job.cancel()
                 if service.backend:
                     service.backend.close()
+                if service.clipboard_owner:
+                    if service.clipboard_owner.poll() is None:
+                        service.clipboard_owner.terminate()
+                    try:
+                        service.clipboard_owner.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        service.clipboard_owner.kill()
+                        service.clipboard_owner.wait()
 
 
 def connect():
@@ -705,7 +858,7 @@ def connect():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('start', 'stop', 'finish', 'cancel', 'status', 'serve', 'transcribe', 'shutdown'))
+    parser.add_argument('command', choices=('start', 'stop', 'finish', 'cancel', 'copy', 'status', 'serve', 'transcribe', 'shutdown'))
     parser.add_argument('args', nargs='*')
     parser.add_argument('--realtime', action='store_true')
     parser.add_argument('--verbose', action='store_true')

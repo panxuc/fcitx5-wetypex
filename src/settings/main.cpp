@@ -996,6 +996,12 @@ int main(int argc, char **argv) {
   voice.body->addWidget(
       rowsCard({row("麦克风", "设置语音输入的默认麦克风", microphone),
                 row("标点设置", {}, punctuationMode),
+                row("识别后复制到剪贴板",
+                    "识别完成后把结果写入系统剪贴板，终端等不接收输入的窗口可直接粘贴",
+                    toggle(wetype::settingBool(
+                               settings.value("voice_copy_to_clipboard"), true),
+                           true, "voice_copy_to_clipboard"),
+                    74),
                 row("语音智能整理", {},
                     toggle(wetype::settingBool(
                                settings.value("voice_smart_polish"), true),
