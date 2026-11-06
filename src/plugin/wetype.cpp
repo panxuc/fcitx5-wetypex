@@ -1380,6 +1380,8 @@ class WeType : public InputMethodEngineV2 {
     if (phase != "recording")
       voiceRecording_ = voiceHold_ = false;
     if (phase == "final" || phase == "error" || phase == "cancelled") {
+      if (phase == "final" && !text.empty() && *config_.voice->copyToClipboard)
+        voiceControl("copy");
       voicePending_ = false;
       voiceText_.clear();
       voiceToken_.clear();
