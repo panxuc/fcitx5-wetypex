@@ -287,7 +287,7 @@ public:
         generation_(generation), epoch_(epoch), session_(session) {}
   void select(InputContext *ic) const override;
 };
-class WeType : public InputMethodEngine {
+class WeType : public InputMethodEngineV2 {
   friend class VMenuWord;
   Instance *instance_;
   wetype::WeChatEmoticons wechatEmoticons_{WETYPE_WECHAT_EMOTICONS};
@@ -2419,6 +2419,11 @@ public:
     }
   }
   const Configuration *getConfig() const override { return &config_; }
+  // kimpanel shows this label next to the input method icon in the panel.
+  std::string subModeLabelImpl(const InputMethodEntry &,
+                               InputContext &ic) override {
+    return state(&ic)->english ? "英" : "中";
+  }
   const Configuration *
   getConfigForInputMethod(const InputMethodEntry &) const override {
     return &config_;
@@ -2672,6 +2677,7 @@ public:
     s->modifierCandidate = Key();
     ic->inputPanel().reset();
     panel(ic, s);
+    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
   }
   void keyEvent(const InputMethodEntry &, KeyEvent &e) override {
     auto key = e.key();
