@@ -868,6 +868,16 @@ int main(int argc, char **argv) {
        row("默认输入语言（中文/英文）", {}, languageSetup, 52),
        row("模糊拼音", {}, fuzzySetup, 52)}));
   input.body->addWidget(rowsCard(
+      {row("自动添加中英文空格", "开启后自动调整汉字与英文字母、数字之间的间距",
+           toggle(wetype::settingBool(settings.value("auto_space"), false),
+                  true, "auto_space")),
+       row("中文和数字间加空格", "例如：你好 2024",
+           toggle(wetype::settingBool(settings.value("auto_space_digit"), true),
+                  true, "auto_space_digit")),
+       row("中文和英文间加空格", "例如：你好 Hello",
+           toggle(wetype::settingBool(settings.value("auto_space_english"), true),
+                  true, "auto_space_english"))}));
+  input.body->addWidget(rowsCard(
       {row("单机模式",
            "无需网络，单机离线使用。不支持跨设备、表情推荐、问 AI 等联网功能",
            toggle(wetype::settingBool(settings.value("standalone"), false),

@@ -269,6 +269,15 @@ struct State : InputContextProperty {
   std::vector<std::pair<std::string, std::string>> vMenuEntries;
   bool active = false;
   Key modifierCandidate;
+  char32_t lastCommitTail = 0;
+  size_t spacingTextHash = 0;
+  unsigned spacingCursor = 0, spacingAnchor = 0;
+  bool spacingHadSurrounding = false;
+  uint64_t lastCommitAt = 0;
+  // Whether this client has ever supplied a real surrounding-text view. Set
+  // once and never cleared, so rules that need more than a neighbour can skip
+  // themselves on frontends that only ever give the cached tail.
+  bool sawWindow = false;
   TrackableObjectReference<InputContext> ic;
   State(uint64_t n, InputContext &context) : id(n), ic(context.watch()) {}
 };
@@ -310,6 +319,8 @@ class WeType : public InputMethodEngineV2 {
   FactoryFor<State> factory_;
   SimpleAction settingsAction_;
   Connection settingsConnection_;
+  Connection commitFilterConnection_;
+  bool spacingBypass_ = false;
   std::map<uint64_t, TrackableObjectReference<InputContext>> contexts_;
   pid_t child_ = -1;
   int read_ = -1, write_ = -1;
@@ -370,6 +381,7 @@ class WeType : public InputMethodEngineV2 {
                      const std::string &expected) {
     if (!steps)
       return;
+    clearSpacing(s);
     // Wayland-v2's virtual keyboard inherits physical modifiers even
     // when forwardKey requests none. Wait for their real release rather
     // than sending Shift+Left and selecting the closing bracket.
@@ -583,20 +595,29 @@ class WeType : public InputMethodEngineV2 {
     return std::string_view(ic->frontend()) == "dbus" &&
            ic->capabilityFlags().test(CapabilityFlag::KeyEventOrderFix);
   }
-  static void deliverNumericText(InputContext *ic, const std::string &text) {
+  void deliverNumericText(InputContext *ic, State *s,
+                          const std::string &text) {
     if (!numericKeyTransport(ic)) {
+      // Forwarded keys bypass Instance::CommitFilter, so only this branch
+      // needs to place the space itself; commitString is filtered upstream.
       ic->commitString(text);
-      return;
-    }
-    // Qt's D-Bus client can temporarily discard its surrounding-text cache
-    // while still reporting the document. Keep this path on ordered keys.
-    std::string_view remaining(text);
-    while (!remaining.empty()) {
-      const auto scalar = utf8::getChar(remaining.begin(), remaining.end());
-      const Key key(Key::keySymFromUnicode(scalar));
-      ic->forwardKey(key);
-      ic->forwardKey(key, true);
-      remaining.remove_prefix(firstUtf8Size(remaining));
+    } else {
+      std::string payload = text;
+      if (s && autoSpaceEnabled(ic, s) && utf8::validate(text))
+        payload = applyAutoSpace(text, beforeWindow(ic, s));
+      // Qt's D-Bus client can temporarily discard its surrounding-text cache
+      // while still reporting the document. Keep this path on ordered keys.
+      std::string_view remaining(payload);
+      while (!remaining.empty()) {
+        const auto scalar = utf8::getChar(remaining.begin(), remaining.end());
+        const Key key(Key::keySymFromUnicode(scalar));
+        ic->forwardKey(key);
+        ic->forwardKey(key, true);
+        remaining.remove_prefix(firstUtf8Size(remaining));
+      }
+      if (s && !text.empty()) {
+        rememberSpacing(ic, s, lastScalar(payload));
+      }
     }
   }
   void scheduleNumericCorrection() {
@@ -634,7 +655,7 @@ class WeType : public InputMethodEngineV2 {
     } else {
       ic->deleteSurroundingText(-length, length);
     }
-    deliverNumericText(ic, replacement);
+    deliverNumericText(ic, state(ic), replacement);
   }
   std::string mappedSymbol(State *s, char ascii, bool asciiMode) const {
     const auto *entry = punctuationEntry(ascii);
@@ -650,6 +671,129 @@ class WeType : public InputMethodEngineV2 {
       return entry->englishHalf;
     return entry->normal;
   }
+  static bool isCjk(char32_t c) {
+    return c == 0x3007 || (c >= 0x3400 && c <= 0x4dbf) ||
+           (c >= 0x4e00 && c <= 0x9fff) || (c >= 0xf900 && c <= 0xfaff) ||
+           (c >= 0x20000 && c <= 0x2ee5f) || (c >= 0x2f800 && c <= 0x2fa1f) ||
+           (c >= 0x30000 && c <= 0x323af);
+  }
+  bool isNeedSpace(char32_t previous, char32_t current) const {
+    if (isCjk(previous) == isCjk(current))
+      return false;
+    const auto ascii = isCjk(previous) ? current : previous;
+    if ((ascii >= 'a' && ascii <= 'z') || (ascii >= 'A' && ascii <= 'Z'))
+      return *config_.appearance->autoSpaceEnglish;
+    return ascii >= '0' && ascii <= '9' && *config_.appearance->autoSpaceDigit;
+  }
+  bool autoSpaceEnabled(InputContext *ic, State *s) const {
+    constexpr uint64_t constrained = uint64_t(CapabilityFlag::Password) |
+        uint64_t(CapabilityFlag::Sensitive) | uint64_t(CapabilityFlag::Url) |
+        uint64_t(CapabilityFlag::Email) | uint64_t(CapabilityFlag::Number) |
+        uint64_t(CapabilityFlag::Digit) | uint64_t(CapabilityFlag::Dialable);
+    return *config_.appearance->autoSpace && !spacingBypass_ && !s->fullWidth &&
+           !(ic->capabilityFlags().toInteger() & constrained);
+  }
+  static void clearSpacing(State *s) {
+    s->lastCommitTail = 0;
+    s->lastCommitAt = 0;
+    s->spacingHadSurrounding = false;
+  }
+  static char32_t lastScalar(const std::string &text) {
+    if (text.empty())
+      return 0;
+    size_t at = text.size() - 1;
+    while (at && (static_cast<unsigned char>(text[at]) & 0xc0) == 0x80)
+      --at;
+    const auto scalar = utf8::getChar(text.begin() + at, text.end());
+    return utf8::isValidChar(scalar) ? scalar : 0;
+  }
+  static char32_t firstScalar(const std::string &text) {
+    if (text.empty())
+      return 0;
+    const auto scalar = utf8::getChar(text);
+    return utf8::isValidChar(scalar) ? scalar : 0;
+  }
+  static char32_t lastScalarBefore(const std::string &text, size_t cursor) {
+    if (text.empty())
+      return 0;
+    const auto bytes = utf8::ncharByteLength(text.begin(), std::min(cursor, utf8::length(text)));
+    return bytes > 0 && size_t(bytes) <= text.size() ? lastScalar(text.substr(0, bytes)) : 0;
+  }
+  void rememberSpacing(InputContext *ic, State *s, char32_t tail) {
+    if (!*config_.appearance->autoSpace) {
+      clearSpacing(s);
+      return;
+    }
+    s->lastCommitTail = tail;
+    s->lastCommitAt = now(CLOCK_MONOTONIC);
+    const auto &surrounding = ic->surroundingText();
+    s->spacingHadSurrounding = surrounding.isValid();
+    if (surrounding.isValid()) {
+      s->sawWindow = true;
+      s->spacingTextHash = std::hash<std::string>{}(surrounding.text());
+      s->spacingCursor = surrounding.cursor();
+      s->spacingAnchor = surrounding.anchor();
+    }
+  }
+  std::string beforeWindow(InputContext *ic, State *s) const {
+    const auto &surrounding = ic->surroundingText();
+    const bool recent = s->lastCommitTail && now(CLOCK_MONOTONIC) - s->lastCommitAt < 10000000;
+    if (surrounding.isValid()) {
+      s->sawWindow = true;
+      // Until the client reports our last commit, its document still describes
+      // the preceding state. Reuse the predicted tail only for that exact view.
+      if (recent && s->spacingHadSurrounding && surrounding.cursor() == surrounding.anchor() &&
+          surrounding.cursor() == s->spacingCursor && surrounding.anchor() == s->spacingAnchor &&
+          std::hash<std::string>{}(surrounding.text()) == s->spacingTextHash)
+        return utf8::UCS4ToUTF8(s->lastCommitTail);
+      const auto &text = surrounding.text();
+      const auto cursor = std::min(surrounding.cursor(), surrounding.anchor());
+      if (!utf8::validate(text) || cursor > utf8::length(text))
+        return {};
+      const auto tail = lastScalarBefore(text, cursor);
+      return tail ? utf8::UCS4ToUTF8(tail) : std::string{};
+    }
+    return !s->sawWindow && recent ? utf8::UCS4ToUTF8(s->lastCommitTail) : std::string{};
+  }
+  std::string applyAutoSpace(const std::string &text, const std::string &before) const {
+    std::string output;
+    output.reserve(text.size() + 8);
+    char32_t previous = lastScalar(before);
+    for (size_t offset = 0; offset < text.size();) {
+      const auto width = std::min(firstUtf8Size(std::string_view(text).substr(offset)), text.size() - offset);
+      const auto current = utf8::getChar(text.begin() + offset, text.end());
+      if (previous && isNeedSpace(previous, current))
+        output += ' ';
+      output.append(text, offset, width);
+      previous = current;
+      offset += width;
+    }
+    return output;
+  }
+  void trackPassedKey(InputContext *ic, State *s, const KeyEvent &event) {
+    if (!*config_.appearance->autoSpace) {
+      clearSpacing(s);
+      return;
+    }
+    if (event.isRelease() || event.key().isModifier() || event.filtered() || event.accepted())
+      return;
+    const auto modifiers = event.key().states().toInteger() & uint32_t(KeyState::SimpleMask) &
+                           ~uint32_t(KeyState::Shift);
+    const auto scalar = Key::keySymToUnicode(event.key().sym());
+    // A key handled by the application may edit or move its caret. Printable
+    // keys without command modifiers are the only pass-through text we know.
+    if (!modifiers && scalar >= 0x20 && scalar != 0x7f)
+      rememberSpacing(ic, s, scalar);
+    else
+      clearSpacing(s);
+  }
+  struct PassedKeyTracker {
+    WeType *owner;
+    InputContext *ic;
+    State *state;
+    const KeyEvent &event;
+    ~PassedKeyTracker() { owner->trackPassedKey(ic, state, event); }
+  };
   template <typename Context, typename Flag = CapabilityFlag>
   void commitStringAtCursor(Context *ic, const std::string &text,
                                    size_t cursor) {
@@ -658,6 +802,9 @@ class WeType : public InputMethodEngineV2 {
     if constexpr (HasCursorCommit<Context, Flag>::value) {
       if (ic->capabilityFlags().test(Flag::CommitStringWithCursor)) {
         ic->commitStringWithCursor(text, cursor);
+        // The caret now sits inside the pair, so the character before it, not
+        // the pair's last character, is what the next commit follows.
+        rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
         return;
       }
     }
@@ -667,6 +814,7 @@ class WeType : public InputMethodEngineV2 {
     // original desktop behavior with ordinary cursor movement.
     ic->commitString(text);
     forwardCursor(ic, state(ic), -int(length - cursor), text);
+    rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
   }
   bool commitSymbol(InputContext *ic, State *s, char ascii, bool asciiMode) {
     const auto *entry = punctuationEntry(ascii);
@@ -687,9 +835,13 @@ class WeType : public InputMethodEngineV2 {
                          (s->symbolAutoState || !s->pendingNumericText.empty());
     auto emit = [&](const std::string &value) {
       if (numeric)
-        deliverNumericText(ic, value);
+        deliverNumericText(ic, s, value);
       else
         ic->commitString(value);
+      // Keep the auto-space boundary state current: punctuation must not let
+      // a later candidate think the previous commit ended with 我.
+      if (!value.empty())
+        rememberSpacing(ic, s, lastScalar(value));
     };
     std::string mapped = mappedSymbol(s, ascii, asciiMode);
     if (autoChangeActive && !entry->pairType)
@@ -842,6 +994,10 @@ class WeType : public InputMethodEngineV2 {
     appearance->candidateSize.setValue(
         std::clamp(int(wire::number(j.get(), "candidate_size", 13)), 10, 18));
     appearance->vertical.setValue(vertical_);
+    appearance->autoSpace.setValue(boolSetting("auto_space", false));
+    appearance->autoSpaceEnglish.setValue(
+        boolSetting("auto_space_english", true));
+    appearance->autoSpaceDigit.setValue(boolSetting("auto_space_digit", true));
     appearance->preeditPosition.setValue(
         wire::str(j.get(), "preedit_position") == "candidate"
             ? wetype_config::PreeditPosition::Candidate
@@ -992,6 +1148,10 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "page_size", int64_t(*appearance.pageSize));
     wire::put(json.get(), "candidate_size", int64_t(*appearance.candidateSize));
     wire::put(json.get(), "vertical", bool(*appearance.vertical));
+    wire::put(json.get(), "auto_space", bool(*appearance.autoSpace));
+    wire::put(json.get(), "auto_space_english",
+              bool(*appearance.autoSpaceEnglish));
+    wire::put(json.get(), "auto_space_digit", bool(*appearance.autoSpaceDigit));
     wire::put(json.get(), "preedit_position",
               std::string(*appearance.preeditPosition ==
                                   wetype_config::PreeditPosition::Candidate
@@ -1392,8 +1552,11 @@ class WeType : public InputMethodEngineV2 {
       } else
         voicePhase_.clear();
       panel(ic, s);
-      if (phase == "final" && !text.empty())
+      if (phase == "final" && !text.empty()) {
+        spacingBypass_ = true;
         ic->commitString(text);
+        spacingBypass_ = false;
+      }
     } else
       panel(ic, s);
   }
@@ -1536,7 +1699,9 @@ class WeType : public InputMethodEngineV2 {
       symbolVMenu(ic, int(index));
     } else if (!value.empty() && value.size() <= 65536) {
       cancelVMode(ic);
+      spacingBypass_ = true;
       ic->commitString(value);
+      spacingBypass_ = false;
     }
   }
   void stopVModeWindow(const char *reason = "toolbar closed") {
@@ -2278,6 +2443,28 @@ public:
                                    &instance_->userInterfaceManager());
     settingsConnection_ = settingsAction_.connect<SimpleAction::Activated>(
         [](InputContext *) { startProcess({WETYPE_SETTINGS}); });
+    commitFilterConnection_ =
+        instance_->connect<Instance::CommitFilter>(
+            [this](InputContext *ic, std::string &orig) {
+              auto *entry = ic ? instance_->inputMethodEntry(ic) : nullptr;
+              if (!entry || entry->uniqueName() != "wetypex" || !ic->hasFocus() ||
+                  ic->capabilityFlags().test(CapabilityFlag::Password) || orig.empty())
+                return;
+              auto *s = state(ic);
+              if (!s->active)
+                return;
+              if (!*config_.appearance->autoSpace) {
+                clearSpacing(s);
+                return;
+              }
+              if (!utf8::validate(orig)) {
+                clearSpacing(s);
+                return;
+              }
+              if (autoSpaceEnabled(ic, s))
+                orig = applyAutoSpace(orig, beforeWindow(ic, s));
+              rememberSpacing(ic, s, lastScalar(orig));
+            });
     // Fcitx global triggers run before the engine. Own explicitly configured
     // shortcuts and bare language modifiers so their ordered commits survive.
     languageModifierWatcher_ = instance_->watchEvent(
@@ -2439,9 +2626,7 @@ public:
     }
   }
   const Configuration *getConfig() const override { return &config_; }
-  // kimpanel shows this label next to the input method icon in the panel.
-  std::string subModeLabelImpl(const InputMethodEntry &,
-                               InputContext &ic) override {
+  std::string subModeLabelImpl(const InputMethodEntry &, InputContext &ic) override {
     return state(&ic)->english ? "英" : "中";
   }
   const Configuration *
@@ -2559,6 +2744,9 @@ public:
     s->vMode = false;
     s->vCalculator = false;
     s->cloudPollUntil = 0;
+    // The caret may have moved, so whatever was committed last no longer sits
+    // before the next character.
+    clearSpacing(s);
     ic->inputPanel().reset();
     if (child_ > 0)
       send(ic, "reset");
@@ -2711,6 +2899,7 @@ public:
       sym = KeySym(FcitxKey_0 + (sym - FcitxKey_KP_0));
     if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
+    PassedKeyTracker track{this, ic, s, e};
     if (!replayingKeys_) {
       s->physicalModifiers = e.rawKey().states().toInteger() &
                              uint32_t(KeyState::SimpleMask);
@@ -2978,6 +3167,14 @@ public:
           uint32_t full = sym == FcitxKey_space ? 0x3000 : sym + 0xfee0;
           ic->commitString(utf8::UCS4ToUTF8(full));
           e.filterAndAccept();
+        } else {
+          if (autoSpaceEnabled(ic, s) &&
+              isNeedSpace(lastScalar(beforeWindow(ic, s)), char32_t(sym))) {
+            // Commit the first letter and its gap together. Mixing a separate
+            // commit with a pass-through key can reorder them in GTK/Qt.
+            ic->commitString(std::string(1, ascii));
+            e.filterAndAccept();
+          }
         }
       }
       return;
@@ -3280,7 +3477,7 @@ public:
         (s->symbolAutoState || !s->pendingNumericText.empty())) {
       appendNumericCorrection(s, " ");
       s->symbolAutoState = 0;
-      deliverNumericText(ic, " ");
+      deliverNumericText(ic, s, " ");
       e.filterAndAccept();
       return;
     }
@@ -3314,7 +3511,7 @@ public:
       s->symbolAutoState = 3;
       // Keep digits and punctuation on the same ordered text channel.
       // Raw key forwarding can otherwise overtake a Wayland commit.
-      deliverNumericText(ic, std::string(1, asciiChar));
+      deliverNumericText(ic, s, std::string(1, asciiChar));
       if (!s->pendingNumericText.empty())
         scheduleNumericCorrection();
       e.filterAndAccept();
