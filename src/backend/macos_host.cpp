@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cctype>
 #include <cerrno>
+#include <cmath>
 #include <cstdarg>
 #include <cstdint>
 #include <cstdio>
@@ -2490,10 +2491,12 @@ static void shim_uuid_unparse(const unsigned char *value, char *output) {
            value[7], value[8], value[9], value[10], value[11], value[12],
            value[13], value[14], value[15]);
 }
+static double shim_exp10(double exponent) { return std::pow(10.0, exponent); }
 static void *resolve(const std::string &name) {
   if (auto symbol = syms.find(name); symbol != syms.end())
     return reinterpret_cast<void *>(symbol->second);
   static std::map<std::string, void *> overrides = {
+      {"___exp10", (void *)shim_exp10},
       {"___stack_chk_guard", &stack_guard},
       {"___error", (void *)shim_error},
       {"___bzero", (void *)shim_bzero},

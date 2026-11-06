@@ -74,12 +74,12 @@ struct HasCustomImInfo<Owner, std::void_t<decltype(
     std::declval<Owner &>().showCustomInputMethodInformation(
         nullptr, std::string{}))>>
     : std::true_type {};
-// Fcitx 5.1.11 added this transient popup at the text cursor. Older
-// releases have no comparable hint, so they switch silently as before.
 template <typename Owner>
-void showLanguageInfo(Owner *instance, InputContext *ic, bool english) {
+void showModeInfo(Owner *instance, InputContext *ic, const std::string &text) {
   if constexpr (HasCustomImInfo<Owner>::value)
-    instance->showCustomInputMethodInformation(ic, english ? "英" : "中");
+    instance->showCustomInputMethodInformation(ic, text);
+  else
+    instance->showInputMethodInformation(ic);
 }
 struct PunctuationEntry {
   char ascii;
@@ -1064,6 +1064,10 @@ class WeType : public InputMethodEngineV2 {
         option.setValue(Key::keyListFromString(wire::str(j.get(), name)));
       else
         option.reset();
+      auto keys = *option;
+      for (auto &key : keys)
+        key = key.normalize();
+      option.setValue(std::move(keys));
     };
     loadKeys(shortcuts->languageSwitchKeys, "language_switch_keys");
     loadKeys(shortcuts->aiAssistantKeys, "ai_assistant_keys");
@@ -1802,6 +1806,55 @@ class WeType : public InputMethodEngineV2 {
         << " relative=" << relative << " scale=" << scale << '\n';
     return true;
   }
+  bool bareVEnabled() const {
+    return *config_.shortcuts->vMode &&
+           *config_.input->mode == wetype_config::InputMode::Pinyin &&
+           Key(FcitxKey_v).checkKeyList(*config_.shortcuts->vModeKeys);
+  }
+  bool pendingVPrefix(const State *s) const {
+    if (!bareVEnabled() || s->english || s->vMode || s->vMenu != VMenu::None ||
+        s->preedit.empty() || s->preedit.front() != 'v' ||
+        s->cursor != s->preedit.size())
+      return false;
+    return std::all_of(s->preedit.begin() + 1, s->preedit.end(), [](char c) {
+      return (c >= '0' && c <= '9') || c == '.' || c == '+' || c == '-' ||
+             c == '(' || c == ')';
+    });
+  }
+  bool enterVMode(InputContext *ic, State *s, const std::string &prefix,
+                   bool tools) {
+    // Re-arm the original wrapper when a numeric prefix has already been
+    // entered as ordinary text. Nothing from that prefix has been committed.
+    if (prefix.size() > 1) {
+      ++s->epoch;
+      if (!send(ic, "reset"))
+        return false;
+    }
+    if ((prefix.empty() || prefix.size() > 1) && !send(ic, "key", "v"))
+      return false;
+    if (!send(ic, "vmode"))
+      return false;
+    s->vMode = true;
+    s->vCalculator = !tools;
+    s->preedit.clear();
+    s->cursor = 0;
+    s->symbolAutoState = 0;
+    clearNumericCorrection(s);
+    clearDisplayState(s);
+    ic->inputPanel().setCandidateList(nullptr);
+    for (size_t i = 1; i < prefix.size(); ++i) {
+      s->preedit += prefix[i];
+      ++s->cursor;
+      if (!send(ic, "key", std::string(1, prefix[i])))
+        return false;
+    }
+    panel(ic, s);
+    if (tools && !startVModeWindow(ic)) {
+      cancelVMode(ic);
+      return false;
+    }
+    return true;
+  }
   void receiveVModeAction() {
     auto path = stateDirectory() / "vmode-action.json";
     std::ifstream input(path);
@@ -1959,6 +2012,8 @@ class WeType : public InputMethodEngineV2 {
       aux = Text(s->vMenuTitle);
     else if (s->vCalculator)
       aux = Text("计算：输入表达式，空格选取结果");
+    else if (s->preedit == "v" && pendingVPrefix(s))
+      aux = Text("空格打开快捷工具，继续输入英文或计算式；Enter 输入 v");
     ic->inputPanel().setAuxUp(aux);
     const std::string displayed =
         voice ? voiceText_
@@ -2184,7 +2239,8 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "session", int64_t(s->id));
     wire::put(json.get(), "seq", int64_t(++s->seq));
     if (std::string_view(op) == "key" || std::string_view(op) == "backspace" ||
-        std::string_view(op) == "delete" || std::string_view(op) == "move")
+        std::string_view(op) == "delete" || std::string_view(op) == "move" ||
+        std::string_view(op) == "reconfigure")
       s->inputSeq = s->seq;
     wire::put(json.get(), "epoch", int64_t(s->epoch));
     wire::put(json.get(), "op", std::string(op));
@@ -2316,12 +2372,15 @@ class WeType : public InputMethodEngineV2 {
       return;
     }
     auto *commits = wire::get(j.get(), "commits");
+    const bool previousSpacingBypass = spacingBypass_;
+    spacingBypass_ |= json_object_get_boolean(wire::get(j.get(), "preserve_spacing"));
     if (commits && json_object_is_type(commits, json_type_array))
       for (size_t i = 0; i < json_object_array_length(commits); i++) {
         auto *v = json_object_array_get_idx(commits, i);
         if (json_object_is_type(v, json_type_string))
           ic->commitString(json_object_get_string(v));
       }
+    spacingBypass_ = previousSpacingBypass;
     auto cursorCommit = wire::str(j.get(), "cursor_commit");
     auto cursorCommitPosition =
         wire::number(j.get(), "cursor_commit_position", -1);
@@ -2626,8 +2685,18 @@ public:
     }
   }
   const Configuration *getConfig() const override { return &config_; }
+  std::string subMode(const InputMethodEntry &, InputContext &ic) override {
+    return modeDescription(state(&ic));
+  }
+  std::string subModeIconImpl(const InputMethodEntry &, InputContext &ic) override {
+    const auto *s = state(&ic);
+    return s->english ? "fcitx5-wetypex-en"
+                      : s->traditional ? "fcitx5-wetypex-traditional"
+                                       : "fcitx5-wetypex-zh";
+  }
   std::string subModeLabelImpl(const InputMethodEntry &, InputContext &ic) override {
-    return state(&ic)->english ? "英" : "中";
+    const auto *s = state(&ic);
+    return s->english ? "英" : s->traditional ? "繁" : "中";
   }
   const Configuration *
   getConfigForInputMethod(const InputMethodEntry &) const override {
@@ -2715,6 +2784,7 @@ public:
     primeVoice();
     panel(ic, current);
     send(ic, "open");
+    modeChanged(ic, current, false);
   }
   void reset(const InputMethodEntry &, InputContextEvent &e) override {
     auto *ic = e.inputContext();
@@ -2855,6 +2925,19 @@ public:
            key.checkKeyList(instance_->globalConfig().defaultPrevCandidate()) ||
            key.checkKeyList(instance_->globalConfig().defaultNextCandidate());
   }
+  std::string modeDescription(const State *s) const {
+    return std::string(s->english ? "英文" : "中文") +
+           (s->traditional ? " · 繁体" : " · 简体") +
+           (s->fullWidth ? " · 全角" : " · 半角") +
+           (s->english || s->englishPunctuation || !chinesePunctuation_
+                ? " · 英文标点" : " · 中文标点");
+  }
+  void modeChanged(InputContext *ic, State *s, bool notify = true) {
+    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
+    if (notify && s->active && ic->hasFocus() &&
+        !ic->capabilityFlags().test(CapabilityFlag::Password))
+      showModeInfo(instance_, ic, modeDescription(s));
+  }
   void switchLanguage(InputContext *ic, State *s) {
     if (s->vMode)
       cancelVMode(ic);
@@ -2885,8 +2968,7 @@ public:
     s->modifierCandidate = Key();
     ic->inputPanel().reset();
     panel(ic, s);
-    ic->updateUserInterface(UserInterfaceComponent::StatusArea);
-    showLanguageInfo(instance_, ic, s->english);
+    modeChanged(ic, s);
   }
   void keyEvent(const InputMethodEntry &, KeyEvent &e) override {
     auto key = e.key();
@@ -3084,27 +3166,42 @@ public:
       e.filterAndAccept();
       return;
     }
-    if (*config_.shortcuts->punctuationSwitch &&
+    if (!s->english && *config_.shortcuts->punctuationSwitch &&
         key.checkKeyList(*config_.shortcuts->punctuationSwitchKeys)) {
+      if (e.rawKey().states().test(KeyState::Repeat)) {
+        e.filterAndAccept();
+        return;
+      }
       s->englishPunctuation = !s->englishPunctuation;
       s->symbolAutoState = 0;
+      modeChanged(ic, s);
       e.filterAndAccept();
       return;
     }
     if (*config_.shortcuts->traditionalSwitch &&
         key.checkKeyList(*config_.shortcuts->traditionalSwitchKeys)) {
-      s->traditional = !s->traditional;
-      if (child_ > 0) {
-        send(ic, "close");
-        send(ic, "open");
+      if (e.rawKey().states().test(KeyState::Repeat)) {
+        e.filterAndAccept();
+        return;
       }
+      s->traditional = !s->traditional;
+      if (s->vMode)
+        cancelVMode(ic);
+      if (child_ > 0)
+        send(ic, "reconfigure");
+      modeChanged(ic, s);
       e.filterAndAccept();
       return;
     }
     if (*config_.shortcuts->halfFull &&
         key.checkKeyList(*config_.shortcuts->halfFullKeys)) {
+      if (e.rawKey().states().test(KeyState::Repeat)) {
+        e.filterAndAccept();
+        return;
+      }
       s->fullWidth = !s->fullWidth;
       s->symbolAutoState = 0;
+      modeChanged(ic, s);
       e.filterAndAccept();
       return;
     }
@@ -3117,10 +3214,11 @@ public:
                               wetype_config::InputMode::Pinyin &&
                           key.checkKeyList(*config_.shortcuts->vModeKeys);
     const bool idleShortcut =
-        !hasComposition &&
+        (!s->english && s->vMode && vModeKey) ||
+        (!hasComposition &&
         ((!s->english && vModeKey) ||
          (networkEnabled_ && *config_.shortcuts->aiAssistant &&
-          key.checkKeyList(*config_.shortcuts->aiAssistantKeys)));
+          key.checkKeyList(*config_.shortcuts->aiAssistantKeys))));
     if (commandModifiers && !idleShortcut &&
         !(hasComposition && compositionShortcutKey(key)))
       return;
@@ -3179,7 +3277,43 @@ public:
       }
       return;
     }
-    bool composing = hasComposition;
+    static constexpr std::string_view vAliases[] = {
+        "vriqi", "vrq", "vdate", "vshijian", "vsj", "vtime"};
+    if (!commandModifiers && (sym == FcitxKey_space ||
+        (sym >= FcitxKey_1 && sym <= FcitxKey_9)) && bareVEnabled() &&
+        !s->english && !s->vMode && s->cursor == s->preedit.size() &&
+        std::find(std::begin(vAliases), std::end(vAliases), s->preedit) != std::end(vAliases)) {
+      const auto prefix = s->preedit;
+      if (enterVMode(ic, s, prefix, false)) {
+        s->vCalculator = false;
+        selectByKey(ic, sym == FcitxKey_space ? -1 : int(sym - FcitxKey_1));
+      }
+      e.filterAndAccept();
+      return;
+    }
+    if (s->vMode && (sym == FcitxKey_Escape || vModeKey)) {
+      cancelVMode(ic);
+      e.filterAndAccept();
+      return;
+    }
+    const bool vPrefix = pendingVPrefix(s) && !commandModifiers;
+    if (vPrefix && s->preedit == "v" && sym == FcitxKey_space) {
+      const auto prefix = s->preedit;
+      enterVMode(ic, s, prefix, true);
+      e.filterAndAccept();
+      return;
+    }
+    if (vPrefix && sym < 0x80 && std::string_view("+-*/%^()=").find(char(sym)) !=
+            std::string_view::npos &&
+        std::any_of(s->preedit.begin() + 1, s->preedit.end(),
+                    [](char c) { return c >= '0' && c <= '9'; })) {
+      const auto prefix = s->preedit;
+      if (!enterVMode(ic, s, prefix, false)) {
+        e.filterAndAccept();
+        return;
+      }
+    }
+    bool composing = !s->preedit.empty() || s->vMenu != VMenu::None;
     auto typeCharacter = [&](char character) {
       s->symbolAutoState = 0;
       std::string text(1, character);
@@ -3206,6 +3340,34 @@ public:
         panel(ic, s);
         e.filterAndAccept();
       }
+      return;
+    }
+    if (vPrefix && !s->vMode &&
+        ((sym >= FcitxKey_0 && sym <= FcitxKey_9) ||
+         sym == FcitxKey_period || sym == FcitxKey_plus ||
+         sym == FcitxKey_minus || sym == FcitxKey_parenleft ||
+         sym == FcitxKey_parenright)) {
+      typeCharacter(char(sym));
+      return;
+    }
+    if (s->vMode && s->vMenu == VMenu::None && !commandModifiers && !vModeKey &&
+        sym >= 0x20 && sym <= 0x7e) {
+      if (vModeSession_ == s->id)
+        stopVModeWindow();
+      s->vCalculator = true;
+      if (sym == FcitxKey_space) {
+        selectByKey(ic);
+        e.filterAndAccept();
+        return;
+      }
+      std::string text(1, char(sym));
+      s->cursor = std::min(s->cursor, s->preedit.size());
+      s->preedit.insert(s->cursor, text);
+      ++s->cursor;
+      clearDisplayState(s);
+      send(ic, "key", text);
+      panel(ic, s);
+      e.filterAndAccept();
       return;
     }
     // These original double-pinyin profiles assign ';' to ing. Give that
@@ -3240,14 +3402,6 @@ public:
          key.states().test(KeyState::Shift) && sym == FcitxKey_Tab);
     auto *list = dynamic_cast<CommonCandidateList *>(
         ic->inputPanel().candidateList().get());
-    if (s->vMode &&
-        (sym == FcitxKey_Escape ||
-         (vModeSession_ == s->id &&
-          key.checkKeyList(*config_.shortcuts->vModeKeys)))) {
-      cancelVMode(ic);
-      e.filterAndAccept();
-      return;
-    }
     if (s->vMenu != VMenu::None) {
       if (list && list->totalSize() &&
           (sym == FcitxKey_Up || sym == FcitxKey_Down)) {
@@ -3285,41 +3439,29 @@ public:
         composing = !s->preedit.empty();
       }
     }
-    if (!composing && !s->vMode && vModeKey) {
-      // VModeV2 is armed by the core's pending-input callback for a literal
-      // "v", then activated through SessionOptions 0x11.
-      send(ic, "key", "v");
-      send(ic, "vmode");
-      s->vMode = true;
-      s->vCalculator = false;
-      s->preedit.clear();
-      s->cursor = 0;
-      clearDisplayState(s);
-      ic->inputPanel().setCandidateList(nullptr);
-      panel(ic, s);
-      if (!startVModeWindow(ic))
+    const bool literalV = sym == FcitxKey_v &&
+        !(key.states().toInteger() & uint32_t(KeyState::SimpleMask));
+    if (!composing && !s->vMode && vModeKey && !literalV) {
+      enterVMode(ic, s, {}, true);
+      e.filterAndAccept();
+      return;
+    }
+    if (s->vMode && s->vMenu == VMenu::None && s->preedit.empty() &&
+        (sym == FcitxKey_Return || sym == FcitxKey_KP_Enter)) {
+      e.filterAndAccept();
+      return;
+    }
+    if (s->vMode && s->vMenu == VMenu::None && s->preedit.empty() &&
+        (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete)) {
+      if (sym == FcitxKey_BackSpace) {
         cancelVMode(ic);
-      e.filterAndAccept();
-      return;
-    }
-    if (s->vMode && s->vMenu == VMenu::None && sym >= 0x20 && sym <= 0x7e) {
-      if (vModeSession_ == s->id)
-        stopVModeWindow();
-      if (sym == FcitxKey_space) {
-        selectByKey(ic);
-        e.filterAndAccept();
-        return;
+        if (bareVEnabled())
+          typeCharacter('v');
       }
-      std::string text(1, char(sym));
-      s->cursor = std::min(s->cursor, s->preedit.size());
-      s->preedit.insert(s->cursor, text);
-      ++s->cursor;
-      clearDisplayState(s);
-      send(ic, "key", text);
-      panel(ic, s);
       e.filterAndAccept();
       return;
     }
+
     if (composing && (sym == FcitxKey_Left || sym == FcitxKey_Right ||
                       sym == FcitxKey_Home || sym == FcitxKey_End)) {
       size_t target = s->cursor;
