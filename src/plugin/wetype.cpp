@@ -564,7 +564,10 @@ class WeType : public InputMethodEngine {
     s->pendingNumericReplacement += text;
   }
   static bool numericKeyTransport(InputContext *ic) {
-    return std::string_view(ic->frontend()) == "dbus";
+    // fcitx5-qt advertises ordered forwarded keys. The GTK4 module ignores
+    // ForwardKey entirely, so its digits must stay on the commit path.
+    return std::string_view(ic->frontend()) == "dbus" &&
+           ic->capabilityFlags().test(CapabilityFlag::KeyEventOrderFix);
   }
   static void deliverNumericText(InputContext *ic, const std::string &text) {
     if (!numericKeyTransport(ic)) {
