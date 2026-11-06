@@ -63,7 +63,7 @@ struct ServiceCandidate {
   std::string text, engineText;
   std::vector<unsigned char> id;
   uint32_t cover = 0;
-  bool cloud = false;
+  bool cloud = false, calendarFormat = false;
 };
 struct ServiceSession {
   uint64_t engine = 0, revision = 0;
@@ -78,7 +78,7 @@ struct ServiceSession {
   size_t displayCursor = 0;
   std::vector<size_t> cursorStops;
   unsigned pending = 0;
-  bool vMode = false;
+  bool vMode = false, preserveCommitSpacing = false;
   bool wechatEmoji = false;
   std::mutex mutex;
   std::vector<ServiceCandidate> candidates;
@@ -126,7 +126,7 @@ static void configure_cloud_session(unsigned char *config) {
 }
 static void read_service_candidates(void *iterator,
                                     std::vector<ServiceCandidate> &output,
-                                    bool wechat) {
+                                    bool wechat, bool calendarFirst) {
   output.clear();
   for (unsigned rank = 0; iterator && rank < 50 && output.size() < 50; rank++) {
     alignas(16) unsigned char c[512]{};
@@ -171,13 +171,14 @@ static void read_service_candidates(void *iterator,
       uint32_t type = 0, length = 0;
       const char *value = nullptr;
       memcpy(&type, node, sizeof(type));
-      if (type == 9 && output.size() < 50) {
+      if (type == 9 && output.size() < (calendarFirst ? 50U : 49U)) {
         memcpy(&value, node + 16, sizeof(value));
         memcpy(&length, node + 24, sizeof(length));
         if (length > 65536 || (!value && length))
           _exit(89);
         if (length) {
           auto formatted = candidate;
+          formatted.calendarFormat = true;
           formatted.text.assign(value, length);
           formatted.engineText = formatted.text;
           output.push_back(std::move(formatted));
@@ -187,11 +188,19 @@ static void read_service_candidates(void *iterator,
       memcpy(&info, node + 8, sizeof(info));
     }
     if (expanded) {
-      // Date/time shortcuts lead the list even when learned ordinary words
-      // precede the calendar record. Keep those words selectable afterwards.
+      // Keep the original format group together. Ordinary typing promotes
+      // one lexical candidate after the complete iterator has been read.
       std::rotate(output.begin(), output.begin() + formatBegin, output.end());
     } else
       output.push_back(std::move(candidate));
+  }
+  if (!calendarFirst) {
+    const auto word = std::find_if(output.begin(), output.end(),
+                                  [](const auto &candidate) {
+                                    return !candidate.calendarFormat;
+                                  });
+    if (word != output.end() && word != output.begin())
+      std::rotate(output.begin(), word, word + 1);
   }
 }
 static void service_listener(uint64_t, int32_t *types, void **payloads,
@@ -211,7 +220,7 @@ static void service_listener(uint64_t, int32_t *types, void **payloads,
       // cloud iterator +16, version +24 (macOS 2.2.3.657).
       auto it = *(void **)payloads[i];
       auto cloud = *((void **)payloads[i] + 2);
-      read_service_candidates(it, s.candidates, s.wechatEmoji);
+      read_service_candidates(it, s.candidates, s.wechatEmoji, s.vMode);
       ++s.revision;
       if (it)
         ((void (*)(void *))syms.at("_wxime_delete_candidate_iterator"))(it);
@@ -223,7 +232,7 @@ static void service_listener(uint64_t, int32_t *types, void **payloads,
       // The iterator is the engine's fully merged list; cloud entries are
       // identified by their struct marker in read_service_candidates.
       auto it = *(void **)payloads[i];
-      read_service_candidates(it, s.candidates, s.wechatEmoji);
+      read_service_candidates(it, s.candidates, s.wechatEmoji, s.vMode);
       ++s.revision;
       if (it)
         ((void (*)(void *))syms.at("_wxime_delete_candidate_iterator"))(it);
@@ -318,6 +327,7 @@ static bool service_select(ServiceSession &s, unsigned rank,
     if (rank >= candidates->size())
       return false;
     c = (*candidates)[rank];
+    s.preserveCommitSpacing = c.calendarFormat || s.vMode;
     s.published.clear();
   }
   using Fn = void (*)(uint64_t, const char *, uint32_t, const void *, uint32_t,
@@ -414,6 +424,10 @@ static void service_snapshot(ServiceSession &s, json_object *response) {
     json_object_array_add(array,
                           json_object_new_string_len(c.data(), c.size()));
   json_object_object_add(response, "commits", array);
+  if (!s.commits.empty()) {
+    wire::boolean(response, "preserve_spacing", s.preserveCommitSpacing);
+    s.preserveCommitSpacing = false;
+  }
   wire::put(response, "update_id", int64_t(s.update));
   s.sentUpdate = s.update;
   s.commits.clear();
@@ -519,6 +533,24 @@ static void service_loop() {
         sessions.erase(it);
       }
     } else {
+      std::string restoreInput, restoreSelected;
+      size_t restoreCursor = 0;
+      uint64_t restoreRevision = 0;
+      if (op == "reconfigure") {
+        const auto previous = sessions.find(client);
+        if (previous != sessions.end()) {
+          {
+            std::lock_guard<std::mutex> lock(previous->second->mutex);
+            restoreInput = previous->second->preedit;
+            restoreSelected = previous->second->selected;
+            restoreCursor = previous->second->cursor;
+            restoreRevision = previous->second->revision + 1;
+          }
+          ((void (*)(uint64_t))syms.at("_wxime_destroy_session"))(
+              previous->second->engine);
+          sessions.erase(previous);
+        }
+      }
       if (!sessions.count(client)) {
         if (sessions.size() >= 64) {
           wire::put(response.get(), "error", std::string("session limit"));
@@ -526,6 +558,7 @@ static void service_loop() {
           continue;
         }
         auto state = std::make_unique<ServiceSession>();
+        state->revision = restoreRevision;
         // Older frontends only understand request replies. Do not drain an
         // asynchronous commit into a pushed message they would discard.
         if (transport.supportsUpdates() &&
@@ -628,7 +661,24 @@ static void service_loop() {
       }
       std::string cursorCommit;
       int64_t cursorCommitPosition = -1;
-      if (op == "predict") {
+      if (op == "reconfigure") {
+        // Recreate using the new settings after preceding key requests have
+        // completed. Selected text is final; replay the editable spelling.
+        if (!restoreSelected.empty()) {
+          std::lock_guard<std::mutex> lock(s.mutex);
+          s.commits.push_back(std::move(restoreSelected));
+        }
+        for (char key : restoreInput) {
+          s.preedit += key;
+          s.cursor = s.preedit.size();
+          ((void (*)(uint64_t, const char *, uint32_t, const void *, uint32_t))
+               syms.at("_wxime_process_input"))(s.engine, &key, 1, nullptr, 0);
+        }
+        s.cursor = std::min(restoreCursor, s.preedit.size());
+        if (s.cursor != s.preedit.size())
+          ((void (*)(uint64_t, uint32_t))syms.at("_wxime_reset_internal_cursor"))(
+              s.engine, uint32_t(s.preedit.size() - s.cursor));
+      } else if (op == "predict") {
         auto before = wire::str(request.get(), "before");
         if (before.size() > 4096 || s.pending)
           wire::put(response.get(), "error",
@@ -644,7 +694,10 @@ static void service_loop() {
         }
       } else if (op == "vmode") {
         const bool enabled = wire::number(request.get(), "enabled", 1);
-        s.vMode = enabled;
+        {
+          std::lock_guard<std::mutex> lock(s.mutex);
+          s.vMode = enabled;
+        }
         ((void (*)(uint64_t, uint32_t, bool))syms.at(
             "_wxime_session_set_bool_option"))(s.engine, 0x11, enabled);
         if (!enabled)
@@ -758,6 +811,7 @@ static void service_loop() {
         ((void (*)(uint64_t))syms.at("_wxime_reset_session"))(s.engine);
         std::lock_guard<std::mutex> lock(s.mutex);
         s.pending = 0;
+        s.preserveCommitSpacing = op == "raw" && s.vMode;
         s.vMode = false;
         s.preedit.clear();
         s.selected.clear();

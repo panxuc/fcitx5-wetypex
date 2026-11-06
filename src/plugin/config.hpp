@@ -156,7 +156,7 @@ FCITX_CONFIGURATION(
     Option<bool> vMode{this, "VMode", "V 模式", true}; KeyListOption vModeKeys{
         this,
         "VModeKeys",
-        "V 模式按键",
+        "V 模式入口（默认 v 后按空格）",
         {Key("v")},
         KeyListConstrain({KeyConstrainFlag::AllowModifierLess})};
     Option<bool> halfFull{this, "HalfFull", "全半角输入切换", false};
@@ -180,7 +180,7 @@ FCITX_CONFIGURATION(
         this,
         "TraditionalSwitchKeys",
         "简繁体输入切换按键",
-        {Key("Control+Shift+f")},
+        {Key("Control+Shift+F")},
         KeyListConstrain({KeyConstrainFlag::AllowModifierLess})};
     Option<bool> pageMinusEqual{this, "PageMinusEqual", "减号等号翻页", true};
     Option<bool> pageBrackets{this, "PageBrackets", "左右中括号翻页", true};

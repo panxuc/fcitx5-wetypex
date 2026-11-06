@@ -676,10 +676,10 @@ index 4088329..feedd32 100644
 
    auto phrases = page("", false);
    phrases.widget->layout()->setContentsMargins(20, 0, 22, 0);
-@@ -1213,17 +1241,22 @@ int main(int argc, char **argv) {
-       new QLabel("系统默认支持“ctrl + 空格”切换中英文  修改");
-   defaultShortcut->setObjectName("rowSubtitle");
-   shortcuts.body->addWidget(defaultShortcut);
+@@ -1213,18 +1241,23 @@ int main(int argc, char **argv) {
+   }
+   if (vModeTriggers.isEmpty())
+     vModeTriggers << QStringLiteral("未绑定");
 -  shortcuts.body->addWidget(rowsCard(
 -      {row("快捷使用", {}, nullptr, 44),
 -       shortcutRow("AI 助手  Beta",
@@ -687,8 +687,9 @@ index 4088329..feedd32 100644
 -                   {"="}, "输入后按「=」可使用 AI 提问、表情推荐等功能", true,
 -                   "ai_assistant"),
 -       shortcutRow("V 模式",
--                   wetype::settingBool(settings.value("v_mode"), true), {"V"},
--                   "全拼中文空组合下按小写 v 打开；关闭后可直接输入 v 开头的词",
+-                   wetype::settingBool(settings.value("v_mode"), true), vModeTriggers,
+-                   usesBareV ? "v 后按空格打开；可继续输入英文或 v1+1 等计算式"
+-                             : "使用已配置的按键直接打开，仅在中文全拼中生效",
 -                   true, "v_mode")}));
 -  shortcuts.body->addWidget(rowsCard(
 +  QList<QWidget *> quickShortcutRows = {row("快捷使用", {}, nullptr, 44)};
@@ -701,9 +702,10 @@ index 4088329..feedd32 100644
 +  quickShortcutRows.append(aiShortcutRow);
 +#endif
 +  quickShortcutRows.append(shortcutRow(
-+      "V 模式", wetype::settingBool(settings.value("v_mode"), true), {"V"},
-+      "全拼中文空组合下按小写 v 打开；关闭后可直接输入 v 开头的词", true,
-+      "v_mode"));
++      "V 模式", wetype::settingBool(settings.value("v_mode"), true), vModeTriggers,
++      usesBareV ? "v 后按空格打开；可继续输入英文或 v1+1 等计算式"
++                : "使用已配置的按键直接打开，仅在中文全拼中生效",
++      true, "v_mode"));
 +  shortcuts.body->addWidget(rowsCard(quickShortcutRows));
 +#if WETYPE_ENABLE_VOICE
 +  auto *voiceShortcutCard = rowsCard(
