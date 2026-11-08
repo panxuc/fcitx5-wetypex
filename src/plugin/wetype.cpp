@@ -35,6 +35,7 @@
 #include <fstream>
 #include <iterator>
 #include <libime/pinyin/pinyinencoder.h>
+#include <linux/input-event-codes.h>
 #include <map>
 #include <poll.h>
 #include <queue>
@@ -353,6 +354,10 @@ class WeType : public InputMethodEngineV2 {
   static bool waylandV2(InputContext *ic) {
     return std::string_view(ic->frontend()) == "wayland_v2";
   }
+  static bool virtualKeyboardCursor(InputContext *ic) {
+    // GNOME's IBus bridge also forwards keys through a Wayland keyboard.
+    return waylandV2(ic) || std::string_view(ic->frontend()) == "ibus";
+  }
   template <typename System>
   static bool modifiersHeld(System *instance, InputContext *ic, State *s) {
     if constexpr (HasXkbMask<System>::value) {
@@ -382,10 +387,10 @@ class WeType : public InputMethodEngineV2 {
     if (!steps)
       return;
     clearSpacing(s);
-    // Wayland-v2's virtual keyboard inherits physical modifiers even
+    // Wayland virtual keyboards inherit physical modifiers even
     // when forwardKey requests none. Wait for their real release rather
     // than sending Shift+Left and selecting the closing bracket.
-    if (waylandV2(ic)) {
+    if (virtualKeyboardCursor(ic)) {
       s->pendingCursorSteps = steps;
       s->cursorExpected = expected;
       s->cursorDeadline = 0;
@@ -397,8 +402,17 @@ class WeType : public InputMethodEngineV2 {
     emitCursor(ic, steps);
   }
   static void emitCursor(InputContext *ic, int steps) {
-    for (int i = 0; i < std::abs(steps); ++i)
-      ic->forwardKey(Key(steps < 0 ? FcitxKey_Left : FcitxKey_Right));
+    const bool ibus = std::string_view(ic->frontend()) == "ibus";
+    // GNOME forwards IBus events through a Wayland virtual keyboard, which
+    // needs a real keycode, not only a keysym. Fcitx's IBus frontend subtracts
+    // the XKB offset (8) before sending the Linux evdev code to the client.
+    const auto code = ibus ? (steps < 0 ? KEY_LEFT : KEY_RIGHT) + 8 : 0;
+    const Key key(steps < 0 ? FcitxKey_Left : FcitxKey_Right, KeyStates(), code);
+    for (int i = 0; i < std::abs(steps); ++i) {
+      ic->forwardKey(key);
+      if (ibus)
+        ic->forwardKey(key, true);
+    }
   }
   void replayCursorKeys(InputContext *ic, std::vector<DeferredKey> keys) {
     const bool previous = replayingKeys_;
@@ -413,7 +427,7 @@ class WeType : public InputMethodEngineV2 {
       KeyEvent event(target, key.key, key.release, key.time);
       if (!target->keyEvent(event)) {
         const auto scalar = Key::keySymToUnicode(key.key.sym());
-        if (waylandV2(target) && scalar >= 0x20 && scalar != 0x7f) {
+        if (virtualKeyboardCursor(target) && scalar >= 0x20 && scalar != 0x7f) {
           // The original uppercase symbol must survive replay after Shift
           // has been released; native forwardKey cannot restore its mask.
           if (!key.release)
@@ -2372,21 +2386,40 @@ class WeType : public InputMethodEngineV2 {
       return;
     }
     auto *commits = wire::get(j.get(), "commits");
+    auto cursorCommit = wire::str(j.get(), "cursor_commit");
+    auto cursorCommitPosition =
+        wire::number(j.get(), "cursor_commit_position", -1);
+    const bool hasCursorCommit = !cursorCommit.empty() &&
+        cursorCommitPosition >= 0 &&
+        size_t(cursorCommitPosition) <= utf8::length(cursorCommit);
+    const bool mergeCursorCommit =
+        hasCursorCommit && std::string_view(ic->frontend()) == "ibus";
+    std::string cursorPrefix;
     const bool previousSpacingBypass = spacingBypass_;
     spacingBypass_ |= json_object_get_boolean(wire::get(j.get(), "preserve_spacing"));
     if (commits && json_object_is_type(commits, json_type_array))
       for (size_t i = 0; i < json_object_array_length(commits); i++) {
         auto *v = json_object_array_get_idx(commits, i);
-        if (json_object_is_type(v, json_type_string))
-          ic->commitString(json_object_get_string(v));
+        if (json_object_is_type(v, json_type_string)) {
+          if (mergeCursorCommit)
+            cursorPrefix += json_object_get_string(v);
+          else
+            ic->commitString(json_object_get_string(v));
+        }
       }
+    if (!mergeCursorCommit)
+      spacingBypass_ = previousSpacingBypass;
+    if (hasCursorCommit) {
+      // GNOME's Wayland text-input client can replace pending text when
+      // multiple commits arrive before the next done event. Submit the
+      // selected word and its bracket pair together, with the caret offset
+      // adjusted for the prefix, so neither part can overwrite the other.
+      const auto position =
+          utf8::length(cursorPrefix) + size_t(cursorCommitPosition);
+      cursorPrefix += cursorCommit;
+      commitStringAtCursor(ic, cursorPrefix, position);
+    }
     spacingBypass_ = previousSpacingBypass;
-    auto cursorCommit = wire::str(j.get(), "cursor_commit");
-    auto cursorCommitPosition =
-        wire::number(j.get(), "cursor_commit_position", -1);
-    if (!cursorCommit.empty() && cursorCommitPosition >= 0 &&
-        size_t(cursorCommitPosition) <= utf8::length(cursorCommit))
-      commitStringAtCursor(ic, cursorCommit, size_t(cursorCommitPosition));
     if (seq != s->seq)
       return;
     s->selectionPending = false;
@@ -3017,6 +3050,11 @@ public:
                        !e.rawKey().states().test(KeyState::Shift))) ||
             (queuedLetters && (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete));
         if (!commands && ((scalar >= 0x20 && scalar != 0x7f) || orderedEdit)) {
+          // This is a chord even if its printable key is replayed later.
+          // Otherwise releasing Shift can switch language before a queued
+          // nested bracket is processed.
+          if (!e.isRelease())
+            s->modifierCandidate = Key();
           s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time()});
           e.filterAndAccept();
           return;
@@ -3698,7 +3736,7 @@ public:
         }
       }
       if (send(ic, "punctuation", std::string(1, asciiChar), 0, -1, -1, mapped,
-               pairCursor) && pairCursor >= 0 && waylandV2(ic)) {
+               pairCursor) && pairCursor >= 0 && virtualKeyboardCursor(ic)) {
         // Keep later engine commits behind the paired cursor operation too,
         // including a burst typed before this asynchronous reply arrives.
         s->selectionPending = true;
