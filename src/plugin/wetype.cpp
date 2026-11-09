@@ -334,6 +334,7 @@ class WeType : public InputMethodEngineV2 {
   struct TextBatch {
     TrackableObjectReference<InputContext> context;
     std::string text;
+    size_t deleteAfter = 0;
   };
   TextBatch *textBatch_ = nullptr;
   std::map<uint64_t, TrackableObjectReference<InputContext>> contexts_;
@@ -444,17 +445,23 @@ class WeType : public InputMethodEngineV2 {
   }
   void flushTextBatch(InputContext *ic) {
     if (!textBatch_ || textBatch_->context.get() != ic ||
-        textBatch_->text.empty())
+        (textBatch_->text.empty() && !textBatch_->deleteAfter))
       return;
     auto text = std::move(textBatch_->text);
+    const auto deleted = textBatch_->deleteAfter;
     textBatch_->text.clear();
+    textBatch_->deleteAfter = 0;
     auto *s = state(ic);
     if (!s->active || !ic->hasFocus())
       return;
     ScopedRestore<bool> restore(spacingBypass_);
     spacingBypass_ = true; // Each fragment was formatted when queued.
-    ic->commitString(text);
-    rememberSpacing(ic, s, lastScalar(text));
+    if (deleted)
+      ic->deleteSurroundingText(0, deleted);
+    if (!text.empty()) {
+      ic->commitString(text);
+      rememberSpacing(ic, s, lastScalar(text));
+    }
   }
   void replayDeferredKeys(InputContext *ic, std::vector<DeferredKey> keys,
                           bool cursorReplay = false) {
@@ -492,10 +499,11 @@ class WeType : public InputMethodEngineV2 {
             } else {
               const auto &surrounding = target->surroundingText();
               if (surrounding.isValid() &&
-                  surrounding.cursor() == surrounding.anchor() &&
-                  surrounding.cursor() < utf8::length(surrounding.text()))
-                target->deleteSurroundingText(0, 1);
-              else {
+                  surrounding.cursor() == surrounding.anchor()) {
+                if (surrounding.cursor() + batch.deleteAfter <
+                    utf8::length(surrounding.text()))
+                  ++batch.deleteAfter;
+              } else {
                 flushTextBatch(target);
                 target->forwardKey(key.key, false, key.time);
               }
@@ -641,13 +649,19 @@ class WeType : public InputMethodEngineV2 {
       return 0;
     }
   }
-  static bool nextSurroundingTextIs(InputContext *ic,
-                                    const std::string &expected) {
+  bool nextSurroundingTextIs(InputContext *ic,
+                             const std::string &expected) const {
     const auto &surrounding = ic->surroundingText();
     if (!surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
       return false;
     const auto &text = surrounding.text();
-    auto byte = utf8::ncharByteLength(text.begin(), surrounding.cursor());
+    const auto deleted = textBatch_ && textBatch_->context.get() == ic
+                             ? textBatch_->deleteAfter
+                             : 0;
+    if (surrounding.cursor() + deleted > utf8::length(text))
+      return false;
+    auto byte =
+        utf8::ncharByteLength(text.begin(), surrounding.cursor() + deleted);
     return byte >= 0 && size_t(byte) <= text.size() &&
            text.compare(size_t(byte), expected.size(), expected) == 0;
   }
@@ -896,9 +910,13 @@ class WeType : public InputMethodEngineV2 {
   void commitStringAtCursor(Context *ic, const std::string &text,
                                    size_t cursor) {
     if (textBatch_ && textBatch_->context.get() == ic &&
-        !textBatch_->text.empty()) {
+        (!textBatch_->text.empty() || textBatch_->deleteAfter)) {
       auto combined = std::move(textBatch_->text);
+      const auto deleted = textBatch_->deleteAfter;
       textBatch_->text.clear();
+      textBatch_->deleteAfter = 0;
+      if (deleted)
+        ic->deleteSurroundingText(0, deleted);
       const auto position = utf8::length(combined) + cursor;
       combined += text;
       ScopedRestore<bool> restore(spacingBypass_);
@@ -925,8 +943,8 @@ class WeType : public InputMethodEngineV2 {
     forwardCursor(ic, state(ic), -int(length - cursor), text);
     rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
   }
-  static void rememberPair(InputContext *ic, State *s, char opening,
-                           const std::string &right) {
+  void rememberPair(InputContext *ic, State *s, char opening,
+                    const std::string &right) {
     if (s->pendingPairKey && nextSurroundingTextIs(ic, s->pendingPairRight))
       s->outerPairs.emplace_back(s->pendingPairKey, s->pendingPairRight);
     else
