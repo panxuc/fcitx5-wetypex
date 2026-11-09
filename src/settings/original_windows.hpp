@@ -4,6 +4,8 @@
 #include <QAbstractButton>
 #include <QBoxLayout>
 #include <QFrame>
+#include <QCursor>
+#include <QGuiApplication>
 #include <QFile>
 #include <QIcon>
 #include <QKeyEvent>
@@ -11,9 +13,13 @@
 #include <QMap>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPen>
 #include <QPixmap>
+#include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScreen>
+#include <QStyle>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QSizeGrip>
@@ -137,7 +143,15 @@ class SourceIconButton final : public QAbstractButton {
     QPixmap pixmap(46, 28);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
-    renderer.render(&painter, pixmap.rect());
+    if (renderer.isValid()) {
+      renderer.render(&painter, pixmap.rect());
+    } else {
+      // The window must remain closable before upstream artwork is installed.
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(QPen(QColor("#555555"), 1.5));
+      painter.drawLine(QPointF(18, 9), QPointF(28, 19));
+      painter.drawLine(QPointF(28, 9), QPointF(18, 19));
+    }
     return pixmap;
   }
 
@@ -207,7 +221,28 @@ protected:
 class Window final : public QWidget {
   QPoint dragOffset_;
   QSizeGrip *sizeGrip_ = nullptr;
-  QAbstractButton *closeButton_ = nullptr;
+  QPointer<QAbstractButton> closeButton_;
+  bool firstShow_ = true;
+
+  void fitInitialScreen() {
+    auto *screen = windowHandle() ? windowHandle()->screen() : nullptr;
+    if (!screen)
+      screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+      screen = QGuiApplication::primaryScreen();
+    if (!screen)
+      return;
+    auto frame = frameGeometry().size() - size();
+    if (!windowFlags().testFlag(Qt::FramelessWindowHint))
+      frame.setHeight(qMax(frame.height(),
+                           style()->pixelMetric(QStyle::PM_TitleBarHeight)));
+    const auto available =
+        (screen->availableGeometry().size() - frame - QSize(24, 24))
+            .expandedTo(QSize(1, 1));
+    setMinimumSize(QSize(600, 450).boundedTo(available));
+    if (!isMaximized() && !isFullScreen())
+      resize(size().boundedTo(available));
+  }
 
   void updateSizeGrip() {
     sizeGrip_->resize(sizeGrip_->sizeHint());
@@ -224,13 +259,19 @@ public:
     button->raise();
   }
   explicit Window(QWidget *parent = nullptr) : QWidget(parent) {
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
-                   Qt::WindowMinMaxButtonsHint);
+    auto flags = Qt::Window | Qt::WindowMinMaxButtonsHint;
+#if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    flags |= Qt::FramelessWindowHint;
+#endif
+    // Qt 5.12 has no public system-move/resize API for Wayland. Its native
+    // window frame supplies those operations, including maximize/restore.
+    setWindowFlags(flags);
     setAttribute(Qt::WA_TranslucentBackground);
     setMinimumSize(600, 450);
     resize(715, 569);
     sizeGrip_ = new QSizeGrip(this);
     sizeGrip_->setStyleSheet("background:transparent;");
+    fitInitialScreen();
   }
   ~Window() override {
     for (auto *process :
@@ -290,6 +331,13 @@ protected:
   }
   void showEvent(QShowEvent *event) override {
     QWidget::showEvent(event);
+    if (firstShow_) {
+      firstShow_ = false;
+      fitInitialScreen();
+      if (auto *handle = windowHandle())
+        QObject::connect(handle, &QWindow::screenChanged, this,
+                         [this](QScreen *) { fitInitialScreen(); });
+    }
     updateSizeGrip();
   }
   void changeEvent(QEvent *event) override {
