@@ -247,6 +247,7 @@ struct State : InputContextProperty {
   std::vector<size_t> cursorStops;
   char pendingPairKey = 0;
   std::string pendingPairRight;
+  std::vector<std::pair<char, std::string>> outerPairs;
   uint8_t symbolAutoState = 0;
   std::string pendingNumericText, pendingNumericReplacement;
   uint64_t pendingNumericUntil = 0;
@@ -322,6 +323,19 @@ class WeType : public InputMethodEngineV2 {
   Connection settingsConnection_;
   Connection commitFilterConnection_;
   bool spacingBypass_ = false;
+  template <typename T> struct ScopedRestore {
+    T &value;
+    T previous;
+    explicit ScopedRestore(T &target) : value(target), previous(target) {}
+    ScopedRestore(const ScopedRestore &) = delete;
+    ScopedRestore &operator=(const ScopedRestore &) = delete;
+    ~ScopedRestore() { value = previous; }
+  };
+  struct TextBatch {
+    TrackableObjectReference<InputContext> context;
+    std::string text;
+  };
+  TextBatch *textBatch_ = nullptr;
   std::map<uint64_t, TrackableObjectReference<InputContext>> contexts_;
   pid_t child_ = -1;
   int read_ = -1, write_ = -1;
@@ -386,6 +400,7 @@ class WeType : public InputMethodEngineV2 {
                      const std::string &expected) {
     if (!steps)
       return;
+    flushTextBatch(ic);
     clearSpacing(s);
     // Wayland virtual keyboards inherit physical modifiers even
     // when forwardKey requests none. Wait for their real release rather
@@ -414,10 +429,45 @@ class WeType : public InputMethodEngineV2 {
         ic->forwardKey(key, true);
     }
   }
-  void replayCursorKeys(InputContext *ic, std::vector<DeferredKey> keys) {
-    const bool previous = replayingKeys_;
+  void commitText(InputContext *ic, const std::string &text) {
+    if (!textBatch_ || textBatch_->context.get() != ic) {
+      ic->commitString(text);
+      return;
+    }
+    auto *s = state(ic);
+    auto value = text;
+    if (!spacingBypass_ && autoSpaceEnabled(ic, s) && utf8::validate(value))
+      value =
+          applyAutoSpace(value, textBatch_->text.empty() ? beforeWindow(ic, s)
+                                                         : textBatch_->text);
+    textBatch_->text += value;
+  }
+  void flushTextBatch(InputContext *ic) {
+    if (!textBatch_ || textBatch_->context.get() != ic ||
+        textBatch_->text.empty())
+      return;
+    auto text = std::move(textBatch_->text);
+    textBatch_->text.clear();
+    auto *s = state(ic);
+    if (!s->active || !ic->hasFocus())
+      return;
+    ScopedRestore<bool> restore(spacingBypass_);
+    spacingBypass_ = true; // Each fragment was formatted when queued.
+    ic->commitString(text);
+    rememberSpacing(ic, s, lastScalar(text));
+  }
+  void replayDeferredKeys(InputContext *ic, std::vector<DeferredKey> keys,
+                          bool cursorReplay = false) {
+    flushTextBatch(ic);
+    TextBatch batch{ic->watch(), {}};
+    ScopedRestore<TextBatch *> restoreBatch(textBatch_);
+    ScopedRestore<bool> restoreReplay(replayingKeys_);
+    // A virtual-keyboard replay can produce several immediate text commits.
+    // Publish them together so GNOME does not keep only the last digit.
+    if (cursorReplay && virtualKeyboardCursor(ic))
+      textBatch_ = &batch;
     replayingKeys_ = true;
-    const auto ref = ic->watch();
+    const auto &ref = batch.context;
     for (const auto &key : keys) {
       auto *target = ref.get();
       if (!target || !target->hasFocus() ||
@@ -427,16 +477,50 @@ class WeType : public InputMethodEngineV2 {
       KeyEvent event(target, key.key, key.release, key.time);
       if (!target->keyEvent(event)) {
         const auto scalar = Key::keySymToUnicode(key.key.sym());
-        if (virtualKeyboardCursor(target) && scalar >= 0x20 && scalar != 0x7f) {
+        const auto commands = key.key.states().toInteger() &
+                              uint32_t(KeyState::SimpleMask) &
+                              ~uint32_t(KeyState::Shift);
+        if (cursorReplay && !commands && textBatch_ == &batch &&
+            !batch.text.empty() &&
+            (key.key.sym() == FcitxKey_BackSpace ||
+             key.key.sym() == FcitxKey_Delete)) {
+          if (!key.release) {
+            if (key.key.sym() == FcitxKey_BackSpace) {
+              const auto length = utf8::length(batch.text);
+              batch.text.resize(
+                  utf8::ncharByteLength(batch.text.begin(), length - 1));
+            } else {
+              const auto &surrounding = target->surroundingText();
+              if (surrounding.isValid() &&
+                  surrounding.cursor() == surrounding.anchor() &&
+                  surrounding.cursor() < utf8::length(surrounding.text()))
+                target->deleteSurroundingText(0, 1);
+              else {
+                flushTextBatch(target);
+                target->forwardKey(key.key, false, key.time);
+              }
+            }
+            clearNumericCorrection(state(target));
+            state(target)->symbolAutoState = !batch.text.empty() &&
+                                                     batch.text.back() >= '0' &&
+                                                     batch.text.back() <= '9'
+                                                 ? 3
+                                                 : 0;
+          }
+        } else if (cursorReplay && virtualKeyboardCursor(target) && !commands &&
+                   scalar >= 0x20 && scalar != 0x7f) {
           // The original uppercase symbol must survive replay after Shift
           // has been released; native forwardKey cannot restore its mask.
           if (!key.release)
-            target->commitString(utf8::UCS4ToUTF8(scalar));
-        } else
+            commitText(target, utf8::UCS4ToUTF8(scalar));
+        } else {
+          flushTextBatch(target);
           target->forwardKey(key.key, key.release, key.time);
+        }
       }
     }
-    replayingKeys_ = previous;
+    if (auto *target = ref.get())
+      flushTextBatch(target);
   }
   bool resolveCursorMove(InputContext *ic, State *s) {
     if (!s->pendingCursorSteps)
@@ -456,7 +540,7 @@ class WeType : public InputMethodEngineV2 {
         return true;
       auto keys = std::move(s->cursorKeys);
       clearCursorMove(s);
-      replayCursorKeys(ic, std::move(keys));
+      replayDeferredKeys(ic, std::move(keys), true);
       return s->pendingCursorSteps != 0;
     }
     if (modifiersHeld(instance_, ic, s))
@@ -494,7 +578,7 @@ class WeType : public InputMethodEngineV2 {
     }
     auto keys = std::move(s->cursorKeys);
     clearCursorMove(s);
-    replayCursorKeys(ic, std::move(keys));
+    replayDeferredKeys(ic, std::move(keys), true);
     return s->pendingCursorSteps != 0;
   }
   void startSync() {
@@ -560,7 +644,7 @@ class WeType : public InputMethodEngineV2 {
   static bool nextSurroundingTextIs(InputContext *ic,
                                     const std::string &expected) {
     const auto &surrounding = ic->surroundingText();
-    if (!surrounding.isValid())
+    if (!surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
       return false;
     const auto &text = surrounding.text();
     auto byte = utf8::ncharByteLength(text.begin(), surrounding.cursor());
@@ -614,7 +698,7 @@ class WeType : public InputMethodEngineV2 {
     if (!numericKeyTransport(ic)) {
       // Forwarded keys bypass Instance::CommitFilter, so only this branch
       // needs to place the space itself; commitString is filtered upstream.
-      ic->commitString(text);
+      commitText(ic, text);
     } else {
       std::string payload = text;
       if (s && autoSpaceEnabled(ic, s) && utf8::validate(text))
@@ -811,6 +895,17 @@ class WeType : public InputMethodEngineV2 {
   template <typename Context, typename Flag = CapabilityFlag>
   void commitStringAtCursor(Context *ic, const std::string &text,
                                    size_t cursor) {
+    if (textBatch_ && textBatch_->context.get() == ic &&
+        !textBatch_->text.empty()) {
+      auto combined = std::move(textBatch_->text);
+      textBatch_->text.clear();
+      const auto position = utf8::length(combined) + cursor;
+      combined += text;
+      ScopedRestore<bool> restore(spacingBypass_);
+      spacingBypass_ = true;
+      commitStringAtCursor(ic, combined, position);
+      return;
+    }
     const auto length = utf8::length(text);
     cursor = std::min(cursor, length);
     if constexpr (HasCursorCommit<Context, Flag>::value) {
@@ -830,6 +925,25 @@ class WeType : public InputMethodEngineV2 {
     forwardCursor(ic, state(ic), -int(length - cursor), text);
     rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
   }
+  static void rememberPair(InputContext *ic, State *s, char opening,
+                           const std::string &right) {
+    if (s->pendingPairKey && nextSurroundingTextIs(ic, s->pendingPairRight))
+      s->outerPairs.emplace_back(s->pendingPairKey, s->pendingPairRight);
+    else
+      s->outerPairs.clear();
+    s->pendingPairKey = closingKey(opening);
+    s->pendingPairRight = right;
+  }
+  static void finishPair(State *s) {
+    if (s->outerPairs.empty()) {
+      s->pendingPairKey = 0;
+      s->pendingPairRight.clear();
+    } else {
+      s->pendingPairKey = s->outerPairs.back().first;
+      s->pendingPairRight = std::move(s->outerPairs.back().second);
+      s->outerPairs.pop_back();
+    }
+  }
   bool commitSymbol(InputContext *ic, State *s, char ascii, bool asciiMode) {
     const auto *entry = punctuationEntry(ascii);
     if (!entry)
@@ -837,8 +951,8 @@ class WeType : public InputMethodEngineV2 {
     if (s->pendingPairKey == ascii && !s->pendingPairRight.empty() &&
         nextSurroundingTextIs(ic, s->pendingPairRight)) {
       forwardCursor(ic, s, 1, s->pendingPairRight);
-      s->pendingPairKey = 0;
-      s->pendingPairRight.clear();
+      finishPair(s);
+      clearNumericCorrection(s);
       s->symbolAutoState = 0;
       return true;
     }
@@ -851,7 +965,7 @@ class WeType : public InputMethodEngineV2 {
       if (numeric)
         deliverNumericText(ic, s, value);
       else
-        ic->commitString(value);
+        commitText(ic, value);
       // Keep the auto-space boundary state current: punctuation must not let
       // a later candidate think the previous commit ended with 我.
       if (!value.empty())
@@ -863,6 +977,7 @@ class WeType : public InputMethodEngineV2 {
     auto [left, right] = splitPair(mapped);
     if (entry->pairType && !right.empty()) {
       if (*config_.input->symbolAutoPair) {
+        rememberPair(ic, s, ascii, right);
         if (numeric && numericKeyTransport(ic)) {
           emit(mapped);
           for (size_t i = 1; i < utf8::length(mapped); ++i) {
@@ -872,8 +987,6 @@ class WeType : public InputMethodEngineV2 {
         } else {
           commitStringAtCursor(ic, mapped, 1);
         }
-        s->pendingPairKey = closingKey(ascii);
-        s->pendingPairRight = right;
       } else if (entry->pairType == 2) {
         bool &leftNext =
             ascii == '\"' ? s->doubleQuoteLeft : s->singleQuoteLeft;
@@ -1979,6 +2092,8 @@ class WeType : public InputMethodEngineV2 {
     return s;
   }
   void panel(InputContext *ic, State *s) {
+    // The insertion must reach the client before its preedit is replaced.
+    flushTextBatch(ic);
     const bool inlinePreedit =
         *config_.appearance->preeditPosition !=
             wetype_config::PreeditPosition::Candidate &&
@@ -2124,6 +2239,7 @@ class WeType : public InputMethodEngineV2 {
         s->cloudPollUntil = 0;
         s->pendingPairKey = 0;
         s->pendingPairRight.clear();
+        s->outerPairs.clear();
         s->symbolAutoState = 0;
         if (s->active) {
           ic->inputPanel().reset();
@@ -2323,9 +2439,28 @@ class WeType : public InputMethodEngineV2 {
       fail();
       return false;
     }
+    const std::string_view operation(op);
+    const auto spellingLength =
+        s->preedit.size() - std::min(s->editableBegin, s->preedit.size());
+    const bool wubiMayCommit =
+        *inputConfig.mode == wetype_config::InputMode::Wubi &&
+        (operation == "key" || operation == "backspace" ||
+         operation == "delete" || operation == "move") &&
+        ((*inputConfig.wubiUniqueCommit && spellingLength == 4) ||
+         (*inputConfig.wubiNextCommit && spellingLength == 5));
+    // These replies decide whether a composition remains. Later digits must
+    // not select from its old candidates or overtake its pending insertion.
+    // Wubi's four/five-code auto-commit boundaries need the same ordering.
+    if (operation == "select" || operation == "punctuation" ||
+        operation == "raw" || operation == "reconfigure" || wubiMayCommit)
+      s->selectionPending = true;
+    if (operation == "punctuation") {
+      ic->inputPanel().setCandidateList(nullptr);
+      ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+    }
     activity_ = now(CLOCK_MONOTONIC);
     flush();
-    return true;
+    return child_ > 0 && write_ >= 0;
   }
   void receive(const std::string &line) {
     auto j = wire::parse(line);
@@ -2506,19 +2641,7 @@ class WeType : public InputMethodEngineV2 {
     panel(ic, s);
     auto deferred = std::move(s->deferredKeys);
     s->deferredKeys.clear();
-    auto ref = ic->watch();
-    const bool previousReplay = replayingKeys_;
-    replayingKeys_ = true;
-    for (const auto &key : deferred) {
-      auto *target = ref.get();
-      if (!target || !target->hasFocus() ||
-          !target->propertyFor(&factory_)->active)
-        break;
-      KeyEvent event(target, key.key, key.release, key.time);
-      if (!target->keyEvent(event))
-        target->forwardKey(key.key, key.release, key.time);
-    }
-    replayingKeys_ = previousReplay;
+    replayDeferredKeys(ic, std::move(deferred));
   }
 
 public:
@@ -2843,6 +2966,7 @@ public:
     clearDisplayState(s);
     s->pendingPairKey = 0;
     s->pendingPairRight.clear();
+    s->outerPairs.clear();
     s->symbolAutoState = 0;
     s->vMode = false;
     s->vCalculator = false;
@@ -3012,6 +3136,70 @@ public:
     // these symbols locally so the 5.0.14 baseline selects the same words.
     if (sym >= FcitxKey_KP_0 && sym <= FcitxKey_KP_9)
       sym = KeySym(FcitxKey_0 + (sym - FcitxKey_KP_0));
+    switch (sym) {
+    case FcitxKey_KP_Space:
+      sym = FcitxKey_space;
+      break;
+    case FcitxKey_KP_Tab:
+      sym = FcitxKey_Tab;
+      break;
+    case FcitxKey_KP_Home:
+      sym = FcitxKey_Home;
+      break;
+    case FcitxKey_KP_End:
+      sym = FcitxKey_End;
+      break;
+    case FcitxKey_KP_Left:
+      sym = FcitxKey_Left;
+      break;
+    case FcitxKey_KP_Right:
+      sym = FcitxKey_Right;
+      break;
+    case FcitxKey_KP_Up:
+      sym = FcitxKey_Up;
+      break;
+    case FcitxKey_KP_Down:
+      sym = FcitxKey_Down;
+      break;
+    case FcitxKey_KP_Prior:
+      sym = FcitxKey_Page_Up;
+      break;
+    case FcitxKey_KP_Next:
+      sym = FcitxKey_Page_Down;
+      break;
+    case FcitxKey_KP_Delete:
+      sym = FcitxKey_Delete;
+      break;
+    default:
+      break;
+    }
+    bool keypadOperator = true;
+    switch (sym) {
+    case FcitxKey_KP_Add:
+      sym = FcitxKey_plus;
+      break;
+    case FcitxKey_KP_Subtract:
+      sym = FcitxKey_minus;
+      break;
+    case FcitxKey_KP_Multiply:
+      sym = FcitxKey_asterisk;
+      break;
+    case FcitxKey_KP_Divide:
+      sym = FcitxKey_slash;
+      break;
+    case FcitxKey_KP_Decimal:
+      sym = FcitxKey_period;
+      break;
+    case FcitxKey_KP_Separator:
+      sym = FcitxKey_comma;
+      break;
+    case FcitxKey_KP_Equal:
+      sym = FcitxKey_equal;
+      break;
+    default:
+      keypadOperator = false;
+      break;
+    }
     if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     PassedKeyTracker track{this, ic, s, e};
@@ -3038,17 +3226,18 @@ public:
                               uint32_t(KeyState::SimpleMask) &
                               ~uint32_t(KeyState::Shift);
         const auto scalar = Key::keySymToUnicode(sym);
-        const bool queuedLetters = !s->english && std::any_of(
-            s->cursorKeys.begin(), s->cursorKeys.end(), [](const DeferredKey &key) {
-              const auto c = Key::keySymToUnicode(key.key.sym());
-              return !key.release && ((c >= 'a' && c <= 'z') ||
-                                     (c >= 'A' && c <= 'Z'));
-            });
+        const bool queuedText =
+            std::any_of(s->cursorKeys.begin(), s->cursorKeys.end(),
+                        [](const DeferredKey &key) {
+                          const auto c = Key::keySymToUnicode(key.key.sym());
+                          return !key.release && c >= 0x20 && c != 0x7f;
+                        });
         const bool enter = sym == FcitxKey_Return || sym == FcitxKey_KP_Enter;
         const bool orderedEdit =
-            (enter && (queuedLetters ||
-                       !e.rawKey().states().test(KeyState::Shift))) ||
-            (queuedLetters && (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete));
+            (enter &&
+             (queuedText || !e.rawKey().states().test(KeyState::Shift))) ||
+            (queuedText &&
+             (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete));
         if (!commands && ((scalar >= 0x20 && scalar != 0x7f) || orderedEdit)) {
           // This is a chord even if its printable key is replayed later.
           // Otherwise releasing Shift can switch language before a queued
@@ -3063,7 +3252,7 @@ public:
         // caret placement. Preserve earlier text before processing that key.
         auto keys = std::move(s->cursorKeys);
         clearCursorMove(s);
-        replayCursorKeys(ic, std::move(keys));
+        replayDeferredKeys(ic, std::move(keys), true);
       }
     }
     if (!e.isRelease() && !s->pendingNumericText.empty()) {
@@ -3301,14 +3490,14 @@ public:
           e.filterAndAccept();
         } else if (s->fullWidth) {
           uint32_t full = sym == FcitxKey_space ? 0x3000 : sym + 0xfee0;
-          ic->commitString(utf8::UCS4ToUTF8(full));
+          commitText(ic, utf8::UCS4ToUTF8(full));
           e.filterAndAccept();
         } else {
           if (autoSpaceEnabled(ic, s) &&
               isNeedSpace(lastScalar(beforeWindow(ic, s)), char32_t(sym))) {
             // Commit the first letter and its gap together. Mixing a separate
             // commit with a pass-through key can reorder them in GTK/Qt.
-            ic->commitString(std::string(1, ascii));
+            commitText(ic, std::string(1, ascii));
             e.filterAndAccept();
           }
         }
@@ -3424,18 +3613,22 @@ public:
         sym == FcitxKey_Page_Down ||
         key.checkKeyList(instance_->globalConfig().defaultNextPage()) ||
         key.checkKeyList(*config_.shortcuts->nextPageKeys) ||
-        (*config_.shortcuts->pageMinusEqual && sym == FcitxKey_equal) ||
+        (!keypadOperator && *config_.shortcuts->pageMinusEqual &&
+         sym == FcitxKey_equal) ||
         (*config_.shortcuts->pageBrackets && sym == FcitxKey_bracketright) ||
-        (*config_.shortcuts->pageCommaPeriod && sym == FcitxKey_period) ||
+        (!keypadOperator && *config_.shortcuts->pageCommaPeriod &&
+         sym == FcitxKey_period) ||
         (*config_.shortcuts->pageShiftTab &&
          !key.states().test(KeyState::Shift) && sym == FcitxKey_Tab);
     bool pageUp =
         sym == FcitxKey_Page_Up ||
         key.checkKeyList(instance_->globalConfig().defaultPrevPage()) ||
         key.checkKeyList(*config_.shortcuts->previousPageKeys) ||
-        (*config_.shortcuts->pageMinusEqual && sym == FcitxKey_minus) ||
+        (!keypadOperator && *config_.shortcuts->pageMinusEqual &&
+         sym == FcitxKey_minus) ||
         (*config_.shortcuts->pageBrackets && sym == FcitxKey_bracketleft) ||
-        (*config_.shortcuts->pageCommaPeriod && sym == FcitxKey_comma) ||
+        (!keypadOperator && *config_.shortcuts->pageCommaPeriod &&
+         sym == FcitxKey_comma) ||
         (*config_.shortcuts->pageShiftTab &&
          key.states().test(KeyState::Shift) && sym == FcitxKey_Tab);
     auto *list = dynamic_cast<CommonCandidateList *>(
@@ -3647,6 +3840,25 @@ public:
     const char asciiChar = ascii ? char(sym) : 0;
     const auto *entry = ascii ? punctuationEntry(asciiChar) : nullptr;
 
+    // Keypad arithmetic is literal text, not a candidate page shortcut or
+    // Chinese punctuation. Consume the current composition before its symbol
+    // so a raw forwarded key cannot overtake the asynchronous candidate commit.
+    // Configured shortcuts and V-calculator input have already been handled.
+    if (keypadOperator) {
+      s->symbolAutoState = 0;
+      const auto literal = s->fullWidth
+                               ? utf8::UCS4ToUTF8(uint32_t(sym) + 0xfee0)
+                               : std::string(1, asciiChar);
+      if (composing)
+        send(ic, "punctuation", std::string(1, asciiChar), 0, -1, -1, literal);
+      else {
+        appendNumericCorrection(s, literal);
+        deliverNumericText(ic, s, literal);
+      }
+      e.filterAndAccept();
+      return;
+    }
+
     // SymbolAutoChangedHelper in the desktop implementation delays numeric
     // punctuation correction. Numeric punctuation is displayed in
     // Chinese form first; only another digit changes it back to ASCII.
@@ -3663,7 +3875,22 @@ public:
     }
     if (!composing && digit && autoChangeActive) {
       const char replacement = numericReplacement(s->symbolAutoState);
-      if (!s->pendingNumericText.empty()) {
+      bool correctedBatch = false;
+      if (replacement && textBatch_ && textBatch_->context.get() == ic) {
+        auto &text = textBatch_->text;
+        const std::string previous = numericPunctuation(replacement);
+        if (text.size() > previous.size() &&
+            text.compare(text.size() - previous.size(), previous.size(),
+                         previous) == 0 &&
+            text[text.size() - previous.size() - 1] >= '0' &&
+            text[text.size() - previous.size() - 1] <= '9') {
+          text.replace(text.size() - previous.size(), previous.size(), 1,
+                       replacement);
+          clearNumericCorrection(s);
+          correctedBatch = true;
+        }
+      }
+      if (!correctedBatch && !s->pendingNumericText.empty()) {
         if (replacement) {
           const std::string previous = numericPunctuation(replacement);
           auto &text = s->pendingNumericReplacement;
@@ -3674,15 +3901,18 @@ public:
                          replacement);
         }
         appendNumericCorrection(s, std::string(1, asciiChar));
-      } else if (replacement) {
+      } else if (!correctedBatch && replacement) {
         const char *previous = numericPunctuation(replacement);
         // Wayland clients may acknowledge committed punctuation after the
         // next digit. Observe that exact suffix without delaying any keys.
         if ((ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
              numericKeyTransport(ic)) &&
             !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
-            ic->surroundingText().isValid() &&
-            ic->surroundingText().cursor() == ic->surroundingText().anchor()) {
+            // Qt temporarily invalidates its cache while forwarded keys are
+            // pending. The timer still requires the exact unselected suffix.
+            (!ic->surroundingText().isValid() ||
+             ic->surroundingText().cursor() ==
+                 ic->surroundingText().anchor())) {
           s->pendingNumericText = std::string(previous) + asciiChar;
           s->pendingNumericReplacement = std::string(1, replacement) + asciiChar;
           s->pendingNumericUntil = now(CLOCK_MONOTONIC) + 250000;
@@ -3708,7 +3938,7 @@ public:
     if (!composing && s->fullWidth &&
         (upper || digit || sym == FcitxKey_space)) {
       const uint32_t full = sym == FcitxKey_space ? 0x3000 : sym + 0xfee0;
-      ic->commitString(utf8::UCS4ToUTF8(full));
+      commitText(ic, utf8::UCS4ToUTF8(full));
       e.filterAndAccept();
       return;
     }
@@ -3724,8 +3954,7 @@ public:
       if (entry->pairType && !right.empty()) {
         if (*config_.input->symbolAutoPair) {
           pairCursor = 1;
-          s->pendingPairKey = closingKey(asciiChar);
-          s->pendingPairRight = right;
+          rememberPair(ic, s, asciiChar, right);
         } else if (entry->pairType == 2) {
           bool &leftNext =
               asciiChar == '"' ? s->doubleQuoteLeft : s->singleQuoteLeft;
@@ -3735,12 +3964,8 @@ public:
           mapped = left;
         }
       }
-      if (send(ic, "punctuation", std::string(1, asciiChar), 0, -1, -1, mapped,
-               pairCursor) && pairCursor >= 0 && virtualKeyboardCursor(ic)) {
-        // Keep later engine commits behind the paired cursor operation too,
-        // including a burst typed before this asynchronous reply arrives.
-        s->selectionPending = true;
-      }
+      send(ic, "punctuation", std::string(1, asciiChar), 0, -1, -1, mapped,
+           pairCursor);
       e.filterAndAccept();
       return;
     }

@@ -428,9 +428,16 @@ static void service_snapshot(ServiceSession &s, json_object *response) {
     json_object_array_add(array, json_object_new_boolean(c.cloud));
   json_object_object_add(response, "cloud", array);
   array = json_object_new_array();
+  // A native operation may emit a selected word and its punctuation
+  // separately. They form one insertion: some Wayland clients only retain
+  // the final CommitString before their next text-input done event.
+  std::string committedText;
   for (auto &c : s.commits)
-    json_object_array_add(array,
-                          json_object_new_string_len(c.data(), c.size()));
+    committedText += c;
+  if (!s.commits.empty())
+    json_object_array_add(
+        array,
+        json_object_new_string_len(committedText.data(), committedText.size()));
   json_object_object_add(response, "commits", array);
   if (!s.commits.empty()) {
     wire::boolean(response, "preserve_spacing", s.preserveCommitSpacing);
