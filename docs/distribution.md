@@ -82,4 +82,6 @@ makepkg -C -f --noconfirm
 
 正式投递前，在目标系统用包管理器安装 deb，确认依赖可从其仓库解析，验证首次运行时设置、添加输入法、候选上屏、V 工具栏、升级与卸载。投递材料包含软件包、对应 SHA-256、图标、设置和候选界面截图，以及首次设置说明。商店版本沿用 `fcitx5-wetypex` 包名和项目版本，便于与现有安装正常升级。
 
+星火官方的 [Git Releases 自动更新服务](https://gitee.com/spark-building-service/github) 可跟随本仓库的 Release 更新。其 `file_list` 使用文件名模板：标准包的 amd64 模板为 `fcitx5-wetypex_{version}_amd64.deb`，legacy 包为 `fcitx5-wetypex-legacy_{version}_amd64.deb`；`{version}` 对应去掉 `v` 前缀的完整版本号，包含末尾的打包修订号。应在目标系统验证后选定其中一种包，避免把两套模板同时配置到同一架构。
+
 本节提供投递材料与验证清单；商店上架是独立发布操作。
