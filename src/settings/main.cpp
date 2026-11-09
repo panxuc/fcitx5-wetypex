@@ -755,8 +755,7 @@ int main(int argc, char **argv) {
   rightLayout->addWidget(pages, 1);
   root->addWidget(right, 1);
   QObject::connect(close, &QAbstractButton::clicked, &window, &QWidget::close);
-  close->move(458, 0);
-  close->raise();
+  window.anchorCloseButton(close);
 
   auto input = page("输入");
   auto *pinyin = new QRadioButton("拼音输入"),

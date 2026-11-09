@@ -14,6 +14,9 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QResizeEvent>
+#include <QShowEvent>
+#include <QSizeGrip>
 #include <QStandardPaths>
 #include <QSvgRenderer>
 #include <QTabBar>
@@ -203,12 +206,31 @@ protected:
 
 class Window final : public QWidget {
   QPoint dragOffset_;
+  QSizeGrip *sizeGrip_ = nullptr;
+  QAbstractButton *closeButton_ = nullptr;
+
+  void updateSizeGrip() {
+    sizeGrip_->resize(sizeGrip_->sizeHint());
+    sizeGrip_->move(width() - sizeGrip_->width(), height() - sizeGrip_->height());
+    sizeGrip_->setVisible(!isMaximized() && !isFullScreen());
+    sizeGrip_->raise();
+  }
 
 public:
+  void anchorCloseButton(QAbstractButton *button) {
+    closeButton_ = button;
+    button->parentWidget()->installEventFilter(this);
+    button->move(button->parentWidget()->width() - button->width(), 0);
+    button->raise();
+  }
   explicit Window(QWidget *parent = nullptr) : QWidget(parent) {
-    setWindowFlags(Qt::Window | Qt::FramelessWindowHint);
+    setWindowFlags(Qt::Window | Qt::FramelessWindowHint |
+                   Qt::WindowMinMaxButtonsHint);
     setAttribute(Qt::WA_TranslucentBackground);
-    setFixedSize(715, 569);
+    setMinimumSize(600, 450);
+    resize(715, 569);
+    sizeGrip_ = new QSizeGrip(this);
+    sizeGrip_->setStyleSheet("background:transparent;");
   }
   ~Window() override {
     for (auto *process :
@@ -217,12 +239,33 @@ public:
   }
 
 protected:
+  bool eventFilter(QObject *object, QEvent *event) override {
+    if (closeButton_ && object == closeButton_->parentWidget() &&
+        event->type() == QEvent::Resize) {
+      closeButton_->move(closeButton_->parentWidget()->width() -
+                             closeButton_->width(),
+                         0);
+      closeButton_->raise();
+    }
+    return QWidget::eventFilter(object, event);
+  }
+  void mouseDoubleClickEvent(QMouseEvent *event) override {
+    if (event->button() == Qt::LeftButton &&
+        wetype::mousePosition(event).y() < 58) {
+      dragOffset_ = {};
+      isMaximized() ? showNormal() : showMaximized();
+      event->accept();
+      return;
+    }
+    QWidget::mouseDoubleClickEvent(event);
+  }
   void mousePressEvent(QMouseEvent *event) override {
     if (event->button() != Qt::LeftButton ||
         wetype::mousePosition(event).y() >= 58)
       return;
 
 #if QT_VERSION >= QT_VERSION_CHECK(5, 15, 0)
+    dragOffset_ = {};
     if (windowHandle() && windowHandle()->startSystemMove()) {
       event->accept();
       return;
@@ -240,6 +283,20 @@ protected:
     }
   }
   void mouseReleaseEvent(QMouseEvent *) override { dragOffset_ = {}; }
+  void resizeEvent(QResizeEvent *event) override {
+    QWidget::resizeEvent(event);
+    if (sizeGrip_)
+      updateSizeGrip();
+  }
+  void showEvent(QShowEvent *event) override {
+    QWidget::showEvent(event);
+    updateSizeGrip();
+  }
+  void changeEvent(QEvent *event) override {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::WindowStateChange && sizeGrip_)
+      updateSizeGrip();
+  }
 };
 
 inline QFrame *card(QWidget *parent = nullptr) {
@@ -308,9 +365,8 @@ inline Page page(const QString &title, bool scroll = true) {
   area->setObjectName("pageScroll");
   area->setFrameShape(QFrame::NoFrame);
   area->setWidgetResizable(true);
-  area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  area->setVerticalScrollBarPolicy(scroll ? Qt::ScrollBarAsNeeded
-                                          : Qt::ScrollBarAlwaysOff);
+  area->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  area->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   area->setWidget(viewport);
   layout->addWidget(area, 1);
   return {widget, body, area};
