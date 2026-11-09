@@ -332,6 +332,7 @@ class PairingOverlay final : public QWidget {
   QLabel *subtitle_ = nullptr;
   QLabel *message_ = nullptr;
   QLabel *digits_[6]{};
+  QFrame *dialog_ = nullptr;
   QString code_;
   Stage stage_ = Stage::Code;
   int transientFailures_ = 0;
@@ -420,11 +421,12 @@ public:
 
   explicit PairingOverlay(QWidget *parent) : QWidget(parent), process_(this) {
     setGeometry(parent->rect());
+    parent->installEventFilter(this);
     setObjectName("pairingOverlay");
     setStyleSheet("QWidget#pairingOverlay{background:rgba(0,0,0,72);}");
-    auto *dialog = new QFrame(this);
+    auto *dialog = dialog_ = new QFrame(this);
     dialog->setObjectName("pairingDialog");
-    dialog->setGeometry(149, 144, 420, 280);
+    dialog->setGeometry((width() - 420) / 2, (height() - 280) / 2, 420, 280);
     dialog->setStyleSheet(
         "QFrame#pairingDialog{background:white;border:0;border-radius:12px;}"
         "QLabel{background:transparent;}"
@@ -481,6 +483,17 @@ public:
   }
 
 protected:
+  bool eventFilter(QObject *object, QEvent *event) override {
+    if (object == parentWidget() && event->type() == QEvent::Resize)
+      setGeometry(parentWidget()->rect());
+    return QWidget::eventFilter(object, event);
+  }
+  void resizeEvent(QResizeEvent *event) override {
+    QWidget::resizeEvent(event);
+    if (dialog_)
+      dialog_->move((width() - dialog_->width()) / 2,
+                    (height() - dialog_->height()) / 2);
+  }
   void keyPressEvent(QKeyEvent *event) override {
     if (event->key() == Qt::Key_Escape) {
       deleteLater();
