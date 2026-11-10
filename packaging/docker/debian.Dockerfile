@@ -13,7 +13,7 @@ RUN apt-get update -qq && \
 # build compiler for the private ARM64 ABI library.
 RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       apt-get update -qq && apt-get install -y -qq wget gnupg && \
-      wget -qO /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
+      wget -4 -nv --timeout=30 --tries=3 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
       gpg --show-keys --with-colons /tmp/llvm.asc | grep -q ':6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:' && \
       gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm.asc && \
       echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main' \

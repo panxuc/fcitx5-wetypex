@@ -19,7 +19,7 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
 # compiler/CMake is only a build dependency; binaries still target Focal libc.
 RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       apt-get update -qq && apt-get install -y -qq wget gnupg python3-pip && \
-      wget -qO /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
+      wget -4 -nv --timeout=30 --tries=3 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
       gpg --show-keys --with-colons /tmp/llvm.asc | grep -q ':6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:' && \
       gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm.asc && \
       echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/focal/ llvm-toolchain-focal-18 main' \
