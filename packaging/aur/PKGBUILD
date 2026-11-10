@@ -15,7 +15,8 @@ depends=(
     'libc++'
     'json-c'
     'curl'
-    'openssl'
+    'libssl.so'
+    'libcrypto.so'
     'bubblewrap'
     'util-linux'
     'python'
@@ -76,6 +77,9 @@ build() {
 
 package() {
     DESTDIR="${pkgdir}" cmake --install "${srcdir}/build"
+    # makepkg resolves SONAME dependencies only for executable ELF files.
+    chmod 755 "${pkgdir}/usr/lib/fcitx5-wetypex/locale.so" \
+        "${pkgdir}/usr/lib/fcitx5-wetypex/wcwss_bridge.so"
     install -Dm644 "${srcdir}/${pkgname}-${pkgver}/LICENSE" \
         "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
     install -Dm644 "${srcdir}/${pkgname}-${pkgver}/NOTICE" \

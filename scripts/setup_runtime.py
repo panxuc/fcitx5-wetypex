@@ -282,6 +282,8 @@ def validate_runtime(target,user_snapshot=None,report=None,converted_snapshot=No
     try:
         network_report=subprocess.run([str(host),str(support),'network-info'],
                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
+        if network_report.returncode:
+            return failure('engine host compatibility',network_report)
         capabilities=json.loads(network_report.stdout)
         if not capabilities.get('execution_ready', True):
             return False,'此 ARM64 CPU 需要兼容执行组件，请通过发行版安装 qemu-user 后重试'

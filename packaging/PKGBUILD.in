@@ -6,7 +6,7 @@ url='https://github.com/panxuc/fcitx5-wetypex'
 arch=('x86_64' 'aarch64')
 license=('MIT' 'ISC' 'BSD-2-Clause' 'curl' 'Apache-2.0 WITH LLVM-exception')
 options=('!debug')
-depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'curl' 'openssl' 'bubblewrap' 'util-linux' 'python' 'python-fonttools' 'python-pillow' 'fontconfig' 'wayland' 'qt6-base' 'qt6-svg' 'qt6-webengine' 'layer-shell-qt' 'wl-clipboard' 'pipewire' 'ffmpeg' 'libnotify' 'polkit')
+depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'curl' 'libssl.so' 'libcrypto.so' 'bubblewrap' 'util-linux' 'python' 'python-fonttools' 'python-pillow' 'fontconfig' 'wayland' 'qt6-base' 'qt6-svg' 'qt6-webengine' 'layer-shell-qt' 'wl-clipboard' 'pipewire' 'ffmpeg' 'libnotify' 'polkit')
 optdepends_aarch64=('qemu-user: compatibility provider for older ARM64 CPUs')
 
 makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
@@ -47,6 +47,9 @@ build() {
 
 package() {
   DESTDIR="${pkgdir}" cmake --install "${srcdir}/build"
+  # makepkg resolves SONAME dependencies only for executable ELF files.
+  chmod 755 "${pkgdir}/usr/lib/fcitx5-wetypex/locale.so" \
+    "${pkgdir}/usr/lib/fcitx5-wetypex/wcwss_bridge.so"
   install -Dm644 "${srcdir}/fcitx5-wetypex-${pkgver}/LICENSE" \
     "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
   install -Dm644 "${srcdir}/fcitx5-wetypex-${pkgver}/NOTICE" \
