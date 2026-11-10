@@ -2002,6 +2002,18 @@ extern "C" int shim_tlv_atexit(void (*f)(void *), void *p) {
   return __cxa_thread_atexit_impl(f, p, (void *)&stack_guard);
 }
 static void show_address(uintptr_t pc) {
+  const bool original = std::any_of(mapped_image_ranges.begin(), mapped_image_ranges.end(),
+      [pc](const auto &range) { return pc >= range.first && pc < range.second; });
+  if (!original) {
+    Dl_info library{};
+    if (dladdr(reinterpret_cast<void *>(pc), &library) && library.dli_fname) {
+      fprintf(stderr, "0x%lx %s %s +0x%lx\n", pc, library.dli_fname,
+              library.dli_sname ? library.dli_sname : "?",
+              pc - reinterpret_cast<uintptr_t>(library.dli_saddr ? library.dli_saddr : library.dli_fbase));
+    } else
+      fprintf(stderr, "0x%lx\n", pc);
+    return;
+  }
   auto i =
       std::upper_bound(address_names.begin(), address_names.end(), pc,
                        [](uintptr_t v, const auto &r) { return v < r.first; });
@@ -2034,6 +2046,23 @@ static void crash(int sig, siginfo_t *info, void *ctx) {
           (long long)uc->uc_mcontext.regs[17], (long long)uc->uc_mcontext.regs[29],
           (long long)uc->uc_mcontext.sp);
   show_address(uc->uc_mcontext.regs[30]);
+  // Read frame records through procfs so a damaged frame pointer cannot
+  // trigger a second fault while reporting the original failure.
+  const int memory = open("/proc/self/mem", O_RDONLY | O_CLOEXEC);
+  auto frame = uintptr_t(uc->uc_mcontext.regs[29]);
+  const auto stack = uintptr_t(uc->uc_mcontext.sp);
+  for (unsigned depth = 0; memory >= 0 && depth < 20 && frame >= stack &&
+       frame - stack < 4 * 1024 * 1024 && !(frame & 15); ++depth) {
+    uintptr_t record[2];
+    if (pread(memory, record, sizeof(record), frame) != sizeof(record))
+      break;
+    show_address(record[1]);
+    if (record[0] <= frame)
+      break;
+    frame = record[0];
+  }
+  if (memory >= 0)
+    close(memory);
   auto sp = reinterpret_cast<uintptr_t *>(uc->uc_mcontext.sp);
 #endif
   for (int i = 0; i < 12; ++i)
