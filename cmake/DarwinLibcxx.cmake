@@ -36,15 +36,21 @@ else()
       FetchContent_Populate(wetypex_${component})
     endif()
   endforeach()
-  set(forest "${CMAKE_CURRENT_BINARY_DIR}/darwin-cxx-source")
+  set(forest "${CMAKE_CURRENT_BINARY_DIR}/darwin-cxx-source-${WETYPE_LLVM_VERSION}")
   file(MAKE_DIRECTORY "${forest}")
   foreach(component libcxx libcxxabi cmake runtimes)
     if(NOT EXISTS "${forest}/${component}")
-      execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
-        "${wetypex_${component}_SOURCE_DIR}" "${forest}/${component}"
-        RESULT_VARIABLE linked)
-      if(NOT linked EQUAL 0)
-        message(FATAL_ERROR "Unable to assemble the private libc++ source tree")
+      if(component STREQUAL "libcxx")
+        # libc++ includes ../runtimes and ../cmake. A symlink would resolve
+        # those parents inside FetchContent's directory instead of this tree.
+        file(COPY "${wetypex_${component}_SOURCE_DIR}/" DESTINATION "${forest}/${component}")
+      else()
+        execute_process(COMMAND "${CMAKE_COMMAND}" -E create_symlink
+          "${wetypex_${component}_SOURCE_DIR}" "${forest}/${component}"
+          RESULT_VARIABLE linked)
+        if(NOT linked EQUAL 0)
+          message(FATAL_ERROR "Unable to assemble the private libc++ source tree")
+        endif()
       endif()
     endif()
   endforeach()
@@ -70,7 +76,6 @@ else()
       "-DCMAKE_CXX_COMPILER=${WETYPE_CLANGXX}"
       "-DCMAKE_SYSROOT=${CMAKE_SYSROOT}"
       "-DCMAKE_BUILD_TYPE=Release"
-      "-DLLVM_COMMON_CMAKE_UTILS=${forest}/cmake"
       "-DCMAKE_INSTALL_PREFIX=${WETYPE_DARWIN_CXX_PREFIX}" -DCMAKE_INSTALL_LIBDIR=lib
       -DLIBCXX_ABI_DEFINES=_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT
       -DLIBCXX_CXX_ABI=system-libcxxabi
