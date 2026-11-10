@@ -79,6 +79,8 @@ else()
       "-DCMAKE_INSTALL_PREFIX=${WETYPE_DARWIN_CXX_PREFIX}" -DCMAKE_INSTALL_LIBDIR=lib
       -DLIBCXX_ABI_DEFINES=_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT
       -DLIBCXX_CXX_ABI=system-libcxxabi
+      -DLIBCXXABI_USE_LLVM_UNWINDER=OFF
+      -DLIBCXX_ADDITIONAL_LIBRARIES=gcc_s
       "-DLIBCXX_CXX_ABI_INCLUDE_PATHS=${forest}/libcxxabi/include"
       "-DLIBCXX_CXX_ABI_LIBRARY_PATH=${abi_directory}"
       "-DCMAKE_SHARED_LINKER_FLAGS=-L${abi_directory} -Wl,-rpath-link,${abi_directory}"

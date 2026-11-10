@@ -57,7 +57,7 @@ jobs:
             XDG_DATA_HOME="$RUNNER_TEMP/wetypex-data" \
             XDG_CACHE_HOME="$RUNNER_TEMP/wetypex-cache" \
             XDG_CONFIG_HOME="$RUNNER_TEMP/wetypex-config" bash -euc '
-              trap '\''status=$?; if [ "$status" -ne 0 ]; then python3 -c "import json,os; from pathlib import Path; p=Path(os.environ[\"XDG_CACHE_HOME\"])/\"voice.json\"; v=json.loads(p.read_text()) if p.exists() else {}; print({k:v.get(k) for k in (\"ok\",\"state\",\"error\")})"; grep -E "FAULT|REG |UNIMPLEMENTED|failed|error|bwrap:" "$XDG_DATA_HOME/fcitx5-wetypex/state/voice/backend.log" | tail -n 40 || true; fi'\'' EXIT
+              trap '\''status=$?; if [ "$status" -ne 0 ]; then python3 -c "import json,os; from pathlib import Path; p=Path(os.environ[\"XDG_CACHE_HOME\"])/\"voice.json\"; v=json.loads(p.read_text()) if p.exists() else {}; print({k:v.get(k) for k in (\"ok\",\"state\",\"error\")})"; tail -n 80 "$XDG_DATA_HOME/fcitx5-wetypex/state/voice/backend.log" | grep -Eiv "cookie|token|identity|match_code|uin" || true; fi'\'' EXIT
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --download --accept-upstream-license
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --check --transport
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-account" pairing-code > "$XDG_CACHE_HOME/pairing.json"
