@@ -40,14 +40,14 @@ jobs:
         # This image bootstraps signed Arch Linux ARM packages. Its digest is
         # reviewed together with dependency changes, never updated by the bot.
         run: |
-          # pacman's download sandbox needs Landlock syscalls that the runner's
-          # Docker seccomp profile blocks. Keep pacman's own sandbox enabled.
-          docker run --rm --security-opt seccomp=unconfined \
-            -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
+          # The hosted ARM kernel rejects pacman's Landlock download rules.
+          # Disable only that download restriction inside this disposable
+          # container; keep syscall filtering, DownloadUser and PGP verification.
+          docker run --rm -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             menci/archlinuxarm@sha256:4bf586efc126560618f26d1b3b9f3ea42af2da2b23f2738594e92858beecc6ef \
             bash -euc '
-              pacman -Syu --noconfirm git cmake clang boost fcitx5 fcitx5-qt libime libc++ \
+              pacman -Syu --disable-sandbox-filesystem --noconfirm git cmake clang boost fcitx5 fcitx5-qt libime libc++ \
                 json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig \
                 qt6-base qt6-svg qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit qemu-user
               useradd -m builder

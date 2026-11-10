@@ -155,7 +155,6 @@ jobs:
           cd dist/debian
           sha256sum fcitx5-wetypex_*.deb > SHA256SUMS
       - name: 在旧基线上运行真实原版核心与 TLS 通道
-        if: inputs.runtime_checks
         run: |
           docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
@@ -241,7 +240,6 @@ jobs:
           cd dist/ubuntu20
           sha256sum *.deb > SHA256SUMS
       - name: 在 Focal 与稳定框架 SDK 中运行真实核心
-        if: inputs.runtime_checks
         run: |
           docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
