@@ -53,7 +53,9 @@ jobs:
               useradd -m builder
               cp -a /src/dist/arch /tmp/arch
               chown -R builder:builder /tmp/arch
-              su builder -c "cd /tmp/arch && makepkg -C -f --noconfirm"
+              cp /etc/makepkg.conf /tmp/wetypex-makepkg.conf
+              printf '\''%s\n'\'' '\''PKGEXT=".pkg.tar.zst"'\'' >> /tmp/wetypex-makepkg.conf
+              su builder -c "cd /tmp/arch && makepkg --config /tmp/wetypex-makepkg.conf -C -f --noconfirm"
               cp /tmp/arch/fcitx5-wetypex-[0-9]*-aarch64.pkg.tar.zst /out/arch/
             '
       - name: 核对架构、版本与安装后的真实启动
