@@ -2,6 +2,7 @@
 import http.client
 import json
 import re
+import socket
 import ssl
 import sys
 import time
@@ -73,9 +74,43 @@ def discover(channel='stable'):
                 compatibility_validated=False)
 
 
+def _ipv4_connection(address, timeout=None, source_address=None, **_options):
+    last_error = None
+    for family, kind, protocol, _canonical, target in socket.getaddrinfo(
+            address[0], address[1], socket.AF_INET, socket.SOCK_STREAM):
+        connection = socket.socket(family, kind, protocol)
+        try:
+            connection.settimeout(timeout)
+            if source_address:
+                connection.bind(source_address)
+            connection.connect(target)
+            return connection
+        except OSError as error:
+            last_error = error
+            connection.close()
+    raise last_error or OSError('no IPv4 address for the original archive server')
+
+
+class _IPv4HTTPSConnection(http.client.HTTPSConnection):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._create_connection = _ipv4_connection
+
+
+class _IPv4HTTPSHandler(urllib.request.HTTPSHandler):
+    handler_order = 499
+    enabled = True
+
+    def do_open(self, http_class, request, **kwargs):
+        if self.enabled and http_class is http.client.HTTPSConnection:
+            http_class = _IPv4HTTPSConnection
+        return super().do_open(http_class, request, **kwargs)
+
+
 def download_archive(opener, url, output):
     """Resume interrupted official downloads; the caller verifies the full SHA."""
     limit = 768 * 1024 * 1024
+    fallback = None
     for attempt in range(3):
         offset = output.tell()
         request = urllib.request.Request(url)
@@ -130,6 +165,12 @@ def download_archive(opener, url, output):
                     raise
             if attempt == 2:
                 raise OSError('original archive download failed after three attempts: ' + str(error)) from error
+            if not isinstance(error, urllib.error.HTTPError) and hasattr(opener, 'add_handler'):
+                if fallback is None:
+                    fallback = _IPv4HTTPSHandler()
+                    opener.add_handler(fallback)
+                else:
+                    fallback.enabled = False
             print('Original archive download interrupted at %s (%s); retrying (%d/3)' %
                   (opener.archive_last_host, type(error).__name__, attempt + 2),
                   file=sys.stderr)

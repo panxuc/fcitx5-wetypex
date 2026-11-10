@@ -34,41 +34,6 @@ jobs:
           sudo install "$(go env GOPATH)/bin/nfpm" /usr/local/bin/nfpm
       - name: 在目标发行版原生构建 deb、legacy deb 与 rpm
         run: WETYPEX_BUILD_JOBS=2 packaging/build-native-packages.sh
-      - name: 在两个旧基线上验证真实 ARM64 核心和 TLS
-        if: inputs.runtime_checks
-        shell: bash
-        run: |
-          mkdir -p "$RUNNER_TEMP/wetypex-archives"
-          for family in debian ubuntu20; do
-            docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
-              --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
-              -e WETYPEX_PACKAGE_FAMILY="$family" -e WETYPE_KEEP_ARCHIVES=1 \
-              -e WETYPE_RUNTIME_CACHE=/runtime-archives \
-              -v "$RUNNER_TEMP/wetypex-archives:/runtime-archives" -v "$PWD/dist:/out:ro" \
-              "wetypex-build-$family" bash -euc '
-                apt-get update -qq
-                apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig qemu-user espeak-ng ffmpeg
-                dpkg --unpack /out/"$WETYPEX_PACKAGE_FAMILY"/*.deb
-                fcitx5-wetypex-setup --download --accept-upstream-license
-                fcitx5-wetypex-setup --check --transport || {
-                  cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
-                }
-                if [[ "$WETYPEX_PACKAGE_FAMILY" == debian ]]; then
-                  fcitx5-wetypex-setup --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
-                  fcitx5-wetypex-account pairing-code > /tmp/pairing.json
-                  python3 -c '\''import json; assert json.load(open("/tmp/pairing.json"))["ok"]'\''
-                  espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is a voice input compatibility check. One two three."
-                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/voice.json
-                  python3 -c '\''import json; v=json.load(open("/tmp/voice.json")); assert v["ok"] and v["text"].strip()'\''
-                  fcitx5-wetypex-voice shutdown
-                  fcitx5-wetypex-setup --update --version 2.2.3.657 --download --accept-upstream-license
-                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/legacy-voice.json
-                  python3 -c '\''import json; v=json.load(open("/tmp/legacy-voice.json")); assert v["ok"] and v["text"].strip()'\''
-                  fcitx5-wetypex-voice shutdown
-                  fcitx5-wetypex-setup --rollback
-                fi
-              '
-          done
       - name: 生成源码包与 Arch ARM 构建文件
         run: python3 tools/package_release.py
       - name: 在固定摘要的 Arch Linux ARM 环境构建
@@ -120,3 +85,38 @@ jobs:
             dist/fcitx5-wetypex-*-linux-aarch64.tar.zst
           if-no-files-found: error
           retention-days: 14
+      - name: 在两个旧基线上验证真实 ARM64 核心和 TLS
+        if: inputs.runtime_checks
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/wetypex-archives"
+          for family in debian ubuntu20; do
+            docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+              --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+              -e WETYPEX_PACKAGE_FAMILY="$family" -e WETYPE_KEEP_ARCHIVES=1 \
+              -e WETYPE_RUNTIME_CACHE=/runtime-archives \
+              -v "$RUNNER_TEMP/wetypex-archives:/runtime-archives" -v "$PWD/dist:/out:ro" \
+              "wetypex-build-$family" bash -euc '
+                apt-get update -qq
+                apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig qemu-user espeak-ng ffmpeg
+                dpkg --unpack /out/"$WETYPEX_PACKAGE_FAMILY"/*.deb
+                fcitx5-wetypex-setup --download --accept-upstream-license
+                fcitx5-wetypex-setup --check --transport || {
+                  cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+                }
+                if [[ "$WETYPEX_PACKAGE_FAMILY" == debian ]]; then
+                  fcitx5-wetypex-setup --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
+                  fcitx5-wetypex-account pairing-code > /tmp/pairing.json
+                  python3 -c '\''import json; assert json.load(open("/tmp/pairing.json"))["ok"]'\''
+                  espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is a voice input compatibility check. One two three."
+                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/voice.json
+                  python3 -c '\''import json; v=json.load(open("/tmp/voice.json")); assert v["ok"] and v["text"].strip()'\''
+                  fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --update --version 2.2.3.657 --download --accept-upstream-license
+                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/legacy-voice.json
+                  python3 -c '\''import json; v=json.load(open("/tmp/legacy-voice.json")); assert v["ok"] and v["text"].strip()'\''
+                  fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --rollback
+                fi
+              '
+          done
