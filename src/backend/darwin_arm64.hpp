@@ -40,7 +40,7 @@ static std::string format64(const char *format, bool scanning = false) {
   return result;
 }
 }
-extern "C" int darwin_arm_vprintf(const char *format, void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_vprintf(const char *format, void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format);
   va_list args;
   darwin_arm64::arguments(args, stack);
@@ -48,7 +48,7 @@ extern "C" int darwin_arm_vprintf(const char *format, void *stack) {
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_vfprintf(FILE *file, const char *format, void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_vfprintf(FILE *file, const char *format, void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format);
   va_list args;
   darwin_arm64::arguments(args, stack);
@@ -56,7 +56,7 @@ extern "C" int darwin_arm_vfprintf(FILE *file, const char *format, void *stack) 
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_vsnprintf(char *out, size_t size, const char *format,
+extern "C" __attribute__((used, noinline)) int darwin_arm_vsnprintf(char *out, size_t size, const char *format,
                                     void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format);
   va_list args;
@@ -65,7 +65,7 @@ extern "C" int darwin_arm_vsnprintf(char *out, size_t size, const char *format,
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_vsprintf(char *out, const char *format, void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_vsprintf(char *out, const char *format, void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format);
   va_list args;
   darwin_arm64::arguments(args, stack);
@@ -73,7 +73,7 @@ extern "C" int darwin_arm_vsprintf(char *out, const char *format, void *stack) {
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_vasprintf(char **out, const char *format, void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_vasprintf(char **out, const char *format, void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format);
   va_list args;
   darwin_arm64::arguments(args, stack);
@@ -81,7 +81,7 @@ extern "C" int darwin_arm_vasprintf(char **out, const char *format, void *stack)
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_vsscanf(const char *text, const char *format, void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_vsscanf(const char *text, const char *format, void *stack) {
   const auto nativeFormat = darwin_arm64::format64(format, true);
   va_list args;
   darwin_arm64::arguments(args, stack);
