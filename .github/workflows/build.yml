@@ -10,6 +10,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   arm64:
     uses: ./.github/workflows/packages-arm64.yml
@@ -34,6 +38,37 @@ jobs:
       - name: 检查 flake 并构建 Nix 包
         run: |
           nix flake check --no-write-lock-file --print-build-logs
+      - name: 验证 Nix 包的真实核心、传输与语音
+        shell: bash
+        run: |
+          nix build .#fcitx5-wetypex --no-write-lock-file --out-link "$RUNNER_TEMP/wetypex-runtime"
+          prefix=$(readlink -f "$RUNNER_TEMP/wetypex-runtime")
+          "$prefix/bin/fcitx5-wetypex-account" network-info > "$RUNNER_TEMP/wetypex-network.json"
+          if ! python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["execution_ready"]' "$RUNNER_TEMP/wetypex-network.json"; then
+            nix build --impure --no-write-lock-file --out-link "$RUNNER_TEMP/wetypex-runtime" --expr \
+              'let f = builtins.getFlake (toString ./.); in (builtins.getAttr builtins.currentSystem f.packages).default.override { enableCompatibilityProvider = true; }'
+            prefix=$(readlink -f "$RUNNER_TEMP/wetypex-runtime")
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends espeak-ng
+          # Use an independent root-owned fixture; the original process still
+          # runs inside the package sandbox and receives no Actions credentials.
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$prefix" \
+            XDG_DATA_HOME="$RUNNER_TEMP/wetypex-data" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/wetypex-cache" \
+            XDG_CONFIG_HOME="$RUNNER_TEMP/wetypex-config" bash -euc '
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --download --accept-upstream-license
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --check --transport
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-account" pairing-code > "$XDG_CACHE_HOME/pairing.json"
+              python3 -c '\''import json,os; assert json.load(open(os.environ["XDG_CACHE_HOME"]+"/pairing.json"))["ok"]'\''
+              espeak-ng -v en-us -s 135 -w "$XDG_CACHE_HOME/speech.wav" "Hello, this is a voice input compatibility check. One two three."
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime > "$XDG_CACHE_HOME/voice.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice.json")); assert v["ok"] and v["text"].strip()'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" shutdown
+            '
+      - name: 清理独立运行数据
+        if: always()
+        run: sudo rm -rf "$RUNNER_TEMP/wetypex-data" "$RUNNER_TEMP/wetypex-cache" "$RUNNER_TEMP/wetypex-config"
       - name: 检查源码包中的 Nix 入口
         run: |
           python3 tools/package_release.py
