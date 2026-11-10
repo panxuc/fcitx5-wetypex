@@ -1,5 +1,5 @@
 #pragma once
-// C ABI verified against 2.2.3.657's voice_engine_c_api.cpp wrappers. The
+// C ABI verified against the pinned voice_engine_c_api.cpp wrappers. The
 // original engine owns Opus, VAD, request sequencing, retries and smoothing.
 namespace native_voice {
 static std::mutex outputMutex;
@@ -62,8 +62,16 @@ struct Callbacks {
   decltype(&error) failure;
   decltype(&vad) speech;
   decltype(&polish) polishing;
+  // 3.x appends optional recap, network and performance callbacks. Older
+  // wrappers copy the original prefix; both ABIs pass these aggregates in
+  // memory. Supply the complete zero-initialized tail so a newer wrapper never
+  // reads unrelated stack bytes as callback addresses.
+  void (*recap)(void *, const char *, uint32_t) = nullptr;
+  void (*network)(void *, bool) = nullptr;
+  void (*performance)(void *, int, uint64_t) = nullptr;
 };
-static_assert(sizeof(Callbacks) == 56);
+static_assert(offsetof(Callbacks, recap) == 56);
+static_assert(sizeof(Callbacks) == 80);
 static int nibble(char c) {
   return c >= '0' && c <= '9'   ? c - '0'
          : c >= 'a' && c <= 'f' ? c - 'a' + 10

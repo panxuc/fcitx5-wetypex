@@ -52,13 +52,18 @@ jobs:
                 }
                 if [[ "$WETYPEX_PACKAGE_FAMILY" == debian ]]; then
                   fcitx5-wetypex-setup --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
-                  apt-get install -y --no-install-recommends espeak-ng
+                  apt-get install -y --no-install-recommends espeak-ng ffmpeg
                   fcitx5-wetypex-account pairing-code > /tmp/pairing.json
                   python3 -c '\''import json; assert json.load(open("/tmp/pairing.json"))["ok"]'\''
                   espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is a voice input compatibility check. One two three."
                   fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/voice.json
                   python3 -c '\''import json; v=json.load(open("/tmp/voice.json")); assert v["ok"] and v["text"].strip()'\''
                   fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --update --version 2.2.3.657 --download --accept-upstream-license
+                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/legacy-voice.json
+                  python3 -c '\''import json; v=json.load(open("/tmp/legacy-voice.json")); assert v["ok"] and v["text"].strip()'\''
+                  fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --rollback
                 fi
               '
           done

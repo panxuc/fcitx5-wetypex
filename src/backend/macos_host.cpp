@@ -2027,6 +2027,13 @@ static void crash(int sig, siginfo_t *info, void *ctx) {
 #elif defined(__aarch64__)
   fprintf(stderr, "FAULT signal=%d address=%p pc=", sig, info->si_addr);
   show_address(uc->uc_mcontext.pc);
+  fprintf(stderr, "REG x0=%llx x1=%llx x2=%llx x3=%llx x8=%llx x16=%llx x17=%llx fp=%llx sp=%llx lr=",
+          (long long)uc->uc_mcontext.regs[0], (long long)uc->uc_mcontext.regs[1],
+          (long long)uc->uc_mcontext.regs[2], (long long)uc->uc_mcontext.regs[3],
+          (long long)uc->uc_mcontext.regs[8], (long long)uc->uc_mcontext.regs[16],
+          (long long)uc->uc_mcontext.regs[17], (long long)uc->uc_mcontext.regs[29],
+          (long long)uc->uc_mcontext.sp);
+  show_address(uc->uc_mcontext.regs[30]);
   auto sp = reinterpret_cast<uintptr_t *>(uc->uc_mcontext.sp);
 #endif
   for (int i = 0; i < 12; ++i)
