@@ -40,7 +40,10 @@ jobs:
         # This image bootstraps signed Arch Linux ARM packages. Its digest is
         # reviewed together with dependency changes, never updated by the bot.
         run: |
-          docker run --rm -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
+          # pacman's download sandbox needs Landlock syscalls that the runner's
+          # Docker seccomp profile blocks. Keep pacman's own sandbox enabled.
+          docker run --rm --security-opt seccomp=unconfined \
+            -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             menci/archlinuxarm@sha256:4bf586efc126560618f26d1b3b9f3ea42af2da2b23f2738594e92858beecc6ef \
             bash -euc '
