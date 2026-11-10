@@ -128,7 +128,7 @@ def download_archive(opener, url, output):
                 elif error.code not in (408, 429, 500, 502, 503, 504):
                     raise
             if attempt == 2:
-                raise
+                raise OSError('original archive download failed after three attempts: ' + str(error)) from error
             print('Original archive download interrupted; retrying (%d/3)' % (attempt + 2),
                   file=sys.stderr)
             time.sleep(attempt + 1)
