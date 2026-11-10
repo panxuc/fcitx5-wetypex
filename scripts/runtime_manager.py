@@ -297,7 +297,7 @@ class RuntimeManager:
         return dict(runtime=str(self.target), architecture=self.arch,
                     current=installed, default=desired,
                     update_available=bool(installed and not newer and
-                        (installed != desired or current.get('preparation') != self.preparation())),
+                        current.get('generation') != self.generation_id(self.profile())),
                     pending=read_json(self.pending), history=read_json(self.history))
 
     def preparation(self):
@@ -305,6 +305,14 @@ class RuntimeManager:
         if not prepare.exists():
             prepare = Path(__file__).resolve().parent.parent / 'tools/prepare_macos_runtime.py'
         return hashlib.sha256((digest(prepare) + ':storage-v2').encode()).hexdigest()
+
+    def generation_id(self, profile):
+        components = {name: self.catalog['components'][key]
+                      for name, key in profile['components'].items()}
+        fingerprint = hashlib.sha256(json.dumps(dict(profile=profile, components=components,
+                     ui_required=self.ui_required, preparation=self.preparation(), owner=self.owner),
+                     sort_keys=True).encode()).hexdigest()[:12]
+        return profile['version'] + '-' + self.arch + '-' + fingerprint
 
     def immutable(self, path, expected):
         """Share only verified immutable payloads, including across installations."""
@@ -770,11 +778,7 @@ class RuntimeManager:
                         self.archive(self.catalog['components'][previous['components'][name]]['archive'], download)
             selected = {name: self.catalog['components'][key]
                         for name, key in profile['components'].items()}
-            fingerprint = hashlib.sha256(json.dumps(dict(profile=profile, components=selected,
-                                                         ui_required=self.ui_required,
-                                                         preparation=self.preparation(), owner=self.owner),
-                                         sort_keys=True).encode()).hexdigest()[:12]
-            generation_id = profile['version'] + '-' + self.arch + '-' + fingerprint
+            generation_id = self.generation_id(profile)
             target = self.store / generation_id
             self.store.mkdir(parents=True, exist_ok=True, mode=0o700)
             created = False
