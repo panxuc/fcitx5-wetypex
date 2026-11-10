@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(fcitx5-wetypex VERSION 2.2.3.657 LANGUAGES C CXX)
+project(fcitx5-wetypex VERSION 3.0.1.684 LANGUAGES C CXX)
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/PKGBUILD.in"
   WETYPE_PACKAGE_RELEASE_LINE REGEX "^pkgrel=[0-9]+$")
 string(REGEX REPLACE "^pkgrel=" "" WETYPE_PACKAGE_RELEASE "${WETYPE_PACKAGE_RELEASE_LINE}")
@@ -18,6 +18,7 @@ find_package(Fcitx5Config REQUIRED)
 find_package(Fcitx5Utils REQUIRED)
 find_package(Fcitx5ModuleClipboard REQUIRED)
 find_package(LibIMEPinyin 1.0.11 REQUIRED)
+include(cmake/TargetSysroot.cmake)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(JSONC REQUIRED IMPORTED_TARGET json-c)
 pkg_check_modules(FONTCONFIG REQUIRED IMPORTED_TARGET fontconfig)
@@ -82,7 +83,9 @@ target_compile_definitions(fcitx5-wetypex-settings PRIVATE
   WETYPE_ACCOUNT_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-account"
   WETYPE_BACKEND="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-backend"
   WETYPE_TRANSFER="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-transfer"
-  WETYPE_VERSION="${PROJECT_VERSION}")
+  WETYPE_SETUP="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-setup"
+  WETYPE_RUNTIME_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/fcitx5-wetypex/runtime-profiles.json"
+  WETYPE_VERSION="${PROJECT_VERSION}-${WETYPE_PACKAGE_RELEASE}")
 add_executable(fcitx5-wetypex-clipboard-set src/clipboard/main.cpp)
 target_link_libraries(fcitx5-wetypex-clipboard-set PRIVATE ${WETYPE_QT_PACKAGE}::Gui PkgConfig::WETYPE_WAYLAND)
 add_library(wetypex-config-ui MODULE src/configui/main.cpp)
@@ -105,8 +108,9 @@ foreach(qt_major 5 6)
     endif()
   endif()
 endforeach()
-if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
-  message(FATAL_ERROR "The verified original engine sample requires Linux x86-64")
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" WETYPE_ARCHITECTURE)
+if(NOT WETYPE_ARCHITECTURE MATCHES "^(x86_64|amd64|aarch64|arm64)$")
+  message(FATAL_ERROR "The original engine host supports Linux x86-64 and ARM64")
 endif()
 set(ENABLE_TESTING OFF CACHE BOOL "libkqueue tests" FORCE)
 FetchContent_Declare(kqueue
@@ -120,12 +124,24 @@ if(NOT kqueue_POPULATED)
 endif()
 set(WETYPE_SUPPORT_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/fcitx5-wetypex")
 add_executable(wetypex-engine-host src/backend/macos_host.cpp)
+set(WETYPE_QEMU_AARCH64 "/usr/bin/qemu-aarch64" CACHE FILEPATH "ARM64 userspace compatibility provider")
+target_compile_definitions(wetypex-engine-host PRIVATE WETYPE_QEMU_AARCH64="${WETYPE_QEMU_AARCH64}")
 add_dependencies(wetypex-engine-host kqueue)
 target_link_libraries(wetypex-engine-host PRIVATE PkgConfig::JSONC Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(wetypex-engine-host PRIVATE -Wall -Wextra)
-find_program(WETYPE_CLANGXX clang++ REQUIRED)
+find_program(WETYPE_CLANGXX clang++)
 if(NOT WETYPE_CLANGXX)
   message(FATAL_ERROR "clang++ is required for the original libc++ ABI")
+endif()
+set(WETYPE_CLANG_TARGET_FLAGS)
+if(CMAKE_CROSSCOMPILING)
+  list(APPEND WETYPE_CLANG_TARGET_FLAGS "--target=${CMAKE_LIBRARY_ARCHITECTURE}")
+  if(CMAKE_SYSROOT)
+    list(APPEND WETYPE_CLANG_TARGET_FLAGS "--sysroot=${CMAKE_SYSROOT}")
+  endif()
+endif()
+if(WETYPE_ARCHITECTURE MATCHES "^(aarch64|arm64)$")
+  include(cmake/DarwinLibcxx.cmake)
 endif()
 option(WETYPE_BUNDLED_CURL "Embed pinned WebSocket-capable libcurl in the transport bridge" ON)
 if(WETYPE_BUNDLED_CURL)
@@ -136,20 +152,27 @@ else()
   set(WETYPE_CURL_LINK_FLAGS ${CURL_LDFLAGS} -lcurl)
 endif()
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/wetypex-locale.so
-  COMMAND ${WETYPE_CLANGXX} -std=c++17 -stdlib=libc++ -shared -fPIC -O2
+  COMMAND ${WETYPE_CLANGXX} ${WETYPE_CLANG_TARGET_FLAGS} -std=c++17 -stdlib=libc++
+  ${WETYPE_DARWIN_CXX_COMPILE_FLAGS} -shared -fPIC -O2
   ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/darwin_locale.cpp -ldl -pthread
+  ${WETYPE_DARWIN_CXX_LINK_FLAGS}
   -Wl,-z,relro,-z,now -o ${CMAKE_CURRENT_BINARY_DIR}/wetypex-locale.so
-  DEPENDS src/backend/darwin_locale.cpp VERBATIM)
+  DEPENDS src/backend/darwin_locale.cpp VERBATIM COMMAND_EXPAND_LISTS)
 add_custom_target(wetypex-locale ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/wetypex-locale.so)
 add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/wcwss_bridge.so
-  COMMAND ${WETYPE_CLANGXX} -std=c++17 -stdlib=libc++ -shared -fPIC -O2
+  COMMAND ${WETYPE_CLANGXX} ${WETYPE_CLANG_TARGET_FLAGS} -std=c++17 -stdlib=libc++
+  ${WETYPE_DARWIN_CXX_COMPILE_FLAGS} -shared -fPIC -O2
   ${WETYPE_CURL_COMPILE_FLAGS} ${CMAKE_CURRENT_SOURCE_DIR}/src/backend/wcwss_bridge.cpp
-  ${WETYPE_CURL_LINK_FLAGS} -pthread -Wl,-z,relro,-z,now,-z,defs
+  ${WETYPE_DARWIN_CXX_LINK_FLAGS} ${WETYPE_CURL_LINK_FLAGS} -pthread -Wl,-z,relro,-z,now,-z,defs
   -o ${CMAKE_CURRENT_BINARY_DIR}/wcwss_bridge.so
   DEPENDS src/backend/wcwss_bridge.cpp ${WETYPE_CURL_LIBRARY} VERBATIM COMMAND_EXPAND_LISTS)
 add_custom_target(wetypex-wcwss-bridge ALL DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/wcwss_bridge.so)
 if(WETYPE_BUNDLED_CURL)
   add_dependencies(wetypex-wcwss-bridge wetypex-curl)
+endif()
+if(TARGET wetypex-darwin-cxx)
+  add_dependencies(wetypex-locale wetypex-darwin-cxx)
+  add_dependencies(wetypex-wcwss-bridge wetypex-darwin-cxx)
 endif()
 add_library(wetypex MODULE src/plugin/wetype.cpp)
 set_target_properties(wetypex PROPERTIES PREFIX "")
@@ -169,10 +192,12 @@ target_compile_definitions(wetypex PRIVATE WETYPE_SYMBOLS="${CMAKE_INSTALL_FULL_
 target_compile_definitions(wetypex PRIVATE WETYPE_WECHAT_EMOTICONS="${CMAKE_INSTALL_FULL_DATADIR}/fcitx5-wetypex/wechat-emoticons.json")
 target_link_libraries(wetypex PRIVATE PkgConfig::FONTCONFIG)
 target_compile_definitions(wetypex PRIVATE WETYPE_UPDATE="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-update")
+target_compile_definitions(wetypex PRIVATE WETYPE_SETUP="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-setup")
 target_compile_options(wetypex PRIVATE -Wall -Wextra)
 
 configure_file(data/wetypex-addon.conf.in wetypex-addon.conf @ONLY)
 configure_file(scripts/fcitx5-wetypex-backend.sh.in fcitx5-wetypex-backend @ONLY)
+configure_file(scripts/runtime_lease.sh.in runtime-lease.sh @ONLY)
 configure_file(scripts/fcitx5-wetypex-account.sh.in fcitx5-wetypex-account @ONLY)
 configure_file(scripts/fcitx5-wetypex-sync.sh.in fcitx5-wetypex-sync @ONLY)
 configure_file(scripts/fcitx5-wetypex-syncd.sh.in fcitx5-wetypex-syncd @ONLY)
@@ -209,7 +234,8 @@ install(DIRECTORY data/themes/ DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5/theme
 install(FILES data/fcitx5-wetypex-settings.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
 install(DIRECTORY data/icons/hicolor/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor)
 install(PROGRAMS scripts/setup_runtime.py tools/prepare_macos_runtime.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
-install(FILES scripts/wechat_emoticons.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/runtime-lease.sh DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+install(FILES scripts/wechat_emoticons.py scripts/runtime_catalog.py scripts/runtime_manager.py data/runtime-profiles.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES scripts/voice_stream.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-LICENSE)
 install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-ISC-LICENSE)

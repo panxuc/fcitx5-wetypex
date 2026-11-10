@@ -1,4 +1,9 @@
 name: 发布
+run-name: WeTypeX release ${{ inputs.tag || github.ref_name }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 on:
   push:
@@ -20,7 +25,15 @@ permissions:
   contents: write
 
 jobs:
+  arm64:
+    if: ${{ !inputs.only_aur }}
+    uses: ./.github/workflows/packages-arm64.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
   release:
+    needs: arm64
     if: ${{ !inputs.only_aur }}
     runs-on: ubuntu-latest
     env:
@@ -89,6 +102,16 @@ jobs:
           test "$arch_version" = "$version"
           tar --zstd -C dist/debian-root -cf \
             "dist/fcitx5-wetypex-${version}-linux-x86_64.tar.zst" .
+
+      - name: 汇总 ARM64 软件包
+        uses: actions/download-artifact@v7
+        with:
+          name: fcitx5-wetypex-arm64-packages
+          path: dist
+
+      - name: 为全部架构生成校验和
+        shell: bash
+        run: |
           (
             cd dist
             while IFS= read -r -d '' file; do
@@ -114,7 +137,7 @@ jobs:
             dist/debian/fcitx5-wetypex_*.deb
             dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
-            dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
+            dist/fcitx5-wetypex-*-linux-*.tar.zst
             dist/SHA256SUMS
 
       - name: 创建 GitHub Release
@@ -128,7 +151,7 @@ jobs:
             dist/debian/fcitx5-wetypex_*.deb
             dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
-            dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
+            dist/fcitx5-wetypex-*-linux-*.tar.zst
             dist/SHA256SUMS
           )
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then

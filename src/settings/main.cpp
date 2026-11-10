@@ -59,6 +59,14 @@ static QJsonObject readJsonObject(const QString &path) {
     return {};
   return QJsonDocument::fromJson(file.readAll()).object();
 }
+static QString processStartTicks(int pid) {
+  QFile file("/proc/" + QString::number(pid) + "/stat");
+  if (!file.open(QIODevice::ReadOnly))
+    return {};
+  const auto stat = file.readAll();
+  const auto fields = stat.mid(stat.lastIndexOf(')') + 2).split(' ');
+  return fields.size() > 19 ? QString::fromLatin1(fields[19]) : QString();
+}
 static void runAccount(QWidget *owner, const QStringList &arguments,
                        std::function<void(int, const QJsonObject &)> done) {
   auto *process = new QProcess(owner);
@@ -1533,6 +1541,104 @@ int main(int argc, char **argv) {
                   true, "auto_update"),
            48),
        row("我要反馈", {}, feedback, 48)}));
+  const auto runtimeRoot = QStandardPaths::writableLocation(
+      QStandardPaths::GenericDataLocation) + "/fcitx5-wetypex";
+  const auto runtimePath = qEnvironmentVariable("WETYPE_RUNTIME_DIR", runtimeRoot + "/runtime");
+  const auto supportedRuntime = readJsonObject(QStringLiteral(WETYPE_RUNTIME_PROFILES))
+                                    .value("default").toString();
+  auto *runtimeVersion = new QLabel;
+  runtimeVersion->setWordWrap(true);
+  runtimeVersion->setObjectName("rowSubtitle");
+  auto *runtimeUpdate = greenButton("下载并更新原版核心");
+  auto *runtimeRollback = new QPushButton("回退上个版本");
+  auto *runtimeCleanup = new QPushButton("清理旧版本");
+  runtimeUpdate->setObjectName("runtimeUpdate");
+  runtimeRollback->setObjectName("runtimeRollback");
+  runtimeCleanup->setObjectName("runtimeCleanup");
+  runtimeCleanup->setToolTip("保留当前、上个可回退版本和待应用更新，清理多余安装包及运行时；保留词库和配对数据");
+  auto *runtimeProcess = new QProcess(&window);
+  auto refreshRuntime = [=] {
+    const auto current = readJsonObject(runtimePath + "/runtime.json")
+                             .value("version").toString();
+    const auto pending = readJsonObject(runtimeRoot + "/runtime-pending.json");
+    const auto history = readJsonObject(runtimeRoot + "/runtime-history.json");
+    const auto operation = readJsonObject(runtimeRoot + "/runtime-operation.json");
+    const auto pid = operation.value("pid").toInt();
+    const bool operationAlive = pid > 0 ?
+        (!operation.value("start_ticks").toString().isEmpty() &&
+         processStartTicks(pid) == operation.value("start_ticks").toString())
+        : QDateTime::currentSecsSinceEpoch() - operation.value("started_at").toDouble() < 30;
+    const bool busy = runtimeProcess->state() != QProcess::NotRunning ||
+        (operation.value("busy").toBool() && operationAlive);
+    runtimeUpdate->setEnabled(!busy);
+    runtimeCleanup->setEnabled(!busy);
+    runtimeRollback->setEnabled(!busy &&
+        (pending.isEmpty() || !pending.value("error").toString().isEmpty()) &&
+        !history.value("previous").toString().isEmpty());
+    QString detail = "原版核心：" + (current.isEmpty()
+        ? (QFile::exists(runtimePath + "/image.macho") ? QStringLiteral("已安装旧版，更新后显示版本")
+                                                       : QStringLiteral("尚未安装")) : current);
+    if (!supportedRuntime.isEmpty())
+      detail += " · 支持版本：" + supportedRuntime;
+    if (busy)
+      detail += operation.value("operation").toString() == "cleanup"
+          ? QStringLiteral("\n正在清理旧版本，可继续输入…")
+          : QStringLiteral("\n正在准备并检查更新，可继续输入…");
+    else if (!pending.isEmpty()) {
+      const auto error = pending.value("error").toString();
+      const auto client = readJsonObject(runtimeRoot + "/runtime-client.json");
+      const bool liveClient = client.value("protocol").toInt() == 1 &&
+          QDateTime::currentSecsSinceEpoch() - client.value("updated_at").toDouble() < 10;
+      detail += error.isEmpty() ? (liveClient ? QStringLiteral("\n已准备就绪，将在输入结束后切换")
+                                             : QStringLiteral("\n更新已准备。首次升级请重启 Fcitx5；之后可自动切换。"))
+                               : "\n更新未应用：" + error;
+    }
+    else if (!operation.value("error").toString().isEmpty())
+      detail += "\n上次操作失败：" + operation.value("error").toString();
+    else if (operation.value("busy").toBool() && !operationAlive)
+      detail += QStringLiteral("\n上次操作已中断，可以重试。");
+    else if (operation.value("operation").toString() == "cleanup") {
+      const auto result = operation.value("result").toObject();
+      if (result.value("deferred").toBool())
+        detail += QStringLiteral("\n更新正在进行，稍后可再次清理。");
+      else if (result.contains("removed_bytes"))
+        detail += QStringLiteral("\n已清理 %1 MiB 文件，保留当前版本和回退版本。")
+            .arg(result.value("removed_bytes").toDouble() / (1024 * 1024), 0, 'f', 1);
+    }
+    runtimeVersion->setText(detail);
+  };
+  auto runRuntime = [=, &window](const QString &operation) {
+    if (operation == "update" && !QFile::exists(runtimePath + "/image.macho") &&
+        QMessageBox::question(&window, "下载原版核心",
+            "将从微信输入法官方网站下载兼容版本。请阅读并同意原版软件许可后继续。") != QMessageBox::Yes)
+      return;
+    runtimeProcess->setProgram(qEnvironmentVariable("WETYPE_SETUP_LAUNCHER", WETYPE_SETUP));
+    runtimeProcess->setProperty("runtimeOperation", operation);
+    runtimeProcess->setArguments(operation == "cleanup" ? QStringList{"--cleanup", "--background"}
+        : operation == "rollback" ? QStringList{"--rollback", "--defer", "--background"}
+        : QStringList{"--update", "--download", "--accept-upstream-license", "--defer", "--background"});
+    runtimeProcess->start();
+    refreshRuntime();
+  };
+  QObject::connect(runtimeUpdate, &QPushButton::clicked, [=] { runRuntime("update"); });
+  QObject::connect(runtimeRollback, &QPushButton::clicked, [=] { runRuntime("rollback"); });
+  QObject::connect(runtimeCleanup, &QPushButton::clicked, [=] { runRuntime("cleanup"); });
+  wetype::onProcessDone(runtimeProcess, &window, [=, &window](int code, QProcess::ExitStatus) {
+    if (code)
+      QMessageBox::warning(&window, "原版核心管理", QString::fromUtf8(
+          runtimeProcess->readAllStandardError()).right(1500));
+    refreshRuntime();
+  });
+  about.body->addWidget(runtimeVersion);
+  auto *runtimeButtons = new QHBoxLayout;
+  runtimeButtons->addWidget(runtimeUpdate);
+  runtimeButtons->addWidget(runtimeRollback);
+  runtimeButtons->addWidget(runtimeCleanup);
+  about.body->addLayout(runtimeButtons);
+  auto *runtimeTimer = new QTimer(&window);
+  QObject::connect(runtimeTimer, &QTimer::timeout, refreshRuntime);
+  runtimeTimer->start(1500);
+  refreshRuntime();
   about.body->addStretch();
   auto *copyright =
       new QLabel("WeTypeX 社区项目\n原版核心及相关商标归其权利人所有\n"

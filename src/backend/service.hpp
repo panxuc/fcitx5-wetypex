@@ -59,6 +59,16 @@ static bool hotword_collect(void *opaque, HotWord item) {
   json_object_array_add(array, row.release());
   return true;
 }
+#if defined(__aarch64__)
+// The original enumerator passes the large value first, then its context.
+// On x86-64 that value lives on the stack and context still occupies RDI;
+// ARM64 passes its address in x0 and context in x1.
+static bool darwin_hotword_collect(HotWord item, void *opaque) {
+  return hotword_collect(opaque, item);
+}
+#else
+#define darwin_hotword_collect hotword_collect
+#endif
 struct ServiceCandidate {
   std::string text, engineText;
   std::vector<unsigned char> id;
@@ -513,6 +523,13 @@ static void service_loop() {
         wire::boolean(response.get(), "requested", true);
       }
     } else if (op == "hotword_list" || op == "hotword_set") {
+      // Local words load asynchronously. An early empty list must never be
+      // mistaken for deletion or overwrite a migrated dictionary.
+      if (!wait_user_data()) {
+        wire::put(response.get(), "error", std::string("user dictionary is still loading"));
+        transport.reply(source, wire::dump(response.get()));
+        continue;
+      }
       if (op == "hotword_set") {
         auto id = wire::str(request.get(), "id"),
              key = wire::str(request.get(), "key"),
@@ -537,8 +554,8 @@ static void service_loop() {
         }
       }
       auto *array = json_object_new_array();
-      ((void (*)(decltype(&hotword_collect), void *))syms.at(
-          "_wxime_get_user_hot_word"))(hotword_collect, array);
+      ((void (*)(decltype(&darwin_hotword_collect), void *))syms.at(
+          "_wxime_get_user_hot_word"))(darwin_hotword_collect, array);
       json_object_object_add(response.get(), "hotwords", array);
     } else if (op == "close") {
       auto it = sessions.find(client);

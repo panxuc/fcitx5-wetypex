@@ -51,10 +51,11 @@ makepkg -C -f --noconfirm
 
 - `CMakeLists.txt` 的 `project(... VERSION ...)`。
 - `packaging/PKGBUILD.in` 的 `pkgver`。
-- `tools/package_release.py` 的 `version`。
 - 发布修订时同步更新 `packaging/PKGBUILD.in`、AUR `PKGBUILD` 的
-  `pkgrel` 与 `packaging/nfpm.yaml` 的 `release`。
+  `pkgrel`。源码包和 nFPM 元数据从 CMake 与 `pkgrel` 读取版本。
 - README 安装示例。
+
+ARM64 构建、原版核心兼容档案、旧用户迁移及自动更新 PR 的流程见[运行时升级与 ARM64](runtime-upgrade-research.md)。发行流程等待两个架构的软件包构建全部完成，再汇总产物与校验和。
 
 ## 安装布局
 

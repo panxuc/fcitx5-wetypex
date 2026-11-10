@@ -12,12 +12,21 @@ if(NOT WETYPE_OPENSSL_MAKE)
   message(FATAL_ERROR "make is required for private OpenSSL")
 endif()
 set(WETYPE_CURL_OPENSSL_PREFIX "${CMAKE_CURRENT_BINARY_DIR}/private-openssl")
+set(WETYPE_OPENSSL_TARGET linux-x86_64)
+if(WETYPE_ARCHITECTURE MATCHES "^(aarch64|arm64)$")
+  set(WETYPE_OPENSSL_TARGET linux-aarch64)
+endif()
+set(WETYPE_OPENSSL_CFLAGS "${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_RELEASE} -fPIC -fno-lto")
+if(CMAKE_CROSSCOMPILING AND CMAKE_SYSROOT)
+  string(APPEND WETYPE_OPENSSL_CFLAGS " --sysroot=\"${CMAKE_SYSROOT}\"")
+endif()
 ExternalProject_Add(wetypex-openssl
   SOURCE_DIR "${wetypex_openssl_SOURCE_DIR}"
   BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/wetypex-openssl"
   CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "CC=${CMAKE_C_COMPILER}"
-    "CFLAGS=${CMAKE_C_FLAGS} ${CMAKE_C_FLAGS_RELEASE} -fPIC -fno-lto"
-    "${wetypex_openssl_SOURCE_DIR}/Configure" linux-x86_64
+    "CFLAGS=${WETYPE_OPENSSL_CFLAGS}"
+    "LDFLAGS=${CMAKE_EXE_LINKER_FLAGS}"
+    "${wetypex_openssl_SOURCE_DIR}/Configure" ${WETYPE_OPENSSL_TARGET}
     no-shared no-tests no-module no-dso
     "--prefix=${WETYPE_CURL_OPENSSL_PREFIX}" --libdir=lib --openssldir=/etc/ssl
   BUILD_COMMAND ${WETYPE_OPENSSL_MAKE} -j2

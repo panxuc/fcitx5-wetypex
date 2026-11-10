@@ -4,10 +4,25 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      runtime_checks:
+        type: boolean
+        default: false
 
 jobs:
+  arm64:
+    uses: ./.github/workflows/packages-arm64.yml
+    permissions:
+      contents: read
+    with:
+      runtime_checks: true
   nix:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
@@ -103,6 +118,20 @@ jobs:
           test "$(dpkg-deb -f dist/debian/*.deb Version)" = "$version-$revision"
           cd dist/debian
           sha256sum fcitx5-wetypex_*.deb > SHA256SUMS
+      - name: 在旧基线上运行真实原版核心与 TLS 通道
+        if: inputs.runtime_checks
+        run: |
+          docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -v "$PWD/dist:/out:ro" wetypex-build-jammy bash -euc '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              dpkg --unpack /out/debian/*.deb
+              fcitx5-wetypex-setup --download --accept-upstream-license
+              fcitx5-wetypex-setup --check --transport || {
+                cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+              }
+            '
       - name: 保存兼容旧系统的 deb
         uses: actions/upload-artifact@v7
         with:
@@ -175,6 +204,20 @@ jobs:
           test "$(dpkg-deb -f dist/ubuntu20/*.deb Version)" = "$version-$revision"
           cd dist/ubuntu20
           sha256sum *.deb > SHA256SUMS
+      - name: 在 Focal 与稳定框架 SDK 中运行真实核心
+        if: inputs.runtime_checks
+        run: |
+          docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -v "$PWD/dist:/out:ro" wetypex-build-focal bash -euc '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              dpkg --unpack /out/ubuntu20/*.deb
+              fcitx5-wetypex-setup --download --accept-upstream-license
+              fcitx5-wetypex-setup --check --transport || {
+                cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+              }
+            '
       - uses: actions/upload-artifact@v7
         with:
           name: fcitx5-wetypex-focal-legacy

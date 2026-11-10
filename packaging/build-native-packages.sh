@@ -4,7 +4,12 @@ set -euo pipefail
 project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' "$project_root/CMakeLists.txt" | head -n1)
 revision=$(sed -n 's/^pkgrel=//p' "$project_root/packaging/PKGBUILD.in")
-output="$project_root/dist"
+output="${WETYPEX_OUTPUT_DIR:-$project_root/dist}"
+case "$(uname -m)" in
+  x86_64) package_arch=amd64 ;;
+  aarch64|arm64) package_arch=arm64 ;;
+  *) printf 'Unsupported package architecture\n' >&2; exit 1 ;;
+esac
 docker_network_args=()
 if [[ -n "${WETYPEX_DOCKER_NETWORK:-}" ]]; then
     docker_network_args=(--network "$WETYPEX_DOCKER_NETWORK")
@@ -39,6 +44,7 @@ docker run --rm "${docker_network_args[@]}" --user "$(id -u):$(id -g)" \
     env WETYPEX_LAYER_SHELL=ON /src/packaging/container-stage.sh /out/fedora-root lib64
 
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|^arch: amd64$|arch: $package_arch|" \
     -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/debian-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
@@ -47,6 +53,7 @@ nfpm package --config "$output/nfpm-debian.yaml" --packager deb \
     --target "$output/debian/"
 
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|^arch: amd64$|arch: $package_arch|" \
     -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/fedora-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
@@ -63,6 +70,7 @@ docker run --rm "${docker_network_args[@]}" --user "$(id -u):$(id -g)" \
     -v "$project_root:/src:ro" -v "$output:/out" \
     wetypex-build-ubuntu20 env WETYPEX_LAYER_SHELL=OFF /src/packaging/container-stage.sh /out/ubuntu20-root lib
 sed -e "s|@WETYPEX_VERSION@|$version|g" \
+    -e "s|^arch: amd64$|arch: $package_arch|" \
     -e "s|@WETYPEX_RELEASE@|$revision|g" \
     -e "s|@WETYPEX_STAGE@|$output/ubuntu20-root|g" \
     -e "s|@WETYPEX_PROJECT_ROOT@|$project_root|g" \
@@ -72,4 +80,4 @@ sed -e "s|@WETYPEX_VERSION@|$version|g" \
     -e 's/libjson-c5/libjson-c4/' \
     "$project_root/packaging/nfpm.yaml" >"$output/nfpm-ubuntu20.yaml"
 nfpm package --config "$output/nfpm-ubuntu20.yaml" --packager deb \
-    --target "$output/ubuntu20/fcitx5-wetypex-legacy_${version}-${revision}_amd64.deb"
+    --target "$output/ubuntu20/fcitx5-wetypex-legacy_${version}-${revision}_${package_arch}.deb"

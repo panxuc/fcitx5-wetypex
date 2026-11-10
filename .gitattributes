@@ -4,3 +4,4 @@
 packaging/PKGBUILD.in linguist-language=Shell
 packaging/aur/PKGBUILD linguist-language=Shell
 scripts/*.sh.in linguist-language=Shell
+*.patch whitespace=-blank-at-eol

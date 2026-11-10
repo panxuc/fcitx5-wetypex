@@ -33,7 +33,7 @@
 
 | 能力 | Linux 集成状态 |
 | --- | --- |
-| 全拼、双拼、五笔 | 使用原版 macOS 2.2.3.657 输入核心和词典 |
+| 全拼、双拼、五笔 | 使用兼容档案声明的原版输入核心和词典 |
 | 智能拼写与云候选 | 原版本地候选与桌面云候选合并，云端新增候选带 ☁ 标记 |
 | 微信表情 | 仅在可识别的微信客户端中推荐，候选显示用户安装包中的原图；普通 emoji 保留 |
 | Fcitx5 输入体验 | 原生 input method 插件、内嵌预编辑、分页与选词 |
@@ -49,7 +49,7 @@
 
 ## 工作方式
 
-WeTypeX 安装程序从官方包中提取输入核心与词典，生成固定地址的 Linux 可加载映像；运行时由一个小型 Mach-O ABI 兼容宿主提供原版核心实际使用的 Darwin C/C++ 接口，并将网络传输接到 Linux 的 TLS 与 WebSocket 实现。
+WeTypeX 安装程序从官方包中提取输入核心与词典，根据 Mach-O 元数据准备 Linux 可加载映像；运行时由一个小型 ABI 兼容宿主提供原版核心使用的 Darwin C/C++ 接口，并将网络传输接到 Linux 的 TLS 与 WebSocket 实现。
 
 ```text
 应用程序
@@ -74,7 +74,7 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 从 [GitHub Releases](https://github.com/panxuc/fcitx5-wetypex/releases/latest) 下载软件包：
 
 ```bash
-sudo pacman -U ./fcitx5-wetypex-2.2.3.657-16-x86_64.pkg.tar.zst
+sudo pacman -U ./fcitx5-wetypex-3.0.1.684-16-x86_64.pkg.tar.zst
 ```
 
 也可以从 AUR 安装：
@@ -90,7 +90,7 @@ paru -S fcitx5-wetypex
 ### Debian 与 Ubuntu
 
 ```bash
-sudo apt install ./fcitx5-wetypex_2.2.3.657-16_amd64.deb
+sudo apt install ./fcitx5-wetypex_3.0.1.684-16_amd64.deb
 ```
 
 从修订 `8` 起，标准 deb 使用 Ubuntu 22.04 的 glibc 2.35、Qt5 和稳定版 Fcitx5 构建，可用于 Ubuntu 22.04、24.04、26.04 及 Debian 12/13。LLVM unwinder 已显式列入依赖，Ubuntu 26.04 会安装 `llvm-libunwind1`，避免核心因缺少 `libunwind.so.1` 无法启动。
@@ -102,7 +102,7 @@ Ubuntu 20.04 和 glibc 2.31 的系统使用独立的 `fcitx5-wetypex-legacy_..._
 ### Fedora 与兼容的 RPM 发行版
 
 ```bash
-sudo dnf install ./fcitx5-wetypex-2.2.3.657-16.x86_64.rpm
+sudo dnf install ./fcitx5-wetypex-3.0.1.684-16.x86_64.rpm
 ```
 
 FFmpeg 及部分桌面依赖可能来自发行版启用的附加软件仓库。
@@ -111,7 +111,7 @@ RPM 以 Fedora 40 为构建基线。Arch 是滚动发行版，发布包跟随当
 
 ### NixOS
 
-Flake 提供 `packages.x86_64-linux.fcitx5-wetypex` 和同一包的 `default` 别名。
+Flake 提供 `packages.x86_64-linux.fcitx5-wetypex`、`packages.aarch64-linux.fcitx5-wetypex` 和各架构的 `default` 别名。
 在现有系统 flake 中加入 input，并跟随系统的 Nixpkgs，以匹配 Fcitx5 插件 ABI：
 
 ```nix
@@ -173,16 +173,16 @@ Nix 包支持通过 `.override` 调整以下参数，四个布尔开关默认均
 
 应用系统配置后，按下方“首次设置”准备原版运行时。Nix 构建只安装社区适配层，原版安装包和资源仍由用户在接受上游许可后自行初始化。
 
-包的安装路径、动态库、证书和 Bubblewrap 沙箱已适配 Nix store；Nix 包由 flake 锁文件管理更新，内置发行版更新器关闭。更新 input 后重新构建系统即可升级。
+包的安装路径、动态库、证书和 Bubblewrap 沙箱已适配 Nix store；Nix 包由 flake 锁文件管理更新，内置发行版包更新器关闭，用户目录中的兼容核心仍可更新。更新 input 后重新构建系统即可升级。
 
 包会为录音和设置界面提供所需工具路径，并在沙箱中提供 DNS 配置和时区数据，不依赖 FHS 的 `/usr` 布局。CI 同时检查 flake 构建和源码包中的 Nix 入口；正式源码压缩包也包含 `flake.nix`、锁文件及 `nix/`。
 
-在源码仓库中可单独运行 `nix build .#fcitx5-wetypex`。`nix flake check` 和 CI 会构建默认、全关闭、仅语音、仅 AI 四种组合，检查混合开关的兼容性。本 flake 仅提供 Linux x86_64 输出。
+在源码仓库中可单独运行 `nix build .#fcitx5-wetypex`。`nix flake check` 和 CI 构建默认、全关闭、仅语音、仅 AI 四种组合，分别提供 Linux x86-64 和 ARM64 输出。ARM64 安装、执行方式与更新流程见[运行时升级与 ARM64](docs/runtime-updates.md)。
 
 ### 便携归档
 
 ```bash
-sudo tar --zstd -C / -xf ./fcitx5-wetypex-2.2.3.657-16-linux-x86_64.tar.zst
+sudo tar --zstd -C / -xf ./fcitx5-wetypex-3.0.1.684-16-linux-x86_64.tar.zst
 ```
 
 便携归档不经过软件包管理器解析依赖，更适合已经准备好运行环境的系统。
@@ -197,7 +197,7 @@ cmake --build build --parallel
 sudo cmake --install build
 ```
 
-构建要求 CMake 3.24、Clang、C++20 编译器以及上述依赖的开发文件。完整依赖和打包流程见[发行与打包](docs/distribution.md)。
+构建要求 CMake 3.16+、Clang、C++17 编译器及上述开发依赖；新 Fcitx SDK 使用 C++20。ARM64 私有 libc++ 构建需要 CMake 3.20+ 和较新的 Clang。完整流程见[发行与打包](docs/distribution.md)。
 
 ## 首次设置
 
@@ -205,13 +205,13 @@ sudo cmake --install build
 
 使用已经下载的官方安装包：
 
-固定版本的官方下载地址：[WeType_2.2.3_657.zip](https://download.weread.qq.com/app/wxkb/mac/2.2.3/WeType_2.2.3_657.zip)。
+可用 `fcitx5-wetypex-setup --query-upstream` 查询官网稳定版。安装器只接受已经验证并随适配层提供的版本；旧版官方包仍可显式选择：
 
 ```bash
 fcitx5-wetypex-setup --archive /path/to/WeType_2.2.3_657.zip
 ```
 
-明确接受上游许可后，从脚本内固定的腾讯地址下载：
+明确接受上游许可后，下载兼容档案中的默认核心及其资源组件：
 
 ```bash
 fcitx5-wetypex-setup --download --accept-upstream-license
@@ -231,11 +231,14 @@ fcitx5-remote -r
 
 配置、原版运行时、配对身份、词库和同步状态都位于用户目录，与 `/usr` 下的软件文件分离；正常升级不会重建账户。
 
+已有用户可在“升级和反馈”中更新或回退原版核心，也可执行 `fcitx5-wetypex-setup --update --download --accept-upstream-license`。准备完成后等待输入空闲再切换，旧运行时和词库快照保留。迁移、回退与自动更新 PR 流程见[运行时升级与 ARM64](docs/runtime-updates.md)。
+
 ## 日常使用
 
 ```bash
 fcitx5-wetypex-settings          # 打开完整设置窗口
 fcitx5-wetypex-setup --check     # 检查原版运行时
+fcitx5-wetypex-setup --check --transport # 同时检查真实本地 TLS 通道
 fcitx5-wetypex-account group-info # 查看设备组和同步状态
 fcitx5-wetypex-account pairing-code # 生成新的六位匹配码
 fcitx5-wetypex-account network-info # 检查实际 libcurl 与 WS/WSS 支持
@@ -261,6 +264,7 @@ fcitx5-wetypex-account sync-now     # 请求个人词库与常用语同步
 | 内容 | 默认位置 |
 | --- | --- |
 | 原版核心与词典 | `~/.local/share/fcitx5-wetypex/runtime` |
+| 运行时历史与迁移快照 | `~/.local/share/fcitx5-wetypex/runtime-generations` |
 | 账户身份与原版业务状态 | `~/.local/share/fcitx5-wetypex/account` |
 | 用户词库、常用语与同步状态 | `~/.local/share/fcitx5-wetypex/state` |
 | 从官方包提取的界面资源 | `~/.local/share/fcitx5-wetypex/ui` |

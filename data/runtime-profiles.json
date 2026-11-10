@@ -1,0 +1,659 @@
+{
+  "schema": 1,
+  "default": "3.0.1.684",
+  "fallback": "2.2.3.657",
+  "archives": {
+    "legacy": {
+      "version": "2.2.3.657",
+      "url": "https://download.weread.qq.com/app/wxkb/mac/2.2.3/WeType_2.2.3_657.zip",
+      "sha256": "8ef48bb21fe9d7b017b8a09fb9496b1b8f960ad960db27872226e08c09db264b",
+      "dictionaries": {
+        "bccn.bin": {
+          "sha256": "0c81bf8456d677619c92515533b953aea59f154026237a98cbb27169808850ce",
+          "size": 153304
+        },
+        "bwcjpmac_jianpin.bin": {
+          "sha256": "6b25f7cf22fd1744f5b9982b3d50a160071c682f3a0a04cfbaf0816a2b3595c5",
+          "size": 12630429
+        },
+        "bwcnenmac.bin": {
+          "sha256": "1fb9978e6ef858ec7b62e64902e77960bb5f3bad9c7bce896be9a60cdf03a9ed",
+          "size": 6015641
+        },
+        "bwcnmac.bin": {
+          "sha256": "0bcd607f9c1b6577b214f2ed1131b0644d0b8be75e5ba94ae60099051a28687b",
+          "size": 30380467
+        },
+        "bwcnmacv8.bin": {
+          "sha256": "0825428d0a6e29cdae46284c2dd4fbe87c3e65e13c0ead7455b85348c1782d47",
+          "size": 31686606
+        },
+        "cell_dict.hf.zh": {
+          "sha256": "683fa8d9aee43a1585eab42092badb82534c4f2abf2a29ae6bb79b9fd636b8d7",
+          "size": 1087688
+        },
+        "cell_dict.sc.zh": {
+          "sha256": "b32eeb306d67a3a2af856198b9aae32c46b80b8e7a5f03f0f0701aebea823676",
+          "size": 32056
+        },
+        "cell_dict.ssrc.zh": {
+          "sha256": "0a5ac7d40a6b639f422eb97664d574a2e99ee63b03136a6ee6733a98c2887ffb",
+          "size": 319557
+        },
+        "ckvdmac.bin": {
+          "sha256": "96dc854048331d760e326ab08a1ddc2befb6050fd8d49879ce18a29c94be7f16",
+          "size": 39717069
+        },
+        "decgnr.bin": {
+          "sha256": "b120c2b392e8cb8b9fc59997c662ed81b8fe33475eb6882c008be11c47f49a7f",
+          "size": 74186752
+        },
+        "editpinyin.bin": {
+          "sha256": "0727da4a5e48ac9637af994ae26635104d1e0f5ee2fd73ba673d7f4f8ef16760",
+          "size": 727244
+        },
+        "hpmac_base.bin": {
+          "sha256": "23625b7998013f22d2d264a854384b776e0f8a2435c738999cec9d76a0816295",
+          "size": 1872
+        },
+        "index.json": {
+          "sha256": "ff03ce4ad8a82ee599dab44e14bccc665c7052afe9fdf269510201044bc54dcf",
+          "size": 6319
+        },
+        "lmcnmac.bin": {
+          "sha256": "79a5a0d743aa573f928c4bbc19f9117cc88fe0b0580d995026e9b09c2af6c6b2",
+          "size": 16758278
+        },
+        "ln2py.bin": {
+          "sha256": "5f093a99ae592b80a4640972143b489023051950b9b6b356c8a677e4689f06da",
+          "size": 18706
+        },
+        "md.bin": {
+          "sha256": "7d0bccdda22be26f0d90fae5f16a091d7185042af441b910ad0122a0968d8921",
+          "size": 22482
+        },
+        "mdltrpc.bin": {
+          "sha256": "4795dfe3c552c41c4ed85e5339f04a4ccd28ffc9007c713ed540c3c977a933ac",
+          "size": 2286728
+        },
+        "mpd_e2e.bin": {
+          "sha256": "3d88f159f738b0b7812a282d6c63be1f533b971c5306fff187d6610bedc49a39",
+          "size": 3696767
+        },
+        "nlrgpt2_nnlm.bin": {
+          "sha256": "c2e3f06c3f67f1b1765e1d55046e20842d66fd463f1aa0933097930c5238dc47",
+          "size": 16211368
+        },
+        "noun_tag_dict.bin": {
+          "sha256": "8d752d8904a87cde5abce2a85139ef6eec3674a1864cca8b8855e3ff086bd879",
+          "size": 4253612
+        },
+        "pcc.bin": {
+          "sha256": "39f2e6eb1ce5c75b9016f225a92cf35fae9186dd26dc7593f206dcb2a5f76769",
+          "size": 359015
+        },
+        "prism_v2.bin": {
+          "sha256": "ffce16409c1237a73e19a5c61e4c845f46c5bbb0ddba6e0b7957409031feebce",
+          "size": 11994
+        },
+        "sepd.bin": {
+          "sha256": "a5220eff5428065442f498766c9f3f75db2b298ec788a40974075b5334441e6d",
+          "size": 875323
+        },
+        "slwd_pc_second_level.bin": {
+          "sha256": "b06ed061a2c6075d94af6dd7c0688b957e61d58361768b58956199bfde25e510",
+          "size": 51694531
+        },
+        "stt.bin": {
+          "sha256": "4fe8091cad8e16c45559cb5a77204e48ecc08efb6cbec9d1cebb7334e2114426",
+          "size": 1215033
+        },
+        "swbd86.bin": {
+          "sha256": "405551327da0b67e0743a2a5cc0d64e9197d120de96d1d22e095c114ad08553a",
+          "size": 4104383
+        },
+        "swbd98.bin": {
+          "sha256": "a7185abeeb6e33a11748664fbfcf7ac3b3dcffc5a444e6ded53937b52dfe70c0",
+          "size": 4097346
+        },
+        "swbdnc.bin": {
+          "sha256": "ff1a61426b39a1b7467934ad5029f09b79ac963e2bc36e722811c64d62738036",
+          "size": 4084818
+        },
+        "tts.bin": {
+          "sha256": "4421ac97ab8c9945eaddf4b048c575caabb18518a064b18c6fb62077b999d249",
+          "size": 18744
+        },
+        "wkvc2e.pc.bin": {
+          "sha256": "6afeb215b1567285716f1b6c91409876cd552bba08c9fcdc8d03d3220465f04c",
+          "size": 1122500
+        },
+        "wsd.bin": {
+          "sha256": "9718ae8f2483e6f259da96fbfd3cec6281b4b3ceb90e25f0e29510b2c563698d",
+          "size": 226377
+        },
+        "wwkvc2e.bin": {
+          "sha256": "c284ea3ef68b1e0f42aa5eb5721454617082294abed9f2b55bcc8bd7ae452caa",
+          "size": 143634
+        }
+      }
+    },
+    "stable": {
+      "version": "3.0.0.670",
+      "url": "https://download.weread.qq.com/app/wxkb/mac/3.0.0/WeType_3.0.0_670.zip",
+      "sha256": "51a240e8b3459463034c74cfc94df2412edbf7814b167e1f5fc88439b32f651b",
+      "md5": "72761697cc39066909711c7809f0029f",
+      "metadata_url": "https://download.weread.qq.com/app/wxkb/mac/3.0.0/install_info_3.0.0_670.json",
+      "dictionaries": {
+        "bccn.bin": {
+          "sha256": "0c81bf8456d677619c92515533b953aea59f154026237a98cbb27169808850ce",
+          "size": 153304
+        },
+        "bwcjpmac_jianpin.bin": {
+          "sha256": "6b25f7cf22fd1744f5b9982b3d50a160071c682f3a0a04cfbaf0816a2b3595c5",
+          "size": 12630429
+        },
+        "bwcnenmac.bin": {
+          "sha256": "1fb9978e6ef858ec7b62e64902e77960bb5f3bad9c7bce896be9a60cdf03a9ed",
+          "size": 6015641
+        },
+        "bwcnmac.bin": {
+          "sha256": "0bcd607f9c1b6577b214f2ed1131b0644d0b8be75e5ba94ae60099051a28687b",
+          "size": 30380467
+        },
+        "bwcnmacv8.bin": {
+          "sha256": "0825428d0a6e29cdae46284c2dd4fbe87c3e65e13c0ead7455b85348c1782d47",
+          "size": 31686606
+        },
+        "cell_dict.hf.zh": {
+          "sha256": "683fa8d9aee43a1585eab42092badb82534c4f2abf2a29ae6bb79b9fd636b8d7",
+          "size": 1087688
+        },
+        "cell_dict.sc.zh": {
+          "sha256": "b32eeb306d67a3a2af856198b9aae32c46b80b8e7a5f03f0f0701aebea823676",
+          "size": 32056
+        },
+        "cell_dict.ssrc.zh": {
+          "sha256": "0a5ac7d40a6b639f422eb97664d574a2e99ee63b03136a6ee6733a98c2887ffb",
+          "size": 319557
+        },
+        "ckvdmac.bin": {
+          "sha256": "96dc854048331d760e326ab08a1ddc2befb6050fd8d49879ce18a29c94be7f16",
+          "size": 39717069
+        },
+        "decgnr.bin": {
+          "sha256": "b120c2b392e8cb8b9fc59997c662ed81b8fe33475eb6882c008be11c47f49a7f",
+          "size": 74186752
+        },
+        "editpinyin.bin": {
+          "sha256": "0727da4a5e48ac9637af994ae26635104d1e0f5ee2fd73ba673d7f4f8ef16760",
+          "size": 727244
+        },
+        "hpmac_base.bin": {
+          "sha256": "23625b7998013f22d2d264a854384b776e0f8a2435c738999cec9d76a0816295",
+          "size": 1872
+        },
+        "index.json": {
+          "sha256": "ff03ce4ad8a82ee599dab44e14bccc665c7052afe9fdf269510201044bc54dcf",
+          "size": 6319
+        },
+        "lmcnmac.bin": {
+          "sha256": "79a5a0d743aa573f928c4bbc19f9117cc88fe0b0580d995026e9b09c2af6c6b2",
+          "size": 16758278
+        },
+        "ln2py.bin": {
+          "sha256": "5f093a99ae592b80a4640972143b489023051950b9b6b356c8a677e4689f06da",
+          "size": 18706
+        },
+        "md.bin": {
+          "sha256": "7d0bccdda22be26f0d90fae5f16a091d7185042af441b910ad0122a0968d8921",
+          "size": 22482
+        },
+        "mdltrpc.bin": {
+          "sha256": "4795dfe3c552c41c4ed85e5339f04a4ccd28ffc9007c713ed540c3c977a933ac",
+          "size": 2286728
+        },
+        "mpd_e2e.bin": {
+          "sha256": "3d88f159f738b0b7812a282d6c63be1f533b971c5306fff187d6610bedc49a39",
+          "size": 3696767
+        },
+        "nlrgpt2_nnlm.bin": {
+          "sha256": "c2e3f06c3f67f1b1765e1d55046e20842d66fd463f1aa0933097930c5238dc47",
+          "size": 16211368
+        },
+        "noun_tag_dict.bin": {
+          "sha256": "8d752d8904a87cde5abce2a85139ef6eec3674a1864cca8b8855e3ff086bd879",
+          "size": 4253612
+        },
+        "pcc.bin": {
+          "sha256": "39f2e6eb1ce5c75b9016f225a92cf35fae9186dd26dc7593f206dcb2a5f76769",
+          "size": 359015
+        },
+        "prism_v2.bin": {
+          "sha256": "ffce16409c1237a73e19a5c61e4c845f46c5bbb0ddba6e0b7957409031feebce",
+          "size": 11994
+        },
+        "sepd.bin": {
+          "sha256": "a5220eff5428065442f498766c9f3f75db2b298ec788a40974075b5334441e6d",
+          "size": 875323
+        },
+        "slwd_pc_second_level.bin": {
+          "sha256": "b06ed061a2c6075d94af6dd7c0688b957e61d58361768b58956199bfde25e510",
+          "size": 51694531
+        },
+        "stt.bin": {
+          "sha256": "4fe8091cad8e16c45559cb5a77204e48ecc08efb6cbec9d1cebb7334e2114426",
+          "size": 1215033
+        },
+        "swbd86.bin": {
+          "sha256": "405551327da0b67e0743a2a5cc0d64e9197d120de96d1d22e095c114ad08553a",
+          "size": 4104383
+        },
+        "swbd98.bin": {
+          "sha256": "a7185abeeb6e33a11748664fbfcf7ac3b3dcffc5a444e6ded53937b52dfe70c0",
+          "size": 4097346
+        },
+        "swbdnc.bin": {
+          "sha256": "ff1a61426b39a1b7467934ad5029f09b79ac963e2bc36e722811c64d62738036",
+          "size": 4084818
+        },
+        "tts.bin": {
+          "sha256": "4421ac97ab8c9945eaddf4b048c575caabb18518a064b18c6fb62077b999d249",
+          "size": 18744
+        },
+        "wkvc2e.pc.bin": {
+          "sha256": "6afeb215b1567285716f1b6c91409876cd552bba08c9fcdc8d03d3220465f04c",
+          "size": 1122500
+        },
+        "wsd.bin": {
+          "sha256": "9718ae8f2483e6f259da96fbfd3cec6281b4b3ceb90e25f0e29510b2c563698d",
+          "size": 226377
+        },
+        "wwkvc2e.bin": {
+          "sha256": "c284ea3ef68b1e0f42aa5eb5721454617082294abed9f2b55bcc8bd7ae452caa",
+          "size": 143634
+        }
+      }
+    },
+    "beta": {
+      "version": "3.0.1.679",
+      "url": "https://download.weread.qq.com/app/wxkb/mac/3.0.1/WeType_3.0.1_679.zip",
+      "sha256": "92d2d29f4056e2e26563aebcbc2646fd33a1466a9f4ef29146d1314cbe345cb7",
+      "md5": "2eee1e4a87c36f8145cf9fcb123da88e",
+      "metadata_url": "https://download.weread.qq.com/app/wxkb/mac/3.0.1/install_info_3.0.1_679.json",
+      "dictionaries": {
+        "bccn.bin": {
+          "sha256": "0c81bf8456d677619c92515533b953aea59f154026237a98cbb27169808850ce",
+          "size": 153304
+        },
+        "bwcjpmac_jianpin.bin": {
+          "sha256": "6b25f7cf22fd1744f5b9982b3d50a160071c682f3a0a04cfbaf0816a2b3595c5",
+          "size": 12630429
+        },
+        "bwcnenmac.bin": {
+          "sha256": "1fb9978e6ef858ec7b62e64902e77960bb5f3bad9c7bce896be9a60cdf03a9ed",
+          "size": 6015641
+        },
+        "bwcnmac.bin": {
+          "sha256": "0bcd607f9c1b6577b214f2ed1131b0644d0b8be75e5ba94ae60099051a28687b",
+          "size": 30380467
+        },
+        "bwcnmacv8.bin": {
+          "sha256": "0825428d0a6e29cdae46284c2dd4fbe87c3e65e13c0ead7455b85348c1782d47",
+          "size": 31686606
+        },
+        "cell_dict.hf.zh": {
+          "sha256": "683fa8d9aee43a1585eab42092badb82534c4f2abf2a29ae6bb79b9fd636b8d7",
+          "size": 1087688
+        },
+        "cell_dict.sc.zh": {
+          "sha256": "b32eeb306d67a3a2af856198b9aae32c46b80b8e7a5f03f0f0701aebea823676",
+          "size": 32056
+        },
+        "cell_dict.ssrc.zh": {
+          "sha256": "0a5ac7d40a6b639f422eb97664d574a2e99ee63b03136a6ee6733a98c2887ffb",
+          "size": 319557
+        },
+        "ckvdmac.bin": {
+          "sha256": "96dc854048331d760e326ab08a1ddc2befb6050fd8d49879ce18a29c94be7f16",
+          "size": 39717069
+        },
+        "decgnr.bin": {
+          "sha256": "b120c2b392e8cb8b9fc59997c662ed81b8fe33475eb6882c008be11c47f49a7f",
+          "size": 74186752
+        },
+        "editpinyin.bin": {
+          "sha256": "0727da4a5e48ac9637af994ae26635104d1e0f5ee2fd73ba673d7f4f8ef16760",
+          "size": 727244
+        },
+        "hpmac_base.bin": {
+          "sha256": "23625b7998013f22d2d264a854384b776e0f8a2435c738999cec9d76a0816295",
+          "size": 1872
+        },
+        "index.json": {
+          "sha256": "ff03ce4ad8a82ee599dab44e14bccc665c7052afe9fdf269510201044bc54dcf",
+          "size": 6319
+        },
+        "lmcnmac.bin": {
+          "sha256": "79a5a0d743aa573f928c4bbc19f9117cc88fe0b0580d995026e9b09c2af6c6b2",
+          "size": 16758278
+        },
+        "ln2py.bin": {
+          "sha256": "5f093a99ae592b80a4640972143b489023051950b9b6b356c8a677e4689f06da",
+          "size": 18706
+        },
+        "md.bin": {
+          "sha256": "7d0bccdda22be26f0d90fae5f16a091d7185042af441b910ad0122a0968d8921",
+          "size": 22482
+        },
+        "mdltrpc.bin": {
+          "sha256": "4795dfe3c552c41c4ed85e5339f04a4ccd28ffc9007c713ed540c3c977a933ac",
+          "size": 2286728
+        },
+        "mpd_e2e.bin": {
+          "sha256": "3d88f159f738b0b7812a282d6c63be1f533b971c5306fff187d6610bedc49a39",
+          "size": 3696767
+        },
+        "nlrgpt2_nnlm.bin": {
+          "sha256": "c2e3f06c3f67f1b1765e1d55046e20842d66fd463f1aa0933097930c5238dc47",
+          "size": 16211368
+        },
+        "noun_tag_dict.bin": {
+          "sha256": "8d752d8904a87cde5abce2a85139ef6eec3674a1864cca8b8855e3ff086bd879",
+          "size": 4253612
+        },
+        "pcc.bin": {
+          "sha256": "39f2e6eb1ce5c75b9016f225a92cf35fae9186dd26dc7593f206dcb2a5f76769",
+          "size": 359015
+        },
+        "prism_v2.bin": {
+          "sha256": "ffce16409c1237a73e19a5c61e4c845f46c5bbb0ddba6e0b7957409031feebce",
+          "size": 11994
+        },
+        "sepd.bin": {
+          "sha256": "a5220eff5428065442f498766c9f3f75db2b298ec788a40974075b5334441e6d",
+          "size": 875323
+        },
+        "slwd_pc_second_level.bin": {
+          "sha256": "b06ed061a2c6075d94af6dd7c0688b957e61d58361768b58956199bfde25e510",
+          "size": 51694531
+        },
+        "stt.bin": {
+          "sha256": "4fe8091cad8e16c45559cb5a77204e48ecc08efb6cbec9d1cebb7334e2114426",
+          "size": 1215033
+        },
+        "swbd86.bin": {
+          "sha256": "405551327da0b67e0743a2a5cc0d64e9197d120de96d1d22e095c114ad08553a",
+          "size": 4104383
+        },
+        "swbd98.bin": {
+          "sha256": "a7185abeeb6e33a11748664fbfcf7ac3b3dcffc5a444e6ded53937b52dfe70c0",
+          "size": 4097346
+        },
+        "swbdnc.bin": {
+          "sha256": "ff1a61426b39a1b7467934ad5029f09b79ac963e2bc36e722811c64d62738036",
+          "size": 4084818
+        },
+        "tts.bin": {
+          "sha256": "4421ac97ab8c9945eaddf4b048c575caabb18518a064b18c6fb62077b999d249",
+          "size": 18744
+        },
+        "wkvc2e.pc.bin": {
+          "sha256": "6afeb215b1567285716f1b6c91409876cd552bba08c9fcdc8d03d3220465f04c",
+          "size": 1122500
+        },
+        "wsd.bin": {
+          "sha256": "9718ae8f2483e6f259da96fbfd3cec6281b4b3ceb90e25f0e29510b2c563698d",
+          "size": 226377
+        },
+        "wwkvc2e.bin": {
+          "sha256": "c284ea3ef68b1e0f42aa5eb5721454617082294abed9f2b55bcc8bd7ae452caa",
+          "size": 143634
+        }
+      }
+    },
+    "official-3.0.1.684-03421f7460ad": {
+      "version": "3.0.1.684",
+      "url": "https://download.weread.qq.com/app/wxkb/mac/3.0.1/WeType_3.0.1_684.zip",
+      "sha256": "03421f7460ad5e1cff125ed2c257c80dfb37ca4c3dba668310da336e7b90aa82",
+      "dictionaries": {
+        "bccn.bin": {
+          "sha256": "0c81bf8456d677619c92515533b953aea59f154026237a98cbb27169808850ce",
+          "size": 153304
+        },
+        "bwcjpmac_jianpin.bin": {
+          "sha256": "6b25f7cf22fd1744f5b9982b3d50a160071c682f3a0a04cfbaf0816a2b3595c5",
+          "size": 12630429
+        },
+        "bwcnenmac.bin": {
+          "sha256": "1fb9978e6ef858ec7b62e64902e77960bb5f3bad9c7bce896be9a60cdf03a9ed",
+          "size": 6015641
+        },
+        "bwcnmac.bin": {
+          "sha256": "0bcd607f9c1b6577b214f2ed1131b0644d0b8be75e5ba94ae60099051a28687b",
+          "size": 30380467
+        },
+        "bwcnmacv8.bin": {
+          "sha256": "0825428d0a6e29cdae46284c2dd4fbe87c3e65e13c0ead7455b85348c1782d47",
+          "size": 31686606
+        },
+        "cell_dict.hf.zh": {
+          "sha256": "683fa8d9aee43a1585eab42092badb82534c4f2abf2a29ae6bb79b9fd636b8d7",
+          "size": 1087688
+        },
+        "cell_dict.sc.zh": {
+          "sha256": "b32eeb306d67a3a2af856198b9aae32c46b80b8e7a5f03f0f0701aebea823676",
+          "size": 32056
+        },
+        "ckvdmac.bin": {
+          "sha256": "96dc854048331d760e326ab08a1ddc2befb6050fd8d49879ce18a29c94be7f16",
+          "size": 39717069
+        },
+        "decgnr.bin": {
+          "sha256": "b120c2b392e8cb8b9fc59997c662ed81b8fe33475eb6882c008be11c47f49a7f",
+          "size": 74186752
+        },
+        "editpinyin.bin": {
+          "sha256": "0727da4a5e48ac9637af994ae26635104d1e0f5ee2fd73ba673d7f4f8ef16760",
+          "size": 727244
+        },
+        "hpmac_base.bin": {
+          "sha256": "23625b7998013f22d2d264a854384b776e0f8a2435c738999cec9d76a0816295",
+          "size": 1872
+        },
+        "index.json": {
+          "sha256": "fa1152cd5f74ebf4287e161cf3c7ebcae4e49b4d6540b44cdd233d766d954d7e",
+          "size": 6104
+        },
+        "lmcnmac.bin": {
+          "sha256": "79a5a0d743aa573f928c4bbc19f9117cc88fe0b0580d995026e9b09c2af6c6b2",
+          "size": 16758278
+        },
+        "ln2py.bin": {
+          "sha256": "5f093a99ae592b80a4640972143b489023051950b9b6b356c8a677e4689f06da",
+          "size": 18706
+        },
+        "md.bin": {
+          "sha256": "7d0bccdda22be26f0d90fae5f16a091d7185042af441b910ad0122a0968d8921",
+          "size": 22482
+        },
+        "mdltrpc.bin": {
+          "sha256": "4795dfe3c552c41c4ed85e5339f04a4ccd28ffc9007c713ed540c3c977a933ac",
+          "size": 2286728
+        },
+        "mpd_e2e.bin": {
+          "sha256": "3d88f159f738b0b7812a282d6c63be1f533b971c5306fff187d6610bedc49a39",
+          "size": 3696767
+        },
+        "nlrgpt2_nnlm.bin": {
+          "sha256": "c2e3f06c3f67f1b1765e1d55046e20842d66fd463f1aa0933097930c5238dc47",
+          "size": 16211368
+        },
+        "noun_tag_dict.bin": {
+          "sha256": "8d752d8904a87cde5abce2a85139ef6eec3674a1864cca8b8855e3ff086bd879",
+          "size": 4253612
+        },
+        "pcc.bin": {
+          "sha256": "39f2e6eb1ce5c75b9016f225a92cf35fae9186dd26dc7593f206dcb2a5f76769",
+          "size": 359015
+        },
+        "prism_v2.bin": {
+          "sha256": "ffce16409c1237a73e19a5c61e4c845f46c5bbb0ddba6e0b7957409031feebce",
+          "size": 11994
+        },
+        "sepd.bin": {
+          "sha256": "a5220eff5428065442f498766c9f3f75db2b298ec788a40974075b5334441e6d",
+          "size": 875323
+        },
+        "slwd_pc_second_level.bin": {
+          "sha256": "b06ed061a2c6075d94af6dd7c0688b957e61d58361768b58956199bfde25e510",
+          "size": 51694531
+        },
+        "stt.bin": {
+          "sha256": "4fe8091cad8e16c45559cb5a77204e48ecc08efb6cbec9d1cebb7334e2114426",
+          "size": 1215033
+        },
+        "swbd86.bin": {
+          "sha256": "405551327da0b67e0743a2a5cc0d64e9197d120de96d1d22e095c114ad08553a",
+          "size": 4104383
+        },
+        "swbd98.bin": {
+          "sha256": "a7185abeeb6e33a11748664fbfcf7ac3b3dcffc5a444e6ded53937b52dfe70c0",
+          "size": 4097346
+        },
+        "swbdnc.bin": {
+          "sha256": "ff1a61426b39a1b7467934ad5029f09b79ac963e2bc36e722811c64d62738036",
+          "size": 4084818
+        },
+        "tts.bin": {
+          "sha256": "4421ac97ab8c9945eaddf4b048c575caabb18518a064b18c6fb62077b999d249",
+          "size": 18744
+        },
+        "wkvc2e.pc.bin": {
+          "sha256": "6afeb215b1567285716f1b6c91409876cd552bba08c9fcdc8d03d3220465f04c",
+          "size": 1122500
+        },
+        "wsd.bin": {
+          "sha256": "9718ae8f2483e6f259da96fbfd3cec6281b4b3ceb90e25f0e29510b2c563698d",
+          "size": 226377
+        },
+        "wwkvc2e.bin": {
+          "sha256": "c284ea3ef68b1e0f42aa5eb5721454617082294abed9f2b55bcc8bd7ae452caa",
+          "size": 143634
+        }
+      },
+      "metadata_url": "https://download.weread.qq.com/app/wxkb/mac/3.0.1/install_info_3.0.1_684.json",
+      "md5": "7c251b253ec67388d8f51406af29819a"
+    }
+  },
+  "components": {
+    "legacy-engine": {
+      "archive": "legacy",
+      "member": "WeType.app/Contents/MacOS/WeType",
+      "sha256": "a68a92300cc38e5941f59832c516a37eb098c10c6bbe47ab3dcbe812705cf5ee",
+      "slices": {
+        "x86_64": "8cfd4249cc27338430d7ba06c487bbaea6805fb05de6c2624e481298e1d825f6",
+        "arm64": "1cbf1fff6fb19b6655b7d5f0d479f17fe03e04102fa0743b2af8c5b0240adb4d"
+      }
+    },
+    "legacy-flurry": {
+      "archive": "legacy",
+      "member": "WeType.app/Contents/Frameworks/flurry.framework/Versions/A/flurry",
+      "sha256": "4c97f45b03c511bf0611c7ccc39537b370b4dfba6ba3ba1ba4d9a42e4b6bbd39",
+      "slices": {
+        "x86_64": "a4c15be9399507263d5c36722f3873967b07bcccc7f0a077acb82f24fafe34d5",
+        "arm64": "1e932bda8687a320feb77ec21597511ad6e28b1ad6e6bb51235474ab3f573398"
+      }
+    },
+    "legacy-wxp2p": {
+      "archive": "legacy",
+      "member": "WeType.app/Contents/Frameworks/WXP2PTransferDyn.framework/Versions/A/WXP2PTransferDyn",
+      "sha256": "f99240391cbbb45c8162c9661ec1c7c3932aac53e4c674260b2be1cfcea963d6",
+      "slices": {
+        "x86_64": "c521ca188564435e866d4f427d3139755b812877659e454e63352d1b20ad9c47",
+        "arm64": "6b4f9c6f3415c9cdb5fea3d12924a37a1585d0081767a63f296cdee51d011b44"
+      }
+    },
+    "stable-engine": {
+      "archive": "stable",
+      "member": "WeType.app/Contents/MacOS/WeType",
+      "sha256": "ba19f0c2783acb8c6f09cf2c9d95e55a33bbc93034ef3d97ab728021cdda14a8",
+      "slices": {
+        "x86_64": "1b7e9c35a17d30c8b98b1ff15304504208e696024d6949d3f640a5bb66b05384",
+        "arm64": "861d0b7f61d6f666745aadfc3073b156e972be87d67ba71919938406b82adebb"
+      }
+    },
+    "beta-engine": {
+      "archive": "beta",
+      "member": "WeType.app/Contents/MacOS/WeType",
+      "sha256": "c3a9f8aee4b7a88726dc61700c867a94f943b12f95c6154a663f5afb6e3ad8d7",
+      "slices": {
+        "x86_64": "d5ca6c3f2890a140af9933f985e37fc0bba76803a69e38243ecfaf2213ed23a3",
+        "arm64": "e82fb1940f2694d7422bb10eb3de7f1a786ea08fe16310aa42e5917620670664"
+      }
+    },
+    "official-3.0.1.684-03421f7460ad-engine": {
+      "member": "WeType.app/Contents/MacOS/WeType",
+      "sha256": "91cb8e4bf84f68d9aa81c777ed3ec3fbc0a2fec9664ad189f007d3ed6460ffa3",
+      "slices": {
+        "x86_64": "c01d16117ffa5b210b125a5ab3b504f4f508455043178c1d7bc2e4ddd03d28ed",
+        "arm64": "43475fc103be7c87aeb77e5be63eb8240e12342cf407c5f9d269308d50cbc5ed"
+      },
+      "archive": "official-3.0.1.684-03421f7460ad"
+    }
+  },
+  "profiles": {
+    "2.2.3.657": {
+      "version": "2.2.3.657",
+      "abi": "mac-capi-v1",
+      "channel": "legacy",
+      "components": {
+        "engine": "legacy-engine",
+        "flurry": "legacy-flurry",
+        "wxp2p": "legacy-wxp2p"
+      },
+      "assets_archive": "legacy",
+      "dictionaries_archive": "legacy",
+      "data_compatibility": "ime-userdict-v5-hotword-v1"
+    },
+    "3.0.0.670": {
+      "version": "3.0.0.670",
+      "abi": "mac-capi-v1",
+      "channel": "stable",
+      "components": {
+        "engine": "stable-engine",
+        "flurry": "legacy-flurry",
+        "wxp2p": "legacy-wxp2p"
+      },
+      "assets_archive": "legacy",
+      "dictionaries_archive": "stable",
+      "data_compatibility": "ime-userdict-v5-hotword-v1"
+    },
+    "3.0.1.679": {
+      "version": "3.0.1.679",
+      "abi": "mac-capi-v1",
+      "channel": "beta",
+      "components": {
+        "engine": "beta-engine",
+        "flurry": "legacy-flurry",
+        "wxp2p": "legacy-wxp2p"
+      },
+      "assets_archive": "legacy",
+      "dictionaries_archive": "beta",
+      "data_compatibility": "ime-userdict-v5-hotword-v1"
+    },
+    "3.0.1.684": {
+      "version": "3.0.1.684",
+      "abi": "mac-capi-v1",
+      "channel": "stable",
+      "components": {
+        "engine": "official-3.0.1.684-03421f7460ad-engine",
+        "flurry": "legacy-flurry",
+        "wxp2p": "legacy-wxp2p"
+      },
+      "assets_archive": "legacy",
+      "dictionaries_archive": "official-3.0.1.684-03421f7460ad",
+      "data_compatibility": "ime-userdict-v5-hotword-v1"
+    }
+  }
+}

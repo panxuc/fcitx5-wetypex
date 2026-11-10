@@ -6,6 +6,11 @@ state="${WETYPE_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/s
 account="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
 config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+runtime_data="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex"
+if [ -f "$runtime_data/runtime-pending.json" ] || [ -f "$runtime_data/runtime-transaction.json" ]; then
+  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
+fi
+. "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
 test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
 mkdir -p "$state/user"
 chmod 700 "$state"
@@ -38,7 +43,7 @@ if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
   test -n "$model" || model=LINUX
   if [ -n "$uin" ] && [ -n "$device_code" ]; then
     env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
+      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
       --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
       --ro-bind-try /etc/localtime /etc/localtime \
       --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
@@ -46,7 +51,7 @@ if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
       --ro-bind-try /etc/pki /etc/pki --ro-bind-try /etc/ca-certificates /etc/ca-certificates \
       --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
       --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
-      --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support \
+      --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
       --setenv WETYPE_NETWORK_LIVE 1 --setenv WETYPE_CORE_UIN "$uin" \
       --setenv WETYPE_CORE_DEVICE_CODE "$device_code" --setenv WETYPE_DEVICE_MODEL "$model" \
       --setenv WETYPE_GROUP_ID "$group_id" --setenv WETYPE_GROUP_FUNCTIONS "$group_functions" \
@@ -59,10 +64,10 @@ fi
 # Offline and standalone sessions retain a private network namespace.
 # Clear the launch environment before bwrap: Focal's 0.4 lacks --clearenv.
 env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-net --unshare-pid --die-with-parent \
-  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
+  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
   --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
   --ro-bind-try /etc/localtime /etc/localtime \
   --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
   --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
-  --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support \
+  --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
   /support/wetypex-engine-host /input serve

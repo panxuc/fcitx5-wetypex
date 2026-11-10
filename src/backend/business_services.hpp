@@ -447,7 +447,7 @@ static void business_service() {
   mkdir(business_work, 0700);
   BusinessNetworkConfig network{5,
                                 0,
-                                "2.2.3(657)",
+                                upstream_app_version.c_str(),
                                 identity.model.c_str(),
                                 "",
                                 identity.device_code.c_str(),
@@ -553,7 +553,7 @@ static void business_service() {
       std::vector<unsigned char> device;
       protobuf_string(device, 1, identity.model);
       protobuf_uint(device, 2, 5);
-      protobuf_string(device, 4, "2.2.3(657)");
+      protobuf_string(device, 4, upstream_app_version);
       protobuf_uint(device, 5, 1);
       protobuf_string(request, 3,
                       std::string(reinterpret_cast<const char *>(device.data()),

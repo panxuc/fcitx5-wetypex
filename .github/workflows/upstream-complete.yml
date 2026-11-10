@@ -1,0 +1,31 @@
+name: 合并并发布通过验证的原版更新
+
+on:
+  workflow_run:
+    workflows: [验证原版更新]
+    types: [completed]
+
+concurrency:
+  group: upstream-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  complete:
+    if: vars.WETYPEX_UPSTREAM_AUTOMATION == 'release' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    steps:
+      # Never load candidate code/artifacts in this privileged job.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: 重新生成完整补丁，核对提交与所有检查后 squash 合并
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN: ${{ github.event.workflow_run.id }}
+        run: python3 tools/update_upstream.py --complete-run "$VERIFIED_RUN" --publish

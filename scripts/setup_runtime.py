@@ -7,20 +7,16 @@ import os
 import pathlib
 import platform
 import shutil
+import select
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 import zipfile
 
-UPSTREAM_VERSION='2.2.3.657'
-UPSTREAM_RELEASE,UPSTREAM_BUILD=UPSTREAM_VERSION.rsplit('.',1)
-UPSTREAM_ARCHIVE=f'WeType_{UPSTREAM_RELEASE}_{UPSTREAM_BUILD}.zip'
-URL=f'https://download.weread.qq.com/app/wxkb/mac/{UPSTREAM_RELEASE}/{UPSTREAM_ARCHIVE}'
-ARCHIVE_SHA='8ef48bb21fe9d7b017b8a09fb9496b1b8f960ad960db27872226e08c09db264b'
-ENGINE_SHA='a68a92300cc38e5941f59832c516a37eb098c10c6bbe47ab3dcbe812705cf5ee'
-FLURRY_SHA='4c97f45b03c511bf0611c7ccc39537b370b4dfba6ba3ba1ba4d9a42e4b6bbd39'
-WXP2P_SHA='f99240391cbbb45c8162c9661ec1c7c3932aac53e4c674260b2be1cfcea963d6'
+WORKER_STATUS = None
+WORKER_FD = None
 
 def install_ui_resources(archive, data):
     """Install verified original UI assets in user data; WeTypeX keeps its own icon."""
@@ -158,7 +154,121 @@ def stream_digest(stream, algorithm):
 def digest(path):
     with path.open('rb') as stream:return stream_digest(stream,'sha256')
 
-def validate_runtime(target):
+def probe_core(command, work, user_snapshot=None, report=None, seed_common_phrase=False, timeout=25):
+    """Exercise the same original-engine protocol used by the input method."""
+    if user_snapshot:
+        for name, relative in (('user','user'),('user_dict','userDict'),
+                               ('persistent_data','persistent_data')):
+            source=pathlib.Path(user_snapshot)/name
+            if source.is_dir():
+                shutil.copytree(source,pathlib.Path(work)/relative,symlinks=True)
+    command=list(command)
+    command[-1]='serve'
+    with tempfile.TemporaryFile() as errors:
+        process=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,
+                                 stderr=errors,env={})
+        pending=b''
+        deadline=time.monotonic()+timeout
+        sequence=0
+        def receive():
+            nonlocal pending
+            while b'\n' not in pending:
+                remaining=deadline-time.monotonic()
+                if remaining<=0 or not select.select([process.stdout],[],[],remaining)[0]:
+                    raise RuntimeError('original core protocol timed out')
+                block=os.read(process.stdout.fileno(),65536)
+                if not block:
+                    raise RuntimeError('original core closed its protocol')
+                pending+=block
+                if len(pending)>4194304:
+                    raise RuntimeError('original core reply exceeded its limit')
+            line,pending=pending.split(b'\n',1)
+            return json.loads(line)
+        def request(operation,**fields):
+            nonlocal sequence
+            sequence+=1
+            value=dict(op=operation,session=1,epoch=1,seq=sequence,**fields)
+            process.stdin.write((json.dumps(value)+'\n').encode())
+            process.stdin.flush()
+            while True:
+                value=receive()
+                if value.get('seq')==sequence and value.get('event')!='update':
+                    if value.get('error'):
+                        raise RuntimeError(value['error'])
+                    return value
+        failure=None
+        try:
+            if receive().get('event')!='ready':
+                raise RuntimeError('original core did not become ready')
+            words=request('hotword_list')['hotwords']
+            if seed_common_phrase:
+                words=request('hotword_set', key='compat', words='WeTypeX兼容性验证🧪')['hotwords']
+                if not any(row.get('words') == 'WeTypeX兼容性验证🧪' for row in words):
+                    raise RuntimeError('original core did not save its compatibility phrase')
+            canonical=sorted((x.get('id',''),x.get('key',''),x.get('words',''),
+                              x.get('kind',0)) for x in words)
+            if report is not None:
+                report.update(hotword_count=len(words),hotword_sha256=hashlib.sha256(
+                    json.dumps(canonical,ensure_ascii=False).encode()).hexdigest())
+            request('open')
+            for key in 'nihao':
+                response=request('key',key=key)
+            if not response.get('candidates'):
+                raise RuntimeError('original core generated no candidates')
+            expected=response['candidates'][0]
+            selected=request('select',index=0,revision=response['revision'])
+            if selected.get('commits')!=[expected] or selected.get('preedit'):
+                raise RuntimeError('original candidate selection did not commit')
+            request('reset')
+            if user_snapshot is None:
+                def select_text(text,**configuration):
+                    request('close')
+                    request('open',**configuration)
+                    for key in text:
+                        answer=request('key',key=key)
+                    if not answer.get('candidates'):
+                        raise RuntimeError('original input mode generated no candidates')
+                    selected=request('select',index=0,revision=answer['revision'])
+                    if selected.get('commits')!=[answer['candidates'][0]]:
+                        raise RuntimeError('original input mode failed to commit')
+                for scheme in range(1,8):
+                    select_text('riqi',double_scheme=scheme)
+                for scheme,text in ((0,'jjad'),(1,'jjdw'),(2,'jjad')):
+                    select_text(text,keyboard=5,wubi_solution=scheme)
+                request('close');request('open')
+                for expression,expected in (('1+1','2'),('0.1+0.2','0.3')):
+                    request('reset');request('key',key='v');request('vmode')
+                    for key in expression:answer=request('key',key=key)
+                    if expected not in answer.get('candidates',[]):
+                        raise RuntimeError('original calculator returned an incorrect value')
+                    selected=request('select',index=answer['candidates'].index(expected),
+                                     revision=answer['revision'])
+                    if selected.get('commits')!=[expected]:
+                        raise RuntimeError('original calculator failed to commit')
+                request('reset')
+        except (OSError,ValueError,KeyError,RuntimeError) as error:
+            failure=str(error)
+        finally:
+            process.stdin.close()
+            try:process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill();process.wait()
+            process.stdout.close()
+        if failure or process.returncode:
+            errors.seek(0)
+            return subprocess.CompletedProcess(command,process.returncode or 1,
+                        stderr=(failure or '').encode()+b'\n'+errors.read())
+    return subprocess.CompletedProcess(command,0,stderr=b'')
+
+
+def validate_runtime(target,user_snapshot=None,report=None,converted_snapshot=None,seed_common_phrase=False,transport_probe=False):
+    def failure(label, result):
+        data=pathlib.Path(os.environ.get('XDG_CACHE_HOME',str(pathlib.Path.home()/'.cache')))/'fcitx5-wetypex'
+        data.mkdir(mode=0o700,parents=True,exist_ok=True)
+        path=data/'last-runtime-check.log'
+        fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+        with os.fdopen(fd,'wb') as stream:stream.write(result.stderr[-262144:])
+        return False,f'{label} failed (exit {result.returncode}); see {path}'
     support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','/usr/lib/fcitx5-wetypex'))
     host=support/'wetypex-engine-host'
     locale=support/'locale.so'
@@ -170,49 +280,70 @@ def validate_runtime(target):
     if not bwrap:
         return False,'bubblewrap is not installed'
     try:
-        report=subprocess.run([str(host),str(support),'network-info'],
+        network_report=subprocess.run([str(host),str(support),'network-info'],
                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=10)
-        if not json.loads(report.stdout).get('utf8_json',False):
+        capabilities=json.loads(network_report.stdout)
+        if not capabilities.get('execution_ready', True):
+            return False,'此 ARM64 CPU 需要兼容执行组件，请通过发行版安装 qemu-user 后重试'
+        if not capabilities.get('utf8_json',False):
             return False,'UTF-8 JSON compatibility check failed; upgrade the WeTypeX engine host'
+        timeout=90 if capabilities.get('execution_provider')=='qemu' else 25
     except (subprocess.TimeoutExpired,ValueError,OSError):
         return False,'unable to check UTF-8 JSON compatibility'
     with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
         command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
                  '--ro-bind','/usr','/usr','--symlink','usr/lib','/lib',
-                 '--ro-bind','/lib64','/lib64','--symlink','usr/bin','/bin',
+                 '--ro-bind-try','/lib64','/lib64','--symlink','usr/bin','/bin',
                  '--proc','/proc','--dev','/dev','--tmpfs','/tmp',
                  '--ro-bind',str(target),'/input','--ro-bind',str(support),'/support',
                  '--bind',work,'/work','--chdir','/work',
                  '--setenv','PATH','/usr/bin','--setenv','HOME','/work',
                  '--setenv','WETYPE_SUPPORT_DIR','/support',
+                 '--setenv', 'WETYPE_ENGINE_PROVIDER', os.environ.get('WETYPE_ENGINE_PROVIDER', 'auto'),
                  '/support/wetypex-engine-host','/input','validate']
         try:
-            result=subprocess.run(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.PIPE,timeout=20,env={})
+            result=probe_core(command,work,user_snapshot,report,seed_common_phrase,timeout)
         except subprocess.TimeoutExpired:
             return False,'engine validation timed out'
         if result.returncode:
-            return False,'engine validation failed'
+            return failure('engine validation',result)
+        if converted_snapshot:
+            destination=pathlib.Path(converted_snapshot)
+            for name,relative in (('user','user'),('user_dict','userDict'),
+                                  ('persistent_data','persistent_data')):
+                source=pathlib.Path(work)/relative
+                if source.is_dir():
+                    shutil.copytree(source,destination/name,symlinks=True)
         transfer_command=command[:-3]+[
             '/support/wetypex-engine-host','/input/flurry','flurry-credentials']
         try:
             transfer=subprocess.run(transfer_command,stdin=subprocess.DEVNULL,
                                     stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.PIPE,timeout=20,env={})
+                                    stderr=subprocess.PIPE,timeout=timeout,env={})
         except subprocess.TimeoutExpired:
             return False,'file-transfer runtime validation timed out'
         if transfer.returncode:
-            return False,'file-transfer runtime validation failed'
+            return failure('file-transfer validation',transfer)
+        if transport_probe:
+            loopback_command=command[:-3]+[
+                '/support/wetypex-engine-host','/input/flurry','flurry-loopback']
+            try:
+                loopback=subprocess.run(loopback_command,stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,timeout=timeout,env={})
+            except subprocess.TimeoutExpired:
+                return False,'local TLS transport validation timed out'
+            if loopback.returncode:
+                return failure('local TLS transport validation',loopback)
         wxp2p_command=command[:-3]+[
             '/support/wetypex-engine-host','/input/wxp2p','module-run']
         try:
             wxp2p=subprocess.run(wxp2p_command,stdin=subprocess.DEVNULL,
                                  stdout=subprocess.DEVNULL,
-                                 stderr=subprocess.PIPE,timeout=20,env={})
+                                 stderr=subprocess.PIPE,timeout=timeout,env={})
         except subprocess.TimeoutExpired:
             return False,'WXP2P runtime validation timed out'
         if wxp2p.returncode:
-            return False,'WXP2P runtime validation failed'
+            return failure('WXP2P validation',wxp2p)
         combined_command=command[:-3]+[
             '--setenv','WETYPE_AUX_RUNTIME','/input/wxp2p',
             '--setenv','WETYPE_FLURRY_DOWNLOAD_DIR','/work/downloads',
@@ -221,7 +352,7 @@ def validate_runtime(target):
         try:
             combined=subprocess.run(combined_command,input=b'{"action":"quit"}\n',
                                     stdout=subprocess.PIPE,stderr=subprocess.PIPE,
-                                    timeout=20,env={})
+                                    timeout=timeout,env={})
         except subprocess.TimeoutExpired:
             return False,'combined WXP2P runtime validation timed out'
         try:
@@ -232,25 +363,39 @@ def validate_runtime(target):
             return False,'combined WXP2P runtime validation failed'
     return True,''
 
-def main():
-    ap=argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--archive',type=pathlib.Path,help=f'Original {UPSTREAM_ARCHIVE}')
-    ap.add_argument('--download',action='store_true',help='Download the pinned original package from Tencent')
-    ap.add_argument('--accept-upstream-license',action='store_true',help='Confirm acceptance of the upstream license before downloading')
-    ap.add_argument('--check',action='store_true')
-    ap.add_argument('--icons-only',action='store_true',help='Install original icons from the verified archive without replacing the engine')
-    ap.add_argument('--runtime-dir',type=pathlib.Path)
-    args=ap.parse_args()
-    data=pathlib.Path(os.environ.get('XDG_DATA_HOME',str(pathlib.Path.home()/'.local/share')))
-    target=args.runtime_dir or pathlib.Path(os.environ.get('WETYPE_RUNTIME_DIR',str(data/'fcitx5-wetypex/runtime')))
-    if platform.system()!='Linux' or platform.machine()!='x86_64':ap.error('WeTypeX supports Linux x86-64 only')
-    if args.check:
-        required=['image.macho','manifest.txt','symbols.txt','dicts.txt','resources/index.json','runtime.json',
-                  'flurry/image.macho','flurry/manifest.txt',
-                  'wxp2p/image.macho','wxp2p/manifest.txt']
-        missing=[name for name in required if not (target/name).is_file()]
-        ui=data/'fcitx5-wetypex/ui'
-        ui_required=['icons/input.svg','icons/icon_windows_close_btn.svg',
+
+def verify_upgrade(manager, previous_version, download):
+    """Verify real persisted data in both directions in an independent sandbox."""
+    from runtime_manager import RuntimeManager
+    with tempfile.TemporaryDirectory(prefix='wetypex-upgrade-check-') as directory:
+        root=pathlib.Path(directory)
+        temporary=RuntimeManager(root/'data',root/'data/fcitx5-wetypex/runtime',
+                                 validate_runtime,install_ui_resources,install_voice_resources,
+                                 manager.ui_required)
+        temporary.cache=manager.cache
+        temporary.cache_lock=manager.cache_lock
+        temporary.cache_reference=manager.cache / ('.retained-' + hashlib.sha256(
+            (str(temporary.root) + '\n' + str(temporary.target)).encode()).hexdigest() + '.json')
+        previous=temporary.stage(previous_version,download=download)['pending']['generation']
+        candidate=temporary.stage(manager.catalog['default'],download=download)['pending']['generation']
+        before,after,reverse={},{},{}
+        saved,converted=root/'saved',root/'converted'
+        saved.mkdir();converted.mkdir()
+        ready,error=validate_runtime(temporary.store/previous,report=before,
+                                    converted_snapshot=saved,seed_common_phrase=True)
+        if not ready:
+            raise ValueError(error)
+        ready,error=validate_runtime(temporary.store/candidate,saved,after,converted)
+        if not ready or before.get('hotword_sha256')!=after.get('hotword_sha256'):
+            raise ValueError(error or 'persisted common phrases changed during upgrade')
+        ready,error=validate_runtime(temporary.store/previous,converted,reverse)
+        if not ready or before.get('hotword_sha256')!=reverse.get('hotword_sha256'):
+            raise ValueError(error or 'previous runtime cannot read upgraded user data')
+        return dict(ok=True,previous=previous_version,current=manager.catalog['default'],
+                    architecture=manager.arch,hotword_count=before['hotword_count'],
+                    previous_can_read_upgraded_data=True)
+
+UI_REQUIRED=['icons/input.svg','icons/icon_windows_close_btn.svg',
                      'icons/voice.svg','icons/phrases.svg','icons/appearance.svg',
                      'icons/shortcuts.svg','icons/devices.svg','icons/mobile.svg',
                      'icons/about.svg','icons/icon_sync_device.svg',
@@ -276,87 +421,165 @@ def main():
                      'transfer-icons/icon_filetype_general.svg',
                      'transfer-icons/icon_filetype_folder.svg',
                      'transfer-images/img_connection_pc_to_phone.png']
-        missing_ui=[name for name in ui_required if not (ui/name).is_file()]
-        for name in ('fcitx5/themes/wetypex-light/next.svg',
-                     'fcitx5/themes/wetypex-light/prev.svg',
-                     'fcitx5/themes/wetypex-dark/next.svg',
-                     'fcitx5/themes/wetypex-dark/prev.svg'):
-            if not (data/name).is_file():missing_ui.append(name)
-        core_ready,core_error=(False,'runtime files are incomplete') if missing else validate_runtime(target)
-        runtime_version=''
-        try:runtime_version=json.loads((target/'runtime.json').read_text()).get('version','')
-        except (OSError,json.JSONDecodeError,AttributeError):pass
-        print(json.dumps({'supported_runtime_version':UPSTREAM_VERSION,
-                          'runtime_version':runtime_version,
-                          'runtime':str(target),'runtime_installed':not missing,
-                          'missing_runtime':missing,'ui':str(ui),
-                          'ui_installed':not missing_ui,'missing_ui':missing_ui,
-                          'core_ready':core_ready,'core_error':core_error},
-                         ensure_ascii=False,indent=2))
-        return 1 if missing or missing_ui or not core_ready else 0
-    if not args.archive and not args.download:ap.error('Supply --archive FILE or explicitly request --download')
-    if args.archive and args.download:ap.error('Choose one source')
+
+def main():
+    ap=argparse.ArgumentParser(description=__doc__)
+    ap.add_argument('--archive',type=pathlib.Path,help='Verified original archive; cached for future reuse')
+    ap.add_argument('--download',action='store_true',help='Download missing verified original archives')
+    ap.add_argument('--accept-upstream-license',action='store_true')
+    modes=ap.add_mutually_exclusive_group()
+    modes.add_argument('--check',action='store_true')
+    modes.add_argument('--status',action='store_true')
+    modes.add_argument('--update',action='store_true',help='Prepare the default supported runtime')
+    modes.add_argument('--activate-pending',action='store_true',help='Apply a prepared update when idle')
+    modes.add_argument('--rollback',action='store_true',help='Restore the previous runtime and its data snapshot')
+    modes.add_argument('--cleanup',action='store_true',help='Remove unused runtime generations and original ZIP caches')
+    modes.add_argument('--icons-only',action='store_true')
+    modes.add_argument('--cache-archive',type=pathlib.Path,help='Import an official ZIP for offline setup')
+    modes.add_argument('--query-upstream',action='store_true')
+    modes.add_argument('--verify-upgrade-from',metavar='VERSION',
+                       help='Check original persisted data upgrade and reverse compatibility in isolation')
+    ap.add_argument('--defer',action='store_true',help='Prepare without requesting immediate activation')
+    ap.add_argument('--dry-run',action='store_true',help='Preview --cleanup without removing files')
+    ap.add_argument('--version',help='Select a version from the installed compatibility catalog')
+    ap.add_argument('--upstream-channel',choices=('stable','beta'),default='stable')
+    ap.add_argument('--runtime-dir',type=pathlib.Path)
+    ap.add_argument('--transport',action='store_true',help='Include real local TLS transfer with --check')
+    ap.add_argument('--background',action='store_true',help='Continue an update or cleanup after closing settings')
+    ap.add_argument('--operation-fd',type=int,help=argparse.SUPPRESS)
+    args=ap.parse_args()
+    if args.dry_run and not args.cleanup:
+        ap.error('--dry-run requires --cleanup')
+    if args.cleanup and (args.archive or args.download or args.version or args.defer):
+        ap.error('--cleanup only removes unused local runtime files')
+    if args.transport and not args.check:
+        ap.error('--transport requires --check')
+    if args.query_upstream:
+        if args.download or args.archive or args.runtime_dir or args.version or args.defer:
+            ap.error('--query-upstream only reads the official release metadata')
+        from runtime_catalog import discover
+        print(json.dumps(discover(args.upstream_channel),ensure_ascii=False,indent=2))
+        return 0
+    if args.upstream_channel!='stable':
+        ap.error('--upstream-channel applies only to --query-upstream')
     if args.download and not args.accept_upstream_license:
-        ap.error('--download requires --accept-upstream-license; alternatively supply an existing --archive file')
-    target.parent.mkdir(parents=True,exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix='.wetype-setup-',dir=target.parent) as temporary:
-        temp=pathlib.Path(temporary)
-        archive=args.archive
-        if args.download:
-            archive=temp/'original.zip';print('Downloading the pinned original package…',flush=True)
-            with urllib.request.urlopen(URL,timeout=60) as response,archive.open('wb') as out:shutil.copyfileobj(response,out)
-        if digest(archive)!=ARCHIVE_SHA:raise ValueError(f'Archive SHA-256 mismatch; expected the verified {UPSTREAM_VERSION} package')
-        install_ui_resources(archive,data)
-        install_voice_resources(archive,data)
-        if args.icons_only:
-            print('Original UI assets installed in '+str(data/'fcitx5-wetypex/ui'))
+        ap.error('--download requires --accept-upstream-license')
+    data=pathlib.Path(os.environ.get('XDG_DATA_HOME',str(pathlib.Path.home()/'.local/share')))
+    target=args.runtime_dir or pathlib.Path(os.environ.get('WETYPE_RUNTIME_DIR',str(data/'fcitx5-wetypex/runtime')))
+    from runtime_manager import RuntimeManager, digest as archive_digest, lock
+    manager=RuntimeManager(data,target,validate_runtime,install_ui_resources,install_voice_resources,UI_REQUIRED)
+    if args.background and not (args.update or args.rollback or args.cleanup):
+        ap.error('--background requires --update, --rollback or --cleanup')
+    global WORKER_STATUS, WORKER_FD
+    if args.background:
+        import fcntl
+        manager.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(manager.root / 'runtime-operation.lock', os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            operation = 'cleanup' if args.cleanup else 'rollback' if args.rollback else 'update'
+            from runtime_manager import atomic_json
+            atomic_json(manager.root / 'runtime-operation.json',
+                        dict(busy=True, operation=operation, started_at=int(time.time())))
+            command = [sys.executable, str(pathlib.Path(__file__).resolve()),
+                       *(value for value in sys.argv[1:] if value != '--background'),
+                       '--operation-fd', str(fd)]
+            log = os.open(manager.root / 'runtime-operation.log', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                child = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                                         pass_fds=(fd,), start_new_session=True)
+            finally:
+                os.close(log)
+            print(json.dumps(dict(started=True, pid=child.pid)))
             return 0
-        runtime=temp/'runtime';runtime.mkdir();resources=runtime/'resources';resources.mkdir()
-        original=temp/'WeType'
-        with zipfile.ZipFile(archive) as z:
-            original.write_bytes(z.read('WeType.app/Contents/MacOS/WeType'))
-            flurry=temp/'flurry'
-            flurry.write_bytes(z.read(
-                'WeType.app/Contents/Frameworks/flurry.framework/Versions/A/flurry'))
-            wxp2p=temp/'WXP2PTransferDyn'
-            wxp2p.write_bytes(z.read(
-                'WeType.app/Contents/Frameworks/WXP2PTransferDyn.framework/Versions/A/WXP2PTransferDyn'))
-            prefix='WeType.app/Contents/Resources/imeData.bundle/'
-            for name in z.namelist():
-                if not name.startswith(prefix) or name.endswith('/'):continue
-                relative=name[len(prefix):]
-                if '/' in relative or relative in ('.','..'):raise ValueError('Unexpected resource path')
-                (resources/relative).write_bytes(z.read(name))
-        if digest(original)!=ENGINE_SHA:raise ValueError('Engine SHA-256 mismatch')
-        prepare=pathlib.Path(__file__).with_name('prepare_macos_runtime.py')
-        if not prepare.exists():prepare=pathlib.Path(__file__).resolve().parent.parent/'tools/prepare_macos_runtime.py'
-        subprocess.run([sys.executable,str(prepare),str(original),str(runtime)],check=True)
-        subprocess.run([sys.executable,str(prepare),str(flurry),str(runtime/'flurry'),
-                        '--expected-sha256',FLURRY_SHA,'--slide','0x103000000',
-                        '--export-prefix','__ZN6flurry'],check=True)
-        subprocess.run([sys.executable,str(prepare),str(wxp2p),str(runtime/'wxp2p'),
-                        '--expected-sha256',WXP2P_SHA,'--slide','0x104000000',
-                        '--export-prefix','__ZN13wxp2ptransfer'],check=True)
-        rows=json.loads((resources/'index.json').read_text())
-        for row in rows:
-            name=row['name']
-            if pathlib.Path(name).name!=name:raise ValueError('Invalid dictionary path')
-            with (resources/name).open('rb') as f:
-                if stream_digest(f,'md5')!=row['md5']:raise ValueError('Dictionary digest mismatch: '+name)
-        (runtime/'dicts.txt').write_text('\n'.join(f"{r['type']} {r['version']} {r['name']}" for r in rows if not r['is_cell'])+'\n')
-        (runtime/'runtime.json').write_text(json.dumps({'version':UPSTREAM_VERSION,'engine_sha256':ENGINE_SHA,'archive_sha256':ARCHIVE_SHA,'source':URL,'protocol':1},indent=2)+'\n')
-        if target.exists():
-            old=target.with_name(target.name+'.previous')
-            if old.exists():shutil.rmtree(old)
-            target.rename(old)
-        runtime.rename(target)
-        old=target.with_name(target.name+'.previous')
-        if old.exists():shutil.rmtree(old)
-    print('Original runtime prepared: '+str(target))
-    print('Add “WeTypeX” in Fcitx5 settings.')
+        finally:
+            os.close(fd)
+    if args.operation_fd is not None:
+        WORKER_FD = args.operation_fd
+        os.fstat(WORKER_FD)
+        WORKER_STATUS = manager.root / 'runtime-operation.json'
+        from runtime_manager import atomic_json, read_json
+        operation = read_json(WORKER_STATUS)
+        start_ticks = pathlib.Path('/proc/self/stat').read_text().rsplit(')', 1)[1].split()[19]
+        operation.update(busy=True, pid=os.getpid(), start_ticks=start_ticks)
+        atomic_json(WORKER_STATUS, operation)
+    if args.cache_archive:
+        if args.download or args.archive or args.version or args.defer or args.background:
+            ap.error('--cache-archive only imports a verified local ZIP')
+        manager.cache_archive(args.cache_archive)
+        print(json.dumps(dict(cached=True)))
+        return 0
+    if args.cleanup:
+        result = manager.cleanup(args.dry_run)
+        if WORKER_STATUS is not None:
+            from runtime_manager import atomic_json, read_json
+            operation = read_json(WORKER_STATUS)
+            operation['result'] = result
+            atomic_json(WORKER_STATUS, operation)
+        print(json.dumps(result,ensure_ascii=False,indent=2))
+        return 0
+    if args.verify_upgrade_from:
+        print(json.dumps(verify_upgrade(manager,args.verify_upgrade_from,args.download),ensure_ascii=False,indent=2))
+        return 0
+    if args.status:
+        print(json.dumps(manager.status(),ensure_ascii=False,indent=2))
+        return 0
+    if args.check:
+        required=('image.macho','manifest.txt','symbols.txt','dicts.txt','resources/index.json','runtime.json',
+                  'flurry/image.macho','flurry/manifest.txt','wxp2p/image.macho','wxp2p/manifest.txt')
+        missing=[name for name in required if not (target/name).is_file()]
+        ui=data/'fcitx5-wetypex/ui'
+        missing_ui=[name for name in UI_REQUIRED if not (ui/name).is_file()]
+        ready,error=(False,'runtime files are incomplete') if missing else validate_runtime(target,transport_probe=args.transport)
+        report=dict(manager.status(),supported_runtime_version=manager.catalog['default'],
+                    runtime_version=manager.status()['current'],runtime_installed=not missing,
+                    missing_runtime=missing,ui=str(ui),ui_installed=not missing_ui,
+                    missing_ui=missing_ui,core_ready=ready,core_error=error,transport_checked=args.transport)
+        print(json.dumps(report,ensure_ascii=False,indent=2))
+        return 0 if ready and not missing_ui else 1
+    if args.activate_pending:
+        if args.archive or args.download or args.version:
+            ap.error('--activate-pending only applies an already prepared runtime')
+        print(json.dumps(manager.activate(),ensure_ascii=False,indent=2))
+        return 0
+    if args.rollback:
+        manager.request_rollback()
+        result=manager.status() if args.defer else manager.activate()
+        print(json.dumps(result,ensure_ascii=False,indent=2))
+        return 0
+    if args.icons_only:
+        with lock(manager.setup_lock), lock(manager.cache_lock,exclusive=False):
+            if args.archive:
+                manager.cache_archive(args.archive)
+            profile=manager.profile(args.version)
+            archive=manager.archive(profile['assets_archive'],args.download)
+            install_ui_resources(archive,data)
+        print('Original UI assets installed in '+str(data/'fcitx5-wetypex/ui'))
+        return 0
+    if not args.archive and not args.download and not args.update:
+        ap.error('Supply --archive FILE or --download, or use --update with cached originals')
+    version=args.version
+    if args.archive and not version and not args.update:
+        value=archive_digest(args.archive)
+        match=next((a for a in manager.catalog['archives'].values() if a['sha256']==value),None)
+        if match:
+            version=match['version']
+    manager.stage(version,args.archive,args.download)
+    result=dict(manager.status(),cleanup=manager.cleanup(automatic=True)) if args.defer else manager.activate()
+    print(json.dumps(result,ensure_ascii=False,indent=2))
     return 0
 
 if __name__=='__main__':
-    try:raise SystemExit(main())
-    except (ValueError,OSError,subprocess.CalledProcessError) as error:
-        print('Setup failed: '+str(error),file=sys.stderr);raise SystemExit(1)
+    error_message = ''
+    try:code = main()
+    except (ValueError,OSError,RuntimeError,subprocess.CalledProcessError) as error:
+        error_message = str(error)[:1500]
+        print('Setup failed: '+error_message,file=sys.stderr)
+        code = 1
+    finally:
+        if WORKER_STATUS is not None:
+            from runtime_manager import atomic_json, read_json
+            operation = read_json(WORKER_STATUS)
+            operation.update(busy=False, finished_at=int(time.time()), error=error_message)
+            atomic_json(WORKER_STATUS, operation)
+    raise SystemExit(code)

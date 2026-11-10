@@ -9,7 +9,7 @@ maintainer: WeTypeX contributors <https://github.com/panxuc/fcitx5-wetypex>
 description: WeTypeX native Linux input method for Fcitx5
 vendor: WeTypeX contributors
 homepage: https://github.com/panxuc/fcitx5-wetypex
-license: MIT AND curl AND ISC AND BSD-2-Clause AND Apache-2.0
+license: MIT AND curl AND ISC AND BSD-2-Clause AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception)
 scripts:
   postinstall: "@WETYPEX_PROJECT_ROOT@/packaging/post-install.sh"
 contents:

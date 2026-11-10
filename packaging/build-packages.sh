@@ -4,6 +4,7 @@ set -euo pipefail
 project_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' "$project_root/CMakeLists.txt" | head -n1)
 output="$project_root/dist"
+architecture=$(uname -m)
 stage="$output/root"
 
 mkdir -p "$output"
@@ -20,7 +21,7 @@ rm -rf "$stage"
 mkdir -p "$stage"
 "$project_root/packaging/stage.sh" "$stage"
 
-tar --zstd -C "$stage" -cf "$output/fcitx5-wetypex-${version}-linux-x86_64.tar.zst" .
+tar --zstd -C "$stage" -cf "$output/fcitx5-wetypex-${version}-linux-${architecture}.tar.zst" .
 
 if command -v nfpm >/dev/null 2>&1 && command -v docker >/dev/null 2>&1; then
     "$project_root/packaging/build-native-packages.sh"

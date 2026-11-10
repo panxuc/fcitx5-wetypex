@@ -10,6 +10,8 @@
 #include <cerrno>
 #include <cmath>
 #include <cstdarg>
+#include <condition_variable>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +34,7 @@
 #include <poll.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <sched.h>
 #include <set>
 #include <setjmp.h>
 #include <signal.h>
@@ -51,13 +54,137 @@
 #include <ucontext.h>
 #include <unistd.h>
 #include <vector>
+#if defined(__aarch64__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
 
 static std::map<std::string, uintptr_t> syms;
 static std::vector<std::pair<uintptr_t, std::string>> address_names;
 static std::vector<std::pair<uintptr_t, uintptr_t>> mapped_image_ranges;
-static uintptr_t tls_data = 0, tls_size = 0, tls_total = 0;
+struct DarwinTLSImage {
+  uintptr_t descriptors = 0, descriptorBytes = 0;
+  uintptr_t data = 0, dataBytes = 0, end = 0;
+};
+static std::vector<DarwinTLSImage> tls_images;
+static std::string active_libcxx_path = "libc++.so.1";
 static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
 static bool service_mode = false;
+static bool original_cpu_supported() {
+#if defined(__aarch64__)
+  // The macOS ARM64 image targets Apple Silicon. Older Linux ARM64 CPUs
+  // execute that same ARM64 image through qemu-user, without ABI substitution.
+  constexpr unsigned long required = HWCAP_ASIMD | HWCAP_AES | HWCAP_PMULL |
+      HWCAP_SHA1 | HWCAP_SHA2 | HWCAP_CRC32 | HWCAP_ATOMICS | HWCAP_FPHP |
+      HWCAP_ASIMDHP | HWCAP_LRCPC | HWCAP_ASIMDDP;
+  return (getauxval(AT_HWCAP) & required) == required;
+#else
+  return true;
+#endif
+}
+static bool select_execution_provider(int argc, char **argv) {
+#if defined(__aarch64__)
+  const char *choice = getenv("WETYPE_ENGINE_PROVIDER");
+  const std::string provider = choice && *choice ? choice : "auto";
+  if (provider != "auto" && provider != "native" && provider != "qemu") {
+    fputs("invalid original-engine execution provider\n", stderr);
+    return false;
+  }
+  if (getenv("WETYPE_QEMU_WRAPPED") || provider == "native" ||
+      (provider == "auto" && original_cpu_supported()) ||
+      !strcmp(argv[2], "network-info"))
+    return true;
+  std::string executable;
+#ifndef WETYPE_QEMU_AARCH64
+#define WETYPE_QEMU_AARCH64 "/usr/bin/qemu-aarch64"
+#endif
+  for (const auto *path : {WETYPE_QEMU_AARCH64, "/usr/bin/qemu-aarch64-static"})
+    if (access(path, X_OK) == 0) {
+      executable = path;
+      break;
+    }
+  if (executable.empty()) {
+    fputs("this ARM64 processor needs the distribution qemu-user package\n", stderr);
+    return false;
+  }
+  setenv("WETYPE_QEMU_WRAPPED", "1", 1);
+  std::vector<char *> arguments{executable.data(), const_cast<char *>("-cpu"),
+      const_cast<char *>("max")};
+  for (int i = 0; i < argc; ++i)
+    arguments.push_back(argv[i]);
+  arguments.push_back(nullptr);
+  execv(executable.c_str(), arguments.data());
+  perror("start ARM64 compatibility provider");
+  return false;
+#else
+  (void)argc;
+  (void)argv;
+  return true;
+#endif
+}
+static std::string upstream_app_version = "2.2.3(657)";
+static std::mutex userDataMutex;
+static std::condition_variable userDataLoaded;
+static bool userDataReady = false;
+static bool wait_user_data() {
+  std::unique_lock<std::mutex> lock(userDataMutex);
+  return userDataLoaded.wait_for(lock, std::chrono::seconds(15),
+                                 [] { return userDataReady; });
+}
+// Some ARM64 C++ translation units are compiled inside an autorelease-pool
+// scope even when they create no Objective-C objects. Keep balanced pool
+// tokens; object allocation and message dispatch retain their explicit traps.
+static thread_local std::vector<std::unique_ptr<unsigned char>> emptyObjcPools;
+static void *shim_objc_pool_push() {
+  emptyObjcPools.push_back(std::make_unique<unsigned char>(0));
+  return emptyObjcPools.back().get();
+}
+static void shim_objc_pool_pop(void *token) {
+  if (emptyObjcPools.empty() || emptyObjcPools.back().get() != token) {
+    fputs("invalid Objective-C autorelease pool token\n", stderr);
+    _exit(86);
+  }
+  emptyObjcPools.pop_back();
+}
+// Metal's device query is nullable. Linux exposes no Metal device; the
+// original core then selects its bundled CPU/TFLite implementation.
+static void *shim_metal_device() { return nullptr; }
+static bool shim_apple_platform_available(uint32_t, const void *) {
+  // None of dyld's Apple platform identifiers describes a Linux host.
+  return false;
+}
+static void *shim_objc_retain(void *object) {
+  if (object) {
+    fputs("unsupported non-null Objective-C object ownership\n", stderr);
+    _exit(85);
+  }
+  return nullptr;
+}
+static void shim_objc_release(void *object) { (void)shim_objc_retain(object); }
+extern "C" void shim_objc_message_error(void *, const void *) {
+  fputs("unsupported Objective-C object message\n", stderr);
+  _exit(85);
+}
+extern "C" void shim_objc_message();
+#if defined(__aarch64__)
+asm(".text\n.p2align 2\n.global shim_objc_message\nshim_objc_message:\n"
+    "cbnz x0, shim_objc_message_error\nmov x0, #0\nmov x1, #0\n"
+    "movi v0.16b, #0\nmovi v1.16b, #0\nmovi v2.16b, #0\nmovi v3.16b, #0\nret\n");
+#else
+asm(".text\n.global shim_objc_message\nshim_objc_message:\n"
+    "test %rdi, %rdi\njnz shim_objc_message_error\nxor %eax, %eax\nxor %edx, %edx\n"
+    "pxor %xmm0, %xmm0\npxor %xmm1, %xmm1\nret\n");
+#endif
+static bool absent_platform_class(const std::string &name) {
+  // Cocoa OpenGL contexts do not exist in the headless Linux core. Nil class
+  // lookup/allocation lets xnet select its bundled CPU inference backend.
+  return name == "_OBJC_CLASS_$_NSOpenGLPixelFormat" ||
+         name == "_OBJC_CLASS_$_NSOpenGLContext";
+}
+struct SinCos { double sine, cosine; };
+struct SinCosFloat { float sine, cosine; };
+static SinCos shim_sincos(double value) { return {std::sin(value),std::cos(value)}; }
+static SinCosFloat shim_sincosf(float value) { return {std::sin(value),std::cos(value)}; }
 struct FlurryLocalCredentials {
   const char *ca_cert, *client_key, *client_cert;
   const char *server_key, *server_cert, *server_name;
@@ -912,6 +1039,34 @@ static void initialize_rune_locale() {
   }
 }
 static pthread_mutex_t registry_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool shim_spin_trylock(int32_t *lock) {
+  int32_t expected = 0;
+  return __atomic_compare_exchange_n(lock, &expected, 1, false,
+                                      __ATOMIC_ACQUIRE, __ATOMIC_RELAXED);
+}
+static void shim_spin_lock(int32_t *lock) {
+  while (!shim_spin_trylock(lock))
+    sched_yield();
+}
+static void shim_spin_unlock(int32_t *lock) {
+  __atomic_store_n(lock, 0, __ATOMIC_RELEASE);
+}
+static int32_t shim_atomic_add32(int32_t value, int32_t *target) {
+  return __atomic_add_fetch(target, value, __ATOMIC_SEQ_CST);
+}
+static int64_t shim_atomic_add64(int64_t value, int64_t *target) {
+  return __atomic_add_fetch(target, value, __ATOMIC_SEQ_CST);
+}
+static int32_t shim_atomic_increment32(int32_t *target) { return shim_atomic_add32(1, target); }
+static int32_t shim_atomic_decrement32(int32_t *target) { return shim_atomic_add32(-1, target); }
+static int64_t shim_atomic_increment64(int64_t *target) { return shim_atomic_add64(1, target); }
+static int64_t shim_atomic_decrement64(int64_t *target) { return shim_atomic_add64(-1, target); }
+static bool shim_atomic_compare32(int32_t old, int32_t next, int32_t *target) {
+  return __atomic_compare_exchange_n(target, &old, next, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+static bool shim_atomic_compare64(int64_t old, int64_t next, int64_t *target) {
+  return __atomic_compare_exchange_n(target, &old, next, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
 static std::map<void *, pthread_mutex_t *> mutexes;
 static std::map<void *, pthread_cond_t *> conditions;
 static std::map<void *, pthread_rwlock_t *> rwlocks;
@@ -1148,7 +1303,18 @@ extern "C" void shim_cpp_cv_timed_wait(void *p, void *lock,
 extern "C" bool shim_cpp_mutex_try_lock(void *p) {
   return shim_mutex_trylock(p) == 0;
 }
-extern "C" void shim_promise_void_get_future(void *output, void *promise) {
+#if defined(__aarch64__)
+extern "C" void shim_promise_void_get_future();
+extern "C" void arm_call_get_future(void *, void *, void *);
+asm(".text\n.p2align 2\n"
+    ".global shim_promise_void_get_future\nshim_promise_void_get_future:\n"
+    "mov x1, x0\nmov x0, x8\nb shim_promise_void_get_future_impl\n"
+    ".global arm_call_get_future\narm_call_get_future:\n"
+    "mov x8, x0\nmov x0, x1\nbr x2\n");
+#else
+#define shim_promise_void_get_future_impl shim_promise_void_get_future
+#endif
+extern "C" void shim_promise_void_get_future_impl(void *output, void *promise) {
   // Flurry constructs libc++'s __assoc_sub_state inline with Darwin's static
   // pthread signatures, then calls the dynamically imported get_future().
   // Linux libc++ operates on the embedded native pthread objects directly.
@@ -1169,13 +1335,17 @@ extern "C" void shim_promise_void_get_future(void *output, void *promise) {
   }
   using Original = void (*)(void *, void *);
   static Original original = [] {
-    void *library = dlopen("libc++.so.1", RTLD_NOW | RTLD_NOLOAD);
+    void *library = dlopen(active_libcxx_path.c_str(), RTLD_NOW | RTLD_NOLOAD);
     return reinterpret_cast<Original>(
         dlsym(library, "_ZNSt3__17promiseIvE10get_futureEv"));
   }();
   if (!original)
     _exit(86);
+#if defined(__aarch64__)
+  arm_call_get_future(output, promise, reinterpret_cast<void *>(original));
+#else
   original(output, promise);
+#endif
 }
 extern "C" int shim_threadid(pthread_t t, uint64_t *out) {
   if (t && !pthread_equal(t, pthread_self()))
@@ -1395,7 +1565,8 @@ struct DarwinDirent {
   uint8_t type;
   char name[1024];
 };
-extern "C" DarwinDirent *shim_readdir(DIR *d) {
+static std::mutex directoryReadMutex;
+static DarwinDirent *read_directory_entry(DIR *d) {
   auto e = readdir(d);
   if (!e)
     return nullptr;
@@ -1407,6 +1578,23 @@ extern "C" DarwinDirent *shim_readdir(DIR *d) {
   memcpy(out.name, e->d_name, out.namlen + 1);
   out.reclen = (21 + out.namlen + 1 + 3) & ~3;
   return &out;
+}
+extern "C" DarwinDirent *shim_readdir(DIR *directory) {
+  std::lock_guard<std::mutex> lock(directoryReadMutex);
+  return read_directory_entry(directory);
+}
+extern "C" int shim_readdir_r(DIR *directory, DarwinDirent *entry,
+                               DarwinDirent **result) {
+  std::lock_guard<std::mutex> lock(directoryReadMutex);
+  errno = 0;
+  const auto *value = read_directory_entry(directory);
+  if (!value) {
+    *result = nullptr;
+    return errno;
+  }
+  memcpy(entry, value, sizeof(*entry));
+  *result = entry;
+  return 0;
 }
 struct DarwinFlock {
   int64_t start, len;
@@ -1509,6 +1697,25 @@ extern "C" int shim_sec_random_copy_bytes(void *, size_t size,
   }
   return 0;
 }
+extern "C" void shim_arc4random_buf(void *output, size_t size) {
+  if (shim_sec_random_copy_bytes(nullptr, size, static_cast<unsigned char *>(output))) {
+    fputs("secure randomness is unavailable\n", stderr);
+    _exit(86);
+  }
+}
+extern "C" uint32_t shim_arc4random() {
+  uint32_t value;
+  shim_arc4random_buf(&value, sizeof(value));
+  return value;
+}
+extern "C" uint32_t shim_arc4random_uniform(uint32_t upper) {
+  if (upper < 2)
+    return 0;
+  const uint32_t threshold = -upper % upper;
+  uint32_t value;
+  do { value = shim_arc4random(); } while (value < threshold);
+  return value % upper;
+}
 extern "C" void *shim_malloc_zone_malloc(void *, size_t size) {
   return malloc(size);
 }
@@ -1607,13 +1814,21 @@ extern "C" int shim_sysctlbyname(const char *name, void *old_value,
     if (!text || !*text)
       text = "LINUX";
   } else if (!strcmp(name, "hw.machine")) {
+#if defined(__aarch64__)
+    text = "arm64";
+#else
     text = "x86_64";
+#endif
   } else if (!strcmp(name, "kern.osrelease")) {
     text = "24.2.0";
   } else if (!strcmp(name, "kern.osproductversion")) {
     text = "15.2";
   } else if (!strcmp(name, "machdep.cpu.brand_string")) {
+#if defined(__aarch64__)
+    text = "Linux ARM64";
+#else
     text = "Linux x86_64";
+#endif
   }
   if (text)
     return sysctl_copy(text, strlen(text) + 1, old_value, old_size);
@@ -1645,19 +1860,29 @@ extern "C" __attribute__((used, noinline)) void *shim_tlv_impl(void *d) {
     uintptr_t key, off;
   };
   auto desc = (Desc *)d;
-  static thread_local void *block = nullptr;
-  if (!block) {
-    block = calloc(1, tls_total);
-    memcpy(block, (void *)tls_data, tls_size);
+  static thread_local std::map<uintptr_t, std::unique_ptr<unsigned char[]>> blocks;
+  const auto descriptor = reinterpret_cast<uintptr_t>(d);
+  for (const auto &image : tls_images) {
+    if (descriptor < image.descriptors ||
+        descriptor - image.descriptors >= image.descriptorBytes)
+      continue;
+    const size_t total = image.end - image.data;
+    if (desc->off >= total)
+      break;
+    auto &block = blocks[image.descriptors];
+    if (!block) {
+      block = std::make_unique<unsigned char[]>(total);
+      if (image.dataBytes)
+        memcpy(block.get(), reinterpret_cast<void *>(image.data), image.dataBytes);
+    }
+    return block.get() + desc->off;
   }
-  if (desc->off >= tls_total) {
-    fputs("BAD TLV offset\n", stderr);
-    _exit(86);
-  }
-  return (char *)block + desc->off;
+  fputs("BAD TLV descriptor or offset\n", stderr);
+  _exit(86);
 }
 extern "C" void shim_tlv();
 extern "C" void shim_chkstk();
+#if defined(__x86_64__)
 asm(".text\n.global shim_chkstk\nshim_chkstk:\npush %rcx\npush %rax\nlea "
     "24(%rsp),%rcx\n"
     "cmp $4096,%rax\njb 2f\n1: sub $4096,%rcx\ntestb $0,(%rcx)\nsub "
@@ -1684,6 +1909,94 @@ asm(".text\n.global shim_tlv\nshim_tlv:\n"
     "224(%rsp),%xmm14\nmovdqu 240(%rsp),%xmm15\n"
     "add $264,%rsp\npop %r11\npop %r10\npop %r9\npop %r8\npop %rcx\npop "
     "%rdx\npop %rsi\npop %rdi\nret\n");
+#elif defined(__aarch64__)
+// Darwin's TLV call preserves all argument/SIMD registers except its x0 result.
+asm(
+    ".text\n"
+    ".p2align 2\n"
+    ".global shim_tlv\n"
+    "shim_tlv:\n"
+    ".cfi_startproc\n"
+    "sub sp, sp, #688\n"
+    ".cfi_def_cfa_offset 688\n"
+    "stp x1, x2, [sp, #0]\n"
+    "stp x3, x4, [sp, #16]\n"
+    "stp x5, x6, [sp, #32]\n"
+    "stp x7, x8, [sp, #48]\n"
+    "stp x9, x10, [sp, #64]\n"
+    "stp x11, x12, [sp, #80]\n"
+    "stp x13, x14, [sp, #96]\n"
+    "stp x15, x16, [sp, #112]\n"
+    "stp x17, x18, [sp, #128]\n"
+    "stp x29, x30, [sp, #144]\n"
+    ".cfi_offset 29, -544\n"
+    ".cfi_offset 30, -536\n"
+    "mrs x16, nzcv\n"
+    "str x16, [sp, #160]\n"
+    "stp q0, q1, [sp, #176]\n"
+    "stp q2, q3, [sp, #208]\n"
+    "stp q4, q5, [sp, #240]\n"
+    "stp q6, q7, [sp, #272]\n"
+    "stp q8, q9, [sp, #304]\n"
+    "stp q10, q11, [sp, #336]\n"
+    "stp q12, q13, [sp, #368]\n"
+    "stp q14, q15, [sp, #400]\n"
+    "stp q16, q17, [sp, #432]\n"
+    "stp q18, q19, [sp, #464]\n"
+    "stp q20, q21, [sp, #496]\n"
+    "stp q22, q23, [sp, #528]\n"
+    "stp q24, q25, [sp, #560]\n"
+    "stp q26, q27, [sp, #592]\n"
+    "stp q28, q29, [sp, #624]\n"
+    "stp q30, q31, [sp, #656]\n"
+    "bl shim_tlv_impl\n"
+    "ldp q0, q1, [sp, #176]\n"
+    "ldp q2, q3, [sp, #208]\n"
+    "ldp q4, q5, [sp, #240]\n"
+    "ldp q6, q7, [sp, #272]\n"
+    "ldp q8, q9, [sp, #304]\n"
+    "ldp q10, q11, [sp, #336]\n"
+    "ldp q12, q13, [sp, #368]\n"
+    "ldp q14, q15, [sp, #400]\n"
+    "ldp q16, q17, [sp, #432]\n"
+    "ldp q18, q19, [sp, #464]\n"
+    "ldp q20, q21, [sp, #496]\n"
+    "ldp q22, q23, [sp, #528]\n"
+    "ldp q24, q25, [sp, #560]\n"
+    "ldp q26, q27, [sp, #592]\n"
+    "ldp q28, q29, [sp, #624]\n"
+    "ldp q30, q31, [sp, #656]\n"
+    "ldr x16, [sp, #160]\n"
+    "msr nzcv, x16\n"
+    "ldp x1, x2, [sp, #0]\n"
+    "ldp x3, x4, [sp, #16]\n"
+    "ldp x5, x6, [sp, #32]\n"
+    "ldp x7, x8, [sp, #48]\n"
+    "ldp x9, x10, [sp, #64]\n"
+    "ldp x11, x12, [sp, #80]\n"
+    "ldp x13, x14, [sp, #96]\n"
+    "ldp x15, x16, [sp, #112]\n"
+    "ldp x17, x18, [sp, #128]\n"
+    "ldp x29, x30, [sp, #144]\n"
+    "add sp, sp, #688\n"
+    ".cfi_def_cfa_offset 0\n"
+    "ret\n"
+    ".cfi_endproc\n"
+    ".p2align 2\n"
+    ".global shim_chkstk\n"
+    "shim_chkstk:\n"
+    "mov x16, sp\n"
+    "sub x17, sp, x9\n"
+    "1: sub x16, x16, #4096\n"
+    "cmp x16, x17\n"
+    "b.ls 2f\n"
+    "ldr xzr, [x16]\n"
+    "b 1b\n"
+    "2: ldr xzr, [x17]\n"
+    "ret\n");
+#else
+#error Unsupported runtime host architecture
+#endif
 extern "C" int __cxa_thread_atexit_impl(void (*)(void *), void *, void *);
 extern "C" int shim_tlv_atexit(void (*f)(void *), void *p) {
   return __cxa_thread_atexit_impl(f, p, (void *)&stack_guard);
@@ -1700,6 +2013,7 @@ static void show_address(uintptr_t pc) {
 }
 static void crash(int sig, siginfo_t *info, void *ctx) {
   auto uc = (ucontext_t *)ctx;
+#if defined(__x86_64__)
   fprintf(stderr, "FAULT signal=%d address=%p rip=", sig, info->si_addr);
   show_address(uc->uc_mcontext.gregs[REG_RIP]);
   fprintf(stderr, "REG rdi=%llx rsi=%llx rdx=%llx rax=%llx rbp=%llx rsp=%llx\n",
@@ -1710,19 +2024,25 @@ static void crash(int sig, siginfo_t *info, void *ctx) {
           (long long)uc->uc_mcontext.gregs[REG_RBP],
           (long long)uc->uc_mcontext.gregs[REG_RSP]);
   auto sp = (uintptr_t *)uc->uc_mcontext.gregs[REG_RSP];
-  for (int i = 0; i < 12; ++i) {
-    if (sp[i] >= 0x100000000 && sp[i] < 0x104000000)
-      show_address(sp[i]);
-  }
+#elif defined(__aarch64__)
+  fprintf(stderr, "FAULT signal=%d address=%p pc=", sig, info->si_addr);
+  show_address(uc->uc_mcontext.pc);
+  auto sp = reinterpret_cast<uintptr_t *>(uc->uc_mcontext.sp);
+#endif
+  for (int i = 0; i < 12; ++i)
+    for (const auto &[begin, end] : mapped_image_ranges)
+      if (sp[i] >= begin && sp[i] < end)
+        show_address(sp[i]);
   _exit(128 + sig);
 }
 extern "C" void missing_symbol(const char *n) {
   fprintf(stderr, "UNIMPLEMENTED %s\n", n);
+  show_address(reinterpret_cast<uintptr_t>(__builtin_return_address(0)));
   _exit(85);
 }
 static unsigned char *trap_arena = nullptr;
 static size_t trap_offset = 0;
-static void *trap(const std::string &n) {
+static unsigned char *trampoline() {
   if (!trap_arena) {
     trap_arena = (unsigned char *)mmap(nullptr, 1048576, PROT_READ | PROT_WRITE,
                                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -1733,7 +2053,12 @@ static void *trap(const std::string &n) {
     _exit(92);
   auto code = trap_arena + trap_offset;
   trap_offset += 32;
+  return code;
+}
+static void *trap(const std::string &n) {
+  auto code = trampoline();
   char *name = strdup(n.c_str());
+#if defined(__x86_64__)
   code[0] = 0x48;
   code[1] = 0xbf;
   memcpy(code + 2, &name, 8);
@@ -1743,8 +2068,34 @@ static void *trap(const std::string &n) {
   memcpy(code + 12, &fn, 8);
   code[20] = 0xff;
   code[21] = 0xe0;
+#elif defined(__aarch64__)
+  const uint32_t instructions[] = {0x58000080, 0x580000b0, 0xd61f0200, 0xd503201f};
+  memcpy(code, instructions, sizeof(instructions));
+  memcpy(code + 16, &name, sizeof(name));
+  void *fn = reinterpret_cast<void *>(&missing_symbol);
+  memcpy(code + 24, &fn, sizeof(fn));
+#endif
+  __builtin___clear_cache(reinterpret_cast<char *>(code),
+                         reinterpret_cast<char *>(code + 32));
   return code;
 }
+#if defined(__aarch64__)
+extern "C" void darwin_arm_return_this();
+asm(".text\n.p2align 2\n.global darwin_arm_return_this\n"
+    "darwin_arm_return_this:\n.cfi_startproc\n"
+    "stp x0, x30, [sp, #-16]!\n.cfi_def_cfa_offset 16\n.cfi_offset 30, -8\n"
+    "blr x16\nldp x0, x30, [sp], #16\n.cfi_def_cfa_offset 0\nret\n.cfi_endproc\n");
+static void *darwin_constructor(void *target) {
+  auto *code = trampoline();
+  const uint32_t instructions[] = {0x58000090, 0x580000b1, 0xd61f0220, 0xd503201f};
+  memcpy(code, instructions, sizeof(instructions));
+  memcpy(code + 16, &target, sizeof(target));
+  auto *bridge = reinterpret_cast<void *>(&darwin_arm_return_this);
+  memcpy(code + 24, &bridge, sizeof(bridge));
+  __builtin___clear_cache(reinterpret_cast<char *>(code), reinterpret_cast<char *>(code + 32));
+  return code;
+}
+#endif
 struct DispatchSemaphore {
   sem_t value;
 };
@@ -1769,6 +2120,26 @@ static int shim_pthread_once(void *token, void (*initializer)()) {
   pthread_cond_broadcast(&once_condition);
   pthread_mutex_unlock(&once_lock);
   return 0;
+}
+static void shim_dispatch_once(long *token, void *context,
+                                void (*initializer)(void *)) {
+  if (__atomic_load_n(token, __ATOMIC_ACQUIRE) == -1L)
+    return;
+  pthread_mutex_lock(&once_lock);
+  auto [entry, inserted] = once_states.emplace(token, 1);
+  if (!inserted) {
+    while (entry->second == 1)
+      pthread_cond_wait(&once_condition, &once_lock);
+    pthread_mutex_unlock(&once_lock);
+    return;
+  }
+  pthread_mutex_unlock(&once_lock);
+  initializer(context);
+  pthread_mutex_lock(&once_lock);
+  __atomic_store_n(token, -1L, __ATOMIC_RELEASE);
+  once_states[token] = 2;
+  pthread_cond_broadcast(&once_condition);
+  pthread_mutex_unlock(&once_lock);
 }
 static void *shim_dispatch_semaphore_create(long value) {
   auto *semaphore = new DispatchSemaphore;
@@ -2354,12 +2725,21 @@ static const char *libcpp_path_cstr(const void *path) {
   if (!path)
     return nullptr;
   const auto *bytes = static_cast<const unsigned char *>(path);
+#if defined(__aarch64__)
+  if (bytes[23] & 0x80) {
+    const char *value = nullptr;
+    memcpy(&value, bytes, sizeof(value));
+    return value;
+  }
+  return reinterpret_cast<const char *>(bytes);
+#else
   if (bytes[0] & 1) {
     const char *value = nullptr;
     memcpy(&value, bytes + 16, sizeof(value));
     return value;
   }
   return reinterpret_cast<const char *>(bytes + 1);
+#endif
 }
 static void set_libcpp_error_code(void *errorCode, int value) {
   if (errorCode)
@@ -2492,16 +2872,50 @@ static void shim_uuid_unparse(const unsigned char *value, char *output) {
            value[13], value[14], value[15]);
 }
 static double shim_exp10(double exponent) { return std::pow(10.0, exponent); }
+#include "darwin_arm64.hpp"
 static void *resolve(const std::string &name) {
+#if defined(__aarch64__)
+  if (auto *adapter = resolve_darwin_arm64(name))
+    return adapter;
+#endif
   if (auto symbol = syms.find(name); symbol != syms.end())
     return reinterpret_cast<void *>(symbol->second);
   static std::map<std::string, void *> overrides = {
       {"___exp10", (void *)shim_exp10},
       {"___stack_chk_guard", &stack_guard},
+      {"___exp10", (void *)exp10},
+      {"___exp10f", (void *)exp10f},
+      {"___sincos_stret", (void *)shim_sincos},
+      {"___sincosf_stret", (void *)shim_sincosf},
+      {"_OSSpinLockLock", (void *)shim_spin_lock},
+      {"_OSSpinLockTry", (void *)shim_spin_trylock},
+      {"_OSSpinLockUnlock", (void *)shim_spin_unlock},
+      {"_OSAtomicAdd32Barrier", (void *)shim_atomic_add32},
+      {"_OSAtomicAdd64Barrier", (void *)shim_atomic_add64},
+      {"_OSAtomicIncrement32Barrier", (void *)shim_atomic_increment32},
+      {"_OSAtomicDecrement32Barrier", (void *)shim_atomic_decrement32},
+      {"_OSAtomicIncrement64Barrier", (void *)shim_atomic_increment64},
+      {"_OSAtomicDecrement64Barrier", (void *)shim_atomic_decrement64},
+      {"_OSAtomicCompareAndSwap32Barrier", (void *)shim_atomic_compare32},
+      {"_OSAtomicCompareAndSwap64Barrier", (void *)shim_atomic_compare64},
+      {"_OSAtomicCompareAndSwapPtrBarrier", (void *)shim_atomic_compare64},
+      {"_objc_autoreleasePoolPush", (void *)shim_objc_pool_push},
+      {"_objc_autoreleasePoolPop", (void *)shim_objc_pool_pop},
+      {"_MTLCreateSystemDefaultDevice", (void *)shim_metal_device},
+      {"__availability_version_check", (void *)shim_apple_platform_available},
+      {"_objc_retain", (void *)shim_objc_retain},
+      {"_objc_release", (void *)shim_objc_release},
+      {"_objc_autorelease", (void *)shim_objc_retain},
+      {"_objc_retainAutoreleasedReturnValue", (void *)shim_objc_retain},
+      {"_objc_alloc", (void *)shim_objc_retain},
+      {"_objc_msgSend", (void *)shim_objc_message},
       {"___error", (void *)shim_error},
       {"___bzero", (void *)shim_bzero},
       {"_atexit", (void *)shim_atexit},
       {"_SecRandomCopyBytes", (void *)shim_sec_random_copy_bytes},
+      {"_arc4random_buf", (void *)shim_arc4random_buf},
+      {"_arc4random", (void *)shim_arc4random},
+      {"_arc4random_uniform", (void *)shim_arc4random_uniform},
       {"_kSecRandomDefault", &sec_random_default},
       {"___stderrp", &stderr},
       {"___stdoutp", &stdout},
@@ -2509,6 +2923,7 @@ static void *resolve(const std::string &name) {
       {"__tlv_bootstrap", (void *)shim_tlv},
       {"__tlv_atexit", (void *)shim_tlv_atexit},
       {"____chkstk_darwin", (void *)shim_chkstk},
+      {"___chkstk_darwin", (void *)shim_chkstk},
       {"_dlsym", (void *)shim_dlsym},
       {"_malloc_create_zone", (void *)shim_malloc_create_zone},
       {"_malloc_default_zone", (void *)shim_malloc_default_zone},
@@ -2552,6 +2967,7 @@ static void *resolve(const std::string &name) {
       {"_pthread_attr_setstacksize", (void *)shim_pthread_attr_setstacksize},
       {"_pthread_create", (void *)shim_pthread_create},
       {"_pthread_once", (void *)shim_pthread_once},
+      {"_dispatch_once_f", (void *)shim_dispatch_once},
       {"_read", (void *)shim_read},
       {"_recvfrom", (void *)shim_recvfrom},
       {"_recvmsg", (void *)shim_recvmsg},
@@ -2571,6 +2987,15 @@ static void *resolve(const std::string &name) {
       {"__ZNSt3__14__fs10filesystem8__renameERKNS1_4pathES4_PNS_10error_codeE",
        (void *)shim_filesystem_rename},
       {"_fstat$INODE64", (void *)shim_fstat},
+#if defined(__aarch64__)
+      {"_fstat", (void *)shim_fstat},
+      {"_stat", (void *)shim_stat},
+      {"_lstat", (void *)shim_lstat},
+      {"_statfs", (void *)shim_statfs},
+      {"_fstatfs", (void *)shim_fstatfs},
+      {"_readdir", (void *)shim_readdir},
+      {"_readdir_r", (void *)shim_readdir_r},
+#endif
       {"_fstatfs$INODE64", (void *)shim_fstatfs},
       {"_stat$INODE64", (void *)shim_stat},
       {"_statfs$INODE64", (void *)shim_statfs},
@@ -2646,7 +3071,14 @@ static void exception_callback(const char *s, unsigned len) {
   fprintf(stderr, "ENGINE_EXCEPTION %.*s\n", (int)len, s);
 }
 static void engine_log(int level, const char *s) {
-  if (!service_mode)
+  if (s && strstr(s, "User hot word loaded")) {
+    {
+      std::lock_guard<std::mutex> lock(userDataMutex);
+      userDataReady = true;
+    }
+    userDataLoaded.notify_all();
+  }
+  if (!service_mode || getenv("WETYPE_HOST_DEBUG"))
     fprintf(stderr, "IME[%d] %s\n", level, s ? s : "(null)");
 }
 #include "business_services.hpp"
@@ -2811,6 +3243,7 @@ static void run_llm_service(const char *question) {
   }
 }
 static std::vector<unsigned char> ehframe;
+static std::vector<std::pair<uintptr_t, size_t>> nativeEhFrames;
 static void emit32(std::vector<unsigned char> &b, uint32_t n) {
   for (int i = 0; i < 4; i++)
     b.push_back(n >> (8 * i));
@@ -2835,10 +3268,22 @@ static void record(std::vector<unsigned char> &b) {
 static void setup_unwind(const std::vector<std::string> &entries) {
   std::vector<unsigned char> cie;
   emit32(cie, 0);
-  for (auto c : {1, 'z' + 0, 'P' + 0, 'L' + 0, 'R' + 0, 0, 1, 0x78, 16, 11, 0})
+  constexpr int returnRegister =
+#if defined(__aarch64__)
+      30;
+#else
+      16;
+#endif
+  for (auto c : {1, 'z' + 0, 'P' + 0, 'L' + 0, 'R' + 0, 0, 1, 0x78,
+                 returnRegister, 11, 0})
     cie.push_back(c);
   emit64(cie, (uintptr_t)dlsym(RTLD_DEFAULT, "__gxx_personality_v0"));
-  cie.insert(cie.end(), {0, 0, 0x0c, 7, 8, 0x90, 1});
+  cie.insert(cie.end(), {0, 0});
+#if defined(__aarch64__)
+  cie.insert(cie.end(), {0x0c, 31, 0, 0x08, 30});
+#else
+  cie.insert(cie.end(), {0x0c, 7, 8, 0x90, 1});
+#endif
   record(cie);
   const unsigned regs[] = {0, 3, 12, 13, 14, 15, 6};
   for (auto &line : entries) {
@@ -2852,6 +3297,31 @@ static void setup_unwind(const std::vector<std::string> &entries) {
     emit64(b, len);
     b.push_back(8);
     emit64(b, lsda);
+#if defined(__aarch64__)
+    const auto mode = (enc >> 24) & 15;
+    b.push_back(0x0c);
+    b.push_back(mode == 4 ? 29 : 31);
+    uleb(b, mode == 4 ? 16 : ((enc >> 12) & 0xfff) * 16);
+    if (mode == 4)
+      b.insert(b.end(), {0x9d, 2, 0x9e, 1});
+    unsigned saved = mode == 4 ? 3 : 1;
+    for (unsigned pair = 0; pair < 9; ++pair) {
+      const unsigned bit = pair < 5 ? pair : pair + 3;
+      if (!(enc & (1ULL << bit)))
+        continue;
+      const unsigned reg = pair < 5 ? 19 + pair * 2 : 72 + (pair - 5) * 2;
+      for (unsigned half = 0; half < 2; ++half) {
+        if (reg + half < 64)
+          b.push_back(0x80 | (reg + half));
+        else {
+          b.push_back(0x05);
+          uleb(b, reg + half);
+        }
+        uleb(b, saved + half);
+      }
+      saved += 2;
+    }
+#else
     b.insert(b.end(), {0x0c, 6, 16, 0x86, 2});
     unsigned offset = (enc >> 16) & 255;
     for (unsigned i = 0; i < 5; i++) {
@@ -2861,6 +3331,7 @@ static void setup_unwind(const std::vector<std::string> &entries) {
         uleb(b, offset + 2 - i);
       }
     }
+#endif
     record(b);
   }
   emit32(ehframe, 0);
@@ -2870,13 +3341,21 @@ static void setup_unwind(const std::vector<std::string> &entries) {
     _exit(86);
   }
   fn(ehframe.data());
-  fprintf(stderr, "UNWIND registered %zu RBP frame entries\n", entries.size());
+  for (const auto &[address, size] : nativeEhFrames) {
+    if (size >= 4 && *reinterpret_cast<const uint32_t *>(address + size - 4) == 0)
+      fn(reinterpret_cast<void *>(address));
+  }
+  fprintf(stderr, "UNWIND registered %zu compact frame entries\n", entries.size());
 }
 int main(int argc, char **argv) {
   if (argc != 3 && argc != 4) {
     fprintf(stderr, "usage: host PREPARED_DIR MODE [ASCII_PINYIN]\n");
     return 2;
   }
+  const bool mappingOnly = !strcmp(argv[2], "version") ||
+                           !strcmp(argv[2], "module-map");
+  if (!select_execution_provider(argc, argv))
+    return 78;
   service_mode = !strcmp(argv[2], "serve") ||
                  !strcmp(argv[2], "voice-service") ||
                  !strcmp(argv[2], "flurry-server") ||
@@ -2885,7 +3364,8 @@ int main(int argc, char **argv) {
   if (!service_mode) {
     const bool long_operation =
         !strcmp(argv[2], "llm-service") || !strcmp(argv[2], "flurry-loopback");
-    alarm(long_operation ? 45 : 15);
+    const unsigned limit = long_operation ? 45 : 15;
+    alarm(getenv("WETYPE_QEMU_WRAPPED") ? limit * 3 : limit);
   }
   initialize_rune_locale();
   setvbuf(stderr, nullptr, _IONBF, 0);
@@ -2896,26 +3376,35 @@ int main(int argc, char **argv) {
   sigaction(SIGBUS, &sa, nullptr);
   sigaction(SIGILL, &sa, nullptr);
   sigaction(SIGABRT, &sa, nullptr);
-  if (!dlopen("libc++.so.1", RTLD_NOW | RTLD_GLOBAL) ||
+  const char *support = getenv("WETYPE_SUPPORT_DIR");
+  std::string support_dir = support ? support : argv[1];
+  const auto privateCxx = support_dir + "/abi/lib/libc++.so.1";
+  if (access(privateCxx.c_str(), R_OK) == 0)
+    active_libcxx_path = privateCxx;
+#if defined(__aarch64__)
+  if (!mappingOnly && access(privateCxx.c_str(), R_OK)) {
+    fputs("the private ARM64 libc++ compatibility library is missing\n", stderr);
+    return 78;
+  }
+#endif
+  if (!dlopen(active_libcxx_path.c_str(), RTLD_NOW | RTLD_GLOBAL) ||
       !dlopen("libc++abi.so.1", RTLD_NOW | RTLD_GLOBAL)) {
     fputs(dlerror(), stderr);
     return 2;
   }
-  const char *support = getenv("WETYPE_SUPPORT_DIR");
-  std::string support_dir = support ? support : argv[1];
   auto localePath = support_dir + "/locale.so";
   if (access(localePath.c_str(), R_OK) != 0)
     localePath = support_dir + "/wetypex-locale.so";
-  if (!dlopen(localePath.c_str(), RTLD_NOW | RTLD_GLOBAL)) {
+  if (!mappingOnly && !dlopen(localePath.c_str(), RTLD_NOW | RTLD_GLOBAL)) {
     fputs(dlerror(), stderr);
     return 2;
   }
-  if (!dlopen((support_dir + "/libkqueue.so").c_str(),
+  if (!mappingOnly && !dlopen((support_dir + "/libkqueue.so").c_str(),
               RTLD_NOW | RTLD_GLOBAL)) {
     fputs(dlerror(), stderr);
     return 2;
   }
-  if (!dlopen((support_dir + "/wcwss_bridge.so").c_str(),
+  if (!mappingOnly && !dlopen((support_dir + "/wcwss_bridge.so").c_str(),
               RTLD_NOW | RTLD_GLOBAL)) {
     fputs(dlerror(), stderr);
     return 2;
@@ -2942,15 +3431,49 @@ int main(int argc, char **argv) {
     wire::boolean(report.get(), "ws", flags & 1);
     wire::boolean(report.get(), "wss", flags & 2);
     wire::boolean(report.get(), "ipv6", flags & 4);
+    wire::boolean(report.get(), "native_cpu_supported", original_cpu_supported());
+    const char *configuredProvider = getenv("WETYPE_ENGINE_PROVIDER");
+    const bool qemuProvider = getenv("WETYPE_QEMU_WRAPPED") ||
+        (configuredProvider && !strcmp(configuredProvider, "qemu")) ||
+        ((!configuredProvider || !strcmp(configuredProvider, "auto")) && !original_cpu_supported());
+    wire::put(report.get(), "execution_provider", std::string(qemuProvider ? "qemu" : "native"));
+    bool executionReady = true;
+#if defined(__aarch64__)
+    executionReady = !qemuProvider || access(WETYPE_QEMU_AARCH64, X_OK) == 0 ||
+        access("/usr/bin/qemu-aarch64-static", X_OK) == 0;
+#endif
+    wire::boolean(report.get(), "execution_ready", executionReady);
     wire::put(report.get(), "address_policy",
               std::string("happy-eyeballs-200ms-with-ipv4-retry"));
     puts(wire::dump(report.get()).c_str());
     return (flags & 3) == 3 && jsonReady ? 0 : 1;
   }
   std::string dir = argv[1], mode = argv[2], line;
+  std::ifstream runtimeMetadata(dir + "/runtime.json");
+  if (runtimeMetadata) {
+    std::string metadata(16385, '\0');
+    runtimeMetadata.read(metadata.data(), metadata.size());
+    metadata.resize(runtimeMetadata.gcount());
+    const auto document = wire::parse(metadata);
+    const auto version = wire::str(document.get(), "version");
+    const auto build = version.rfind('.');
+    if (metadata.size() > 16384 || version.empty() || version.size() > 64 ||
+        build == std::string::npos || build == 0 || build + 1 == version.size() ||
+        std::count(version.begin(), version.end(), '.') != 3 ||
+        version.find("..") != std::string::npos || version.front() == '.' ||
+        !std::all_of(version.begin(), version.end(), [](char c) {
+          return (c >= '0' && c <= '9') || c == '.';
+        })) {
+      fputs("invalid upstream runtime version metadata\n", stderr);
+      return 2;
+    }
+    upstream_app_version = version.substr(0, build) + "(" +
+                           version.substr(build + 1) + ")";
+  }
   std::vector<std::string> binds, unwinds;
   std::vector<std::pair<uintptr_t, std::string>> ctors;
   auto loadModule = [&](const std::string &moduleDir) {
+    DarwinTLSImage tls;
     std::ifstream symbols(moduleDir + "/symbols.txt");
     while (std::getline(symbols, line)) {
       std::istringstream stream(line);
@@ -2964,11 +3487,100 @@ int main(int argc, char **argv) {
     int module = open((moduleDir + "/image.macho").c_str(), O_RDONLY);
     if (module < 0)
       return false;
+    uint32_t moduleHeader[8]{};
+    constexpr uint32_t hostCpu =
+#if defined(__aarch64__)
+        0x0100000c;
+#else
+        0x01000007;
+#endif
+    if (pread(module, moduleHeader, sizeof(moduleHeader), 0) !=
+            ssize_t(sizeof(moduleHeader)) || moduleHeader[0] != 0xfeedfacf ||
+        moduleHeader[1] != hostCpu) {
+      fputs("runtime architecture does not match this host\n", stderr);
+      close(module);
+      return false;
+    }
+    // Darwin segments are 16 KiB aligned on ARM64. Some Linux kernels use
+    // 64 KiB pages, where adjacent segments can share one native page and a
+    // file mapping cannot represent their independent offsets. Copy that
+    // image once and combine protections only on the shared boundary pages.
+    const size_t page = size_t(sysconf(_SC_PAGESIZE));
+    bool copiedImage = false;
+    if (page > 4096) {
+      struct Segment { uintptr_t address, size, offset, length; int protection; };
+      std::vector<Segment> segments;
+      std::string row;
+      uintptr_t first = UINTPTR_MAX, last = 0;
+      while (std::getline(manifest, row)) {
+        std::istringstream input(row);
+        std::string tag, name;
+        Segment segment{};
+        input >> tag;
+        if (tag != "SEG")
+          continue;
+        input >> std::hex >> segment.address >> segment.size >> segment.offset >>
+            segment.length >> std::dec >> segment.protection >> name;
+        if (name == "__LINKEDIT")
+          continue;
+        if (segment.address % page || segment.offset % page || segment.length % page)
+          copiedImage = true;
+        first = std::min(first, segment.address & ~(page - 1));
+        last = std::max(last, (segment.address + segment.size + page - 1) & ~(page - 1));
+        segments.push_back(segment);
+      }
+      manifest.clear();
+      manifest.seekg(0);
+      if (copiedImage) {
+        if (last <= first || last - first > 1024ULL * 1024 * 1024) {
+          close(module);
+          return false;
+        }
+        void *image = mmap(reinterpret_cast<void *>(first), last - first,
+                           PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        if (image == MAP_FAILED) {
+          perror("map image on native pages");
+          close(module);
+          return false;
+        }
+        mapped_image_ranges.emplace_back(first, last);
+        std::vector<int> protections((last - first) / page, PROT_NONE);
+        for (const auto &segment : segments) {
+          size_t done = 0;
+          while (done < segment.length) {
+            ssize_t read = pread(module, reinterpret_cast<void *>(segment.address + done),
+                                 segment.length - done, segment.offset + done);
+            if (read < 0 && errno == EINTR)
+              continue;
+            if (read <= 0) {
+              close(module);
+              return false;
+            }
+            done += size_t(read);
+          }
+          const int flags = (segment.protection & 4) ? PROT_READ | PROT_EXEC : PROT_READ | PROT_WRITE;
+          const auto end = (segment.address + segment.size + page - 1) & ~(page - 1);
+          for (auto address = segment.address & ~(page - 1); address < end; address += page)
+            protections[(address - first) / page] |= flags;
+        }
+        for (size_t start = 0, end; start < protections.size(); start = end) {
+          for (end = start + 1; end < protections.size() && protections[end] == protections[start]; ++end) {}
+          if (mprotect(reinterpret_cast<void *>(first + start * page), (end - start) * page,
+                       protections[start])) {
+            close(module);
+            return false;
+          }
+        }
+      }
+    }
     while (std::getline(manifest, line)) {
       std::istringstream stream(line);
       std::string type;
       stream >> type;
       if (type == "SEG") {
+        if (copiedImage)
+          continue;
         uintptr_t address, size, offset, length;
         int protection;
         std::string name;
@@ -3029,11 +3641,23 @@ int main(int argc, char **argv) {
         std::string name;
         stream >> std::hex >> address >> size >> name;
         if (name == "__thread_data") {
-          tls_data = address;
-          tls_size = size;
+          tls.data = address;
+          tls.dataBytes = size;
+          tls.end = std::max(tls.end, address + size);
         }
-        if (name == "__thread_bss")
-          tls_total = address + size;
+        if (name == "__thread_vars") {
+          tls.descriptors = address;
+          tls.descriptorBytes = size;
+        }
+#if defined(__aarch64__)
+        if (name == "__eh_frame")
+          nativeEhFrames.emplace_back(address, size);
+#endif
+        if (name == "__thread_bss") {
+          if (!tls.data)
+            tls.data = address;
+          tls.end = std::max(tls.end, address + size);
+        }
       }
     }
     // Older prepared runtimes omitted the app's plain C voice wrappers from
@@ -3089,6 +3713,13 @@ int main(int argc, char **argv) {
         position += command[1];
       }
     }
+    if (tls.descriptorBytes) {
+      if (!tls.data || tls.end <= tls.data) {
+        close(module);
+        return false;
+      }
+      tls_images.push_back(tls);
+    }
     close(module);
     return true;
   };
@@ -3097,7 +3728,6 @@ int main(int argc, char **argv) {
     return 2;
   if (!loadModule(dir))
     return 2;
-  tls_total -= tls_data;
   std::map<std::string, void *> cache;
   unsigned unresolved = 0;
   for (auto &ln : binds) {
@@ -3112,12 +3742,18 @@ int main(int argc, char **argv) {
       p = it->second;
     else {
       p = resolve(n);
-      if (!p) {
+      if (!p && !absent_platform_class(n)) {
         ++unresolved;
         if (mode == "module-map")
           fprintf(stderr, "UNRESOLVED %s\n", n.c_str());
         p = trap(n);
       }
+#if defined(__aarch64__)
+      if (n.rfind("__ZNSt", 0) == 0 &&
+          (n.find("C1E") != std::string::npos || n.find("C2E") != std::string::npos ||
+           n.find("D1E") != std::string::npos || n.find("D2E") != std::string::npos))
+        p = darwin_constructor(p);
+#endif
       cache[n] = p;
     }
     *(uintptr_t *)a = (uintptr_t)p + add;
@@ -3125,7 +3761,7 @@ int main(int argc, char **argv) {
   if (trap_arena && mprotect(trap_arena, 1048576, PROT_READ | PROT_EXEC))
     return 2;
   fprintf(stderr, "MAPPED imports=%zu unresolved=%u tls=%lu\n", cache.size(),
-          unresolved, tls_total);
+          unresolved, tls_images.empty() ? size_t(0) : size_t(tls_images.back().end - tls_images.back().data));
   if (mode == "module-map")
     return 0;
   if (mode == "module-run" || mode == "wxp2p-probe" ||
@@ -3168,10 +3804,26 @@ int main(int argc, char **argv) {
   // Initialize the original C/C++ core region. AppKit/Swift UI constructors
   // remain outside this compatibility boundary.
   const bool verbose_host = getenv("WETYPE_HOST_DEBUG");
-  for (auto &[addr, name] : ctors) {
+  // The constructor table retains these object-file anchors across original
+  // releases. Follow its order rather than guessing a version's text range.
+  auto firstCore = std::find_if(ctors.begin(), ctors.end(), [](const auto &c) {
+    return c.second == "__GLOBAL__sub_I_wetap_net.cpp";
+  });
+  const auto lastCore = std::find_if(ctors.begin(), ctors.end(), [](const auto &c) {
+    return c.second == "__GLOBAL__sub_I_MMKV.cpp";
+  });
+  if (firstCore == ctors.end() || lastCore == ctors.end() || firstCore >= lastCore) {
+    fputs("unsupported constructor layout: core anchors are missing\n", stderr);
+    return 2;
+  }
+  while (firstCore != ctors.begin() &&
+         std::prev(firstCore)->second.rfind("___cxx_global_var_init", 0) == 0)
+    --firstCore;
+  for (auto current = ctors.begin(); current != ctors.end(); ++current) {
+    const auto &[addr, name] = *current;
     const bool voiceLogger = mode == "voice-service" &&
                              name.find("wx_zhiling_tlogger") != std::string::npos;
-    if (!voiceLogger && (addr < 0x1005f51c0 || addr >= 0x101b00000))
+    if (!voiceLogger && (current < firstCore || current > lastCore))
       continue;
     if (verbose_host)
       fprintf(stderr, "CTOR %lx %s\n", addr, name.c_str());
@@ -3200,7 +3852,7 @@ int main(int argc, char **argv) {
   // Account identity belongs to wxime_network_login.  The desktop init ABI
   // leaves this field empty; putting an account UIN here makes the core enter
   // its device-code generation path before network-login information exists.
-  setString(0x58, "2.2.3(657)");
+  setString(0x58, upstream_app_version.c_str());
   // The upstream protocol has no Linux platform enum, so use the original Mac
   // platform value while presenting an honest Linux device name.
   const char *device_name = getenv("WETYPE_DEVICE_MODEL");
@@ -3253,8 +3905,13 @@ int main(int argc, char **argv) {
   fprintf(stderr, "WXIME_CONFIG_DICT_RETURNED %d\n", loaded);
   if (!loaded)
     _exit(88);
-  if (mode == "validate")
+  if (mode == "validate") {
+    if (!wait_user_data()) {
+      fputs("original user dictionary loading did not complete\n", stderr);
+      _exit(88);
+    }
     _exit(0);
+  }
   if (mode == "serve" && getenv("WETYPE_NETWORK_LIVE")) {
     const auto groupId =
         strtoull(getenv("WETYPE_GROUP_ID") ? getenv("WETYPE_GROUP_ID") : "0",

@@ -1,0 +1,89 @@
+name: 发现原版更新
+
+on:
+  schedule:
+    - cron: '19 3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: upstream-discovery
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  discover:
+    if: vars.WETYPEX_UPSTREAM_AUTOMATION == 'pr' || vars.WETYPEX_UPSTREAM_AUTOMATION == 'release'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - name: 查询版本并检查已有更新 PR
+        id: discovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(python3 scripts/setup_runtime.py --query-upstream | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])')
+          branch="upstream/runtime-$version"
+          exists=$(gh pr list --head "$branch" --state open --json number --jq 'length > 0')
+          echo "existing=$exists" >> "$GITHUB_OUTPUT"
+          if [[ "$exists" == true ]]; then
+            managed=$(gh pr view "$branch" --json author,isDraft --jq '.author.login == "github-actions[bot]" and (.isDraft | not)')
+            if [[ "$managed" != true ]]; then exit 0; fi
+            head=$(gh pr view "$branch" --json headRefOid --jq '.headRefOid')
+            base=$(git rev-parse HEAD)
+            parent=$(gh api "repos/$GITHUB_REPOSITORY/git/commits/$head" --jq '.parents[0].sha')
+            if [[ "$parent" != "$base" ]]; then
+              echo 'The update branch needs rebasing before verification can resume.'
+              exit 0
+            fi
+            verified=$(gh run list --workflow upstream-verify.yml --branch "$branch" --commit "$head" \
+              --limit 10 --json status,conclusion --jq 'any(.[]; .status != "completed" or .conclusion == "success")')
+            if [[ "$verified" != true ]]; then
+              gh workflow run upstream-verify.yml --ref "$branch" -f expected_head="$head" -f expected_base="$base"
+            fi
+          fi
+      - name: 从官方安装信息生成兼容档案
+        if: steps.discovery.outputs.existing != 'true'
+        id: upstream
+        run: python3 tools/update_upstream.py --write
+      - name: 提交独立更新 PR 并启动只读验证
+        if: steps.upstream.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.upstream.outputs.version }}
+        shell: bash
+        run: |
+          branch="upstream/runtime-$VERSION"
+          if gh pr list --head "$branch" --state open --json number --jq 'length > 0' | grep -qx true; then
+            exit 0
+          fi
+          base=$(git rev-parse HEAD)
+          git switch -c "$branch"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add data/runtime-profiles.json CMakeLists.txt packaging/PKGBUILD.in packaging/aur/PKGBUILD README.md
+          previous=$(git ls-remote origin "refs/heads/$branch" | cut -f1)
+          if [[ -n "$previous" ]]; then
+            # Recover a prior push whose PR creation was interrupted. Reuse
+            # only the exact generated tree on this exact base, without force.
+            git fetch --no-tags --depth=2 origin "$previous"
+            test "$(git rev-parse "$previous^1")" = "$base"
+            test "$(git rev-parse "$previous^{tree}")" = "$(git write-tree)"
+            git reset --soft "$previous"
+          else
+            git commit -m "Update original core to $VERSION"
+            git push origin "$branch"
+          fi
+          head=$(git rev-parse HEAD)
+          printf '%s\n' "更新微信输入法原版核心到 $VERSION，保留经过验证的传输模块和旧版回退档案。" \
+            '' '验证包括两种架构的真实原版运行时、语音网络请求，以及旧系统和软件包构建。全部通过后可审阅合并；启用 release 自动化模式时，受信任的完成流程会重新核对官方摘要和完整补丁，再以 squash 合并、打标签并启动发布。' \
+            > "$RUNNER_TEMP/upstream-pr.md"
+          gh pr create --head "$branch" --base main --title "Update original core to $VERSION" \
+            --body-file "$RUNNER_TEMP/upstream-pr.md"
+          gh workflow run upstream-verify.yml --ref "$branch" \
+            -f expected_head="$head" -f expected_base="$base"
