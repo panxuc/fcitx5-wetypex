@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 import uuid
 import zipfile
@@ -611,6 +612,7 @@ class RuntimeManager:
         class Redirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, request, fp, code, message, headers, newurl):
                 validate_url(newurl, DOWNLOAD_HOSTS, allow_cdn=True)
+                self.parent.archive_last_host = urllib.parse.urlsplit(newurl).hostname
                 return super().redirect_request(request, fp, code, message, headers, newurl)
         fd, temporary = tempfile.mkstemp(prefix='.download-', dir=self.cache)
         try:

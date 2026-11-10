@@ -15,6 +15,7 @@ import re
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -79,6 +80,7 @@ def download(metadata, directory):
     class OfficialRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, request, fp, code, message, headers, url):
             validate_url(url, DOWNLOAD_HOSTS, allow_cdn=True)
+            self.parent.archive_last_host = urllib.parse.urlsplit(url).hostname
             return super().redirect_request(request, fp, code, message, headers, url)
     validate_url(metadata['archive_url'], DOWNLOAD_HOSTS)
     target = Path(directory) / 'official.zip'

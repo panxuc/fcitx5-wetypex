@@ -78,7 +78,8 @@ def download_archive(opener, url, output):
     limit = 768 * 1024 * 1024
     for attempt in range(3):
         offset = output.tell()
-        request = urllib.request.Request(url, headers={'User-Agent': 'WeTypeX runtime downloader'})
+        request = urllib.request.Request(url)
+        opener.archive_last_host = urllib.parse.urlsplit(url).hostname
         if offset:
             request.add_header('Range', 'bytes=' + str(offset) + '-')
         try:
@@ -129,6 +130,7 @@ def download_archive(opener, url, output):
                     raise
             if attempt == 2:
                 raise OSError('original archive download failed after three attempts: ' + str(error)) from error
-            print('Original archive download interrupted; retrying (%d/3)' % (attempt + 2),
+            print('Original archive download interrupted at %s (%s); retrying (%d/3)' %
+                  (opener.archive_last_host, type(error).__name__, attempt + 2),
                   file=sys.stderr)
             time.sleep(attempt + 1)
