@@ -161,7 +161,7 @@ static void *shim_objc_retain(void *object) {
   return nullptr;
 }
 static void shim_objc_release(void *object) { (void)shim_objc_retain(object); }
-extern "C" void shim_objc_message_error(void *, const void *) {
+extern "C" __attribute__((used, noinline)) void shim_objc_message_error(void *, const void *) {
   fputs("unsupported Objective-C object message\n", stderr);
   _exit(85);
 }
@@ -1314,7 +1314,7 @@ asm(".text\n.p2align 2\n"
 #else
 #define shim_promise_void_get_future_impl shim_promise_void_get_future
 #endif
-extern "C" void shim_promise_void_get_future_impl(void *output, void *promise) {
+extern "C" __attribute__((used, noinline)) void shim_promise_void_get_future_impl(void *output, void *promise) {
   // Flurry constructs libc++'s __assoc_sub_state inline with Darwin's static
   // pthread signatures, then calls the dynamically imported get_future().
   // Linux libc++ operates on the embedded native pthread objects directly.

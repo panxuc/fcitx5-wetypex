@@ -89,19 +89,19 @@ extern "C" int darwin_arm_vsscanf(const char *text, const char *format, void *st
   va_end(args);
   return result;
 }
-extern "C" int darwin_arm_open(const char *path, int flags, const void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_open(const char *path, int flags, const void *stack) {
   int mode = 0;
   if (flags & 0x200)
     memcpy(&mode, stack, sizeof(mode));
   return shim_open(path, flags, mode);
 }
-extern "C" int darwin_arm_fcntl(int fd, int command, const void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_fcntl(int fd, int command, const void *stack) {
   long argument = 0;
   if (command != 1 && command != 3)
     memcpy(&argument, stack, sizeof(argument));
   return shim_fcntl(fd, command, argument);
 }
-extern "C" int darwin_arm_ioctl(int fd, unsigned long command, const void *stack) {
+extern "C" __attribute__((used, noinline)) int darwin_arm_ioctl(int fd, unsigned long command, const void *stack) {
   void *argument = nullptr;
   memcpy(&argument, stack, sizeof(argument));
   return shim_ioctl(fd, command, argument);
