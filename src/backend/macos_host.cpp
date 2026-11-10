@@ -1427,6 +1427,43 @@ extern "C" double shim_cf_time() {
   clock_gettime(CLOCK_REALTIME, &t);
   return t.tv_sec - 978307200.0 + t.tv_nsec / 1e9;
 }
+static clockid_t darwin_clock(int clock) {
+  // Apple Libc include/_time.h and gen/clock_gettime.c use different IDs
+  // from Linux. In particular, Darwin 8 is uptime, not REALTIME_ALARM.
+  switch (clock) {
+  case 0: return CLOCK_REALTIME;
+  case 4: // MONOTONIC_RAW includes suspend on Darwin. Linux has no raw
+  case 5: // suspend-inclusive clock; BOOTTIME preserves that monotonic timeline.
+  case 6: return CLOCK_BOOTTIME;
+  case 8:
+  case 9: return CLOCK_MONOTONIC_RAW; // UPTIME_RAW and its approximate variant
+  case 12: return CLOCK_PROCESS_CPUTIME_ID;
+  case 16: return CLOCK_THREAD_CPUTIME_ID;
+  default: return clockid_t(-1);
+  }
+}
+static int shim_clock_gettime(int clock, timespec *value) {
+  const auto native = darwin_clock(clock);
+  if (native == clockid_t(-1)) {
+    errno = EINVAL;
+    return -1;
+  }
+  return clock_gettime(native, value);
+}
+static int shim_clock_getres(int clock, timespec *value) {
+  const auto native = darwin_clock(clock);
+  if (native == clockid_t(-1)) {
+    errno = EINVAL;
+    return -1;
+  }
+  return clock_getres(native, value);
+}
+static uint64_t shim_clock_gettime_nsec(int clock) {
+  timespec value{};
+  if (shim_clock_gettime(clock, &value))
+    return 0;
+  return uint64_t(value.tv_sec) * 1000000000ULL + uint64_t(value.tv_nsec);
+}
 struct DarwinStat {
   int32_t dev;
   uint16_t mode, nlink;
@@ -2917,6 +2954,9 @@ static void *resolve(const std::string &name) {
   if (auto symbol = syms.find(name); symbol != syms.end())
     return reinterpret_cast<void *>(symbol->second);
   static std::map<std::string, void *> overrides = {
+      {"_clock_gettime", (void *)shim_clock_gettime},
+      {"_clock_getres", (void *)shim_clock_getres},
+      {"_clock_gettime_nsec_np", (void *)shim_clock_gettime_nsec},
       {"___exp10", (void *)shim_exp10},
       {"___stack_chk_guard", &stack_guard},
       {"___exp10", (void *)exp10},
