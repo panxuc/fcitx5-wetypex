@@ -57,6 +57,7 @@ FCITX_CONFIGURATION(
     Option<bool> kaomoji{this, "Kaomoji", "颜文字推荐", true};
     Option<bool> largeEmoji{this, "LargeEmoji", "大表情推荐", true};
     Option<bool> symbolEmoji{this, "SymbolEmoji", "符号表情推荐", true};
+    Option<bool> chinesePunctuation{this, "ChinesePunctuation", "中文模式默认使用中文标点", true};
     Option<bool> slashPunctuation{this, "SlashPunctuation",
                                   "输入中文时将 /? 替换为 、", true};
     Option<bool> symbolAutoChange{this, "SymbolAutoChange", "符号自动转换",
