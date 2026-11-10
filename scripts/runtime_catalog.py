@@ -171,6 +171,14 @@ def download_archive(opener, url, output):
                     opener.add_handler(fallback)
                 else:
                     fallback.enabled = False
+                    # Retain certificate/hostname verification and TLS 1.3,
+                    # while avoiding oversized hybrid key shares on the last
+                    # connection attempt through older download gateways.
+                    context = ssl.create_default_context()
+                    context.set_ecdh_curve('prime256v1')
+                    if ssl.HAS_ALPN:
+                        context.set_alpn_protocols(['http/1.1'])
+                    fallback._context = context
             print('Original archive download interrupted at %s (%s); retrying (%d/3)' %
                   (opener.archive_last_host, type(error).__name__, attempt + 2),
                   file=sys.stderr)
