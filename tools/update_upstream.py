@@ -21,7 +21,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'tools'))
-from runtime_catalog import discover, fetch, validate_url, DOWNLOAD_HOSTS
+from runtime_catalog import discover, fetch, validate_url, DOWNLOAD_HOSTS, download_archive
 from prepare_macos_runtime import select_slice
 
 CATALOG = 'data/runtime-profiles.json'
@@ -82,18 +82,8 @@ def download(metadata, directory):
             return super().redirect_request(request, fp, code, message, headers, url)
     validate_url(metadata['archive_url'], DOWNLOAD_HOSTS)
     target = Path(directory) / 'official.zip'
-    with urllib.request.build_opener(OfficialRedirect()).open(metadata['archive_url'], timeout=60) as response:
-        validate_url(response.geturl(), DOWNLOAD_HOSTS, allow_cdn=True)
-        with target.open('wb') as output:
-            total = 0
-            while True:
-                block = response.read(1024 * 1024)
-                if not block:
-                    break
-                total += len(block)
-                if total > 768 * 1024 * 1024:
-                    raise ValueError('original archive exceeds its size limit')
-                output.write(block)
+    with target.open('wb') as output:
+        download_archive(urllib.request.build_opener(OfficialRedirect()), metadata['archive_url'], output)
     return target
 
 

@@ -19,7 +19,7 @@ import urllib.request
 import uuid
 import zipfile
 
-from runtime_catalog import DOWNLOAD_HOSTS, validate_url
+from runtime_catalog import DOWNLOAD_HOSTS, validate_url, download_archive
 
 ASSETS = ('fcitx5-wetypex/ui', 'fcitx5-wetypex/voice/vad',
           'fcitx5/themes/wetypex-light', 'fcitx5/themes/wetypex-dark',
@@ -199,6 +199,7 @@ class RuntimeManager:
                          Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) /
                          'fcitx5-wetypex/archives'))
         self.cache_lock = self.cache / '.use.lock'
+        self.keep_archives = os.environ.get('WETYPE_KEEP_ARCHIVES') == '1'
         self.owner = hashlib.sha256((str(self.root) + '\n' + str(self.target)).encode()).hexdigest()
         self.cache_reference = self.cache / ('.retained-' + hashlib.sha256(
             (str(self.root) + '\n' + str(self.target)).encode()).hexdigest() + '.json')
@@ -451,7 +452,7 @@ class RuntimeManager:
             complete = bool(generation and (self.store / generation / 'assets').is_dir() and
                             self.dictionaries_ready(self.store / generation) and
                             self.auxiliary_ready(self.store / generation, profile))
-            if not complete or pending.get('generation') == generation:
+            if self.keep_archives or not complete or pending.get('generation') == generation:
                 archives.update(self.archive_hashes(profile))
 
         # is_mount() alone cannot detect bind mounts on the same filesystem.
@@ -547,7 +548,8 @@ class RuntimeManager:
                     archive = re.fullmatch(r'([0-9a-f]{64})\.zip', path.name)
                     stale = (re.fullmatch(r'\.(?:download|archive)-[a-z0-9_]{8}', path.name) and
                              path.stat().st_mtime < time.time() - 86400)
-                    if (archive and archive[1] not in archives) or stale:
+                    if (archive and archive[1] in {row['sha256'] for row in self.catalog['archives'].values()}
+                            and archive[1] not in archives) or stale:
                         candidates.append((path, path.stat().st_size, False))
                 result = dict(dry_run=dry_run, removed_generations=[], removed_archives=[],
                               removed_bytes=0, retained_generations=sorted(keep))
@@ -613,17 +615,7 @@ class RuntimeManager:
         fd, temporary = tempfile.mkstemp(prefix='.download-', dir=self.cache)
         try:
             with os.fdopen(fd, 'wb') as output:
-                with urllib.request.build_opener(Redirect()).open(package['url'], timeout=45) as response:
-                    validate_url(response.geturl(), DOWNLOAD_HOSTS, allow_cdn=True)
-                    total = 0
-                    while True:
-                        block = response.read(1024 * 1024)
-                        if not block:
-                            break
-                        total += len(block)
-                        if total > 768 * 1024 * 1024:
-                            raise ValueError('original archive exceeds its size limit')
-                        output.write(block)
+                download_archive(urllib.request.build_opener(Redirect()), package['url'], output)
                 output.flush()
                 os.fsync(output.fileno())
             if digest(temporary) != package['sha256']:

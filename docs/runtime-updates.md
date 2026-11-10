@@ -83,6 +83,10 @@ fcitx5-wetypex-setup --cleanup
 ```
 
 Shared archive caches honor other installations' pending-update reservations.
+For offline reuse, set `WETYPE_KEEP_ARCHIVES=1` when preparing or cleaning a
+runtime. This retains the ZIPs needed by the current, rollback and pending
+profiles; the default policy removes them after activation. CI shares this
+verified archive cache between old-system checks to avoid repeated downloads.
 An update interrupted by power loss recovers from its journal before activating
 another generation. A failed download or compatibility check leaves the current
 runtime selected. Background operation details are in

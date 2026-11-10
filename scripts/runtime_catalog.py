@@ -1,6 +1,11 @@
 """Discover official Mac runtime channels without executing website JavaScript."""
+import http.client
 import json
 import re
+import ssl
+import sys
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -66,3 +71,64 @@ def discover(channel='stable'):
                 archive_url=archive_url, archive_md5=md5.lower(),
                 checksum_source='official HTTPS metadata',
                 compatibility_validated=False)
+
+
+def download_archive(opener, url, output):
+    """Resume interrupted official downloads; the caller verifies the full SHA."""
+    limit = 768 * 1024 * 1024
+    for attempt in range(3):
+        offset = output.tell()
+        request = urllib.request.Request(url, headers={'User-Agent': 'WeTypeX runtime downloader'})
+        if offset:
+            request.add_header('Range', 'bytes=' + str(offset) + '-')
+        try:
+            with opener.open(request, timeout=45) as response:
+                validate_url(response.geturl(), DOWNLOAD_HOSTS, allow_cdn=True)
+                if response.status == 206:
+                    interval = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)',
+                                            response.headers.get('Content-Range', ''))
+                    if not interval or int(interval[1]) != offset or not (
+                            offset <= int(interval[2]) < int(interval[3]) <= limit):
+                        raise ValueError('invalid original archive range response')
+                    expected = int(interval[2]) + 1
+                    full_size = int(interval[3])
+                elif response.status == 200:
+                    output.seek(0)
+                    output.truncate()
+                    offset = 0
+                    length = response.headers.get('Content-Length')
+                    expected = int(length) if length else None
+                    full_size = expected
+                else:
+                    raise ValueError('unexpected original archive response')
+                if expected is not None and expected > limit:
+                    raise ValueError('original archive exceeds its size limit')
+                total = offset
+                while True:
+                    block = response.read(1024 * 1024)
+                    if not block:
+                        break
+                    total += len(block)
+                    if total > limit or (expected is not None and total > expected):
+                        raise ValueError('original archive exceeds its declared size')
+                    output.write(block)
+                if expected is not None and total < expected:
+                    raise http.client.IncompleteRead(b'', expected - total)
+                if full_size is not None and total < full_size:
+                    raise http.client.IncompleteRead(b'', full_size - total)
+                return
+        except (urllib.error.URLError, http.client.HTTPException,
+                ConnectionError, TimeoutError, ssl.SSLError) as error:
+            if isinstance(error, ssl.SSLCertVerificationError):
+                raise
+            if isinstance(error, urllib.error.HTTPError):
+                if error.code == 416 and offset:
+                    output.seek(0)
+                    output.truncate()
+                elif error.code not in (408, 429, 500, 502, 503, 504):
+                    raise
+            if attempt == 2:
+                raise
+            print('Original archive download interrupted; retrying (%d/3)' % (attempt + 2),
+                  file=sys.stderr)
+            time.sleep(attempt + 1)
