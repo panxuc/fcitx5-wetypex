@@ -219,29 +219,32 @@ def check_runtime_update(update_root):
     runtime = pathlib.Path(os.environ.get('WETYPE_RUNTIME_DIR', root / 'runtime'))
     state_path = update_root / 'runtime-check.json'
     now = int(time.time())
-    if '--force' not in sys.argv and now < int(read_json(state_path).get('next_check', 0)):
+    adapter = CURRENT_VERSION + '-' + CURRENT_PACKAGE_RELEASE
+    state = read_json(state_path)
+    if ('--force' not in sys.argv and state.get('adapter') == adapter and
+            now < int(state.get('next_check', 0))):
         return
     setup = '@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-setup'
     try:
         result = subprocess.run([setup, '--status'], capture_output=True, timeout=30, check=True)
         status = json.loads(result.stdout)
     except (OSError, ValueError, subprocess.SubprocessError):
-        atomic_json(state_path, dict(next_check=now + RETRY_INTERVAL))
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + RETRY_INTERVAL))
         return
     desired = status.get('default')
     if (not status.get('update_available') or not desired or
             read_json(root / 'runtime-policy.json').get('suppressed_default') == desired or
             read_json(root / 'runtime-pending.json').get('version') == desired):
-        atomic_json(state_path, dict(next_check=now + CHECK_INTERVAL))
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + CHECK_INTERVAL))
         return
     try:
         result = subprocess.run([setup, '--update',
                         '--download', '--accept-upstream-license', '--defer'],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=900)
-        atomic_json(state_path, dict(next_check=now + (CHECK_INTERVAL if result.returncode == 0 else RETRY_INTERVAL)))
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + (CHECK_INTERVAL if result.returncode == 0 else RETRY_INTERVAL)))
     except (OSError, subprocess.TimeoutExpired):
-        atomic_json(state_path, dict(next_check=now + RETRY_INTERVAL))
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + RETRY_INTERVAL))
 
 
 def check_update(root):
