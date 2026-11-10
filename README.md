@@ -197,7 +197,7 @@ cmake --build build --parallel
 sudo cmake --install build
 ```
 
-构建要求 CMake 3.16+、Clang、C++17 编译器及上述开发依赖；新 Fcitx SDK 使用 C++20。ARM64 私有 libc++ 构建需要 CMake 3.20+ 和较新的 Clang。完整流程见[发行与打包](docs/distribution.md)。
+构建要求 CMake 3.16+、Clang、C++17 编译器及上述开发依赖；新 Fcitx SDK 使用 C++20。ARM64 私有 libc++ 构建需要 CMake 3.20+ 和 Clang 16+。完整流程见[发行与打包](docs/distribution.md)。
 
 ## 首次设置
 

@@ -1,5 +1,11 @@
 # Apple ARM64 uses libc++'s alternate string layout. Keep this dependency
 # private to the compatibility process; frontends use the distribution ABI.
+execute_process(COMMAND "${WETYPE_CLANGXX}" -dumpversion
+  OUTPUT_VARIABLE darwin_clang_version OUTPUT_STRIP_TRAILING_WHITESPACE
+  RESULT_VARIABLE darwin_clang_status)
+if(NOT darwin_clang_status EQUAL 0 OR darwin_clang_version VERSION_LESS 16)
+  message(FATAL_ERROR "ARM64's private libc++ requires Clang 16 or newer; set WETYPE_CLANGXX to a supported clang++")
+endif()
 set(WETYPE_DARWIN_LIBCXX_ROOT "" CACHE PATH "Prebuilt compatible ARM64 libc++ prefix")
 set(WETYPE_DARWIN_LIBCXX_LICENSE "" CACHE FILEPATH "License for a prebuilt private libc++")
 if(WETYPE_DARWIN_LIBCXX_ROOT)
