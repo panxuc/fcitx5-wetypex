@@ -2641,7 +2641,8 @@ class WeType : public InputMethodEngineV2 {
       for (const auto &[id, ref] : contexts_)
         if (auto *ic = ref.get()) {
           const auto *s = ic->propertyFor(&factory_);
-          if (!s->preedit.empty() || s->vMode || s->vMenu != VMenu::None ||
+          if (!s->preedit.empty() || !s->englishWord.empty() || s->vMode ||
+              s->vMenu != VMenu::None ||
               s->seq != s->applied || s->selectionPending ||
               !s->deferredKeys.empty() || !s->cursorKeys.empty() ||
               s->pendingCursorSteps || s->pendingClientKey || s->pendingNumericReplay ||
@@ -2791,17 +2792,23 @@ class WeType : public InputMethodEngineV2 {
     failed_ = true;
     restartNeedsOpen_ = true;
     scheduleRestart();
-    invalidateSessions();
+    invalidateSessions(true);
   }
-  void invalidateSessions() {
+  void invalidateSessions(bool preserveEnglish = false) {
     cancelVoice();
     restartNeedsOpen_ = true;
     for (auto &[id, ref] : contexts_)
       if (auto *ic = ref.get()) {
         auto *s = ic->propertyFor(&factory_);
-        if (s->active && ic->hasFocus() && englishCompletionField(ic))
-          commitEnglishWord(ic, s);
-        s->englishWord.clear();
+        // English completion is local to the frontend. A backend failure
+        // must not commit an unfinished word or discard its candidates.
+        const bool keepEnglish = preserveEnglish && s->active && ic->hasFocus() &&
+                                 s->english && englishCompletionEnabled(ic, s);
+        if (!keepEnglish) {
+          if (s->active && ic->hasFocus() && englishCompletionField(ic))
+            commitEnglishWord(ic, s);
+          s->englishWord.clear();
+        }
         releaseForwardedKeys(ic, s);
         clearCursorMove(s);
         s->physicalModifiers = s->pressedShifts = 0;
@@ -3865,6 +3872,10 @@ public:
                               ~uint32_t(KeyState::Shift);
         const bool shift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
         const bool inputShortcut = languageSwitchKey(key) || compositionShortcutKey(key) ||
+            // Earlier queued keys may switch language or half/full width.
+            // Replay decides whether this chord selects an English word.
+            (*config_.input->englishCompletion && englishCompletionField(ic) &&
+             key.keyListIndex(englishSelectionKeys()) >= 0) ||
             (*config_.shortcuts->halfFull && key.checkKeyList(*config_.shortcuts->halfFullKeys)) ||
             (*config_.shortcuts->selectCtrl && bareModifier(key) &&
              (sym == FcitxKey_Control_L || sym == FcitxKey_Control_R)) ||
