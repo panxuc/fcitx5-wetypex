@@ -70,6 +70,76 @@ static std::vector<DarwinTLSImage> tls_images;
 static std::string active_libcxx_path = "libc++.so.1";
 static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
 static bool service_mode = false;
+
+// Darwin sigset_t is four bytes. Passing it directly to Linux sigprocmask
+// overwrites the caller's adjacent stack data, including the previous SIGILL
+// handler saved by CryptoPP's CPU probe. Darwin also numbers both signals and
+// SIG_BLOCK/UNBLOCK/SETMASK differently from Linux.
+static constexpr std::array<int, 32> darwin_signals = {
+    0,       SIGHUP,  SIGINT,    SIGQUIT, SIGILL,   SIGTRAP, SIGABRT, 0,
+    SIGFPE,  SIGKILL, SIGBUS,    SIGSEGV, SIGSYS,   SIGPIPE, SIGALRM, SIGTERM,
+    SIGURG,  SIGSTOP, SIGTSTP,   SIGCONT, SIGCHLD,  SIGTTIN, SIGTTOU, SIGIO,
+    SIGXCPU, SIGXFSZ, SIGVTALRM, SIGPROF, SIGWINCH, 0,       SIGUSR1, SIGUSR2};
+
+static sigset_t native_signal_mask(uint32_t mask) {
+  sigset_t result;
+  sigemptyset(&result);
+  for (unsigned signal = 1; signal < darwin_signals.size(); ++signal)
+    if ((mask & (uint32_t{1} << (signal - 1))) && darwin_signals[signal])
+      sigaddset(&result, darwin_signals[signal]);
+  return result;
+}
+
+static uint32_t darwin_signal_mask(const sigset_t &mask) {
+  uint32_t result = 0;
+  for (unsigned signal = 1; signal < darwin_signals.size(); ++signal)
+    if (darwin_signals[signal] &&
+        sigismember(&mask, darwin_signals[signal]) == 1)
+      result |= uint32_t{1} << (signal - 1);
+  return result;
+}
+
+static int change_signal_mask(int how, const uint32_t *mask, uint32_t *previous,
+                              bool thread) {
+  int operation = SIG_SETMASK;
+  if (mask) {
+    switch (how) {
+    case 1:
+      operation = SIG_BLOCK;
+      break;
+    case 2:
+      operation = SIG_UNBLOCK;
+      break;
+    case 3:
+      operation = SIG_SETMASK;
+      break;
+    default:
+      if (!thread)
+        errno = EINVAL;
+      return thread ? EINVAL : -1;
+    }
+  }
+  const sigset_t native = native_signal_mask(mask ? *mask : 0);
+  sigset_t old;
+  int result = thread ? pthread_sigmask(operation, mask ? &native : nullptr,
+                                        previous ? &old : nullptr)
+                      : sigprocmask(operation, mask ? &native : nullptr,
+                                    previous ? &old : nullptr);
+  if (!result && previous)
+    *previous = darwin_signal_mask(old);
+  return result;
+}
+
+extern "C" int shim_sigprocmask(int how, const uint32_t *mask,
+                                uint32_t *previous) {
+  return change_signal_mask(how, mask, previous, false);
+}
+
+extern "C" int shim_pthread_sigmask(int how, const uint32_t *mask,
+                                    uint32_t *previous) {
+  return change_signal_mask(how, mask, previous, true);
+}
+
 static bool original_cpu_supported() {
 #if defined(__aarch64__)
   // The macOS ARM64 image targets Apple Silicon. Older Linux ARM64 CPUs
@@ -2063,7 +2133,8 @@ static void show_address(uintptr_t pc) {
 static void crash(int sig, siginfo_t *info, void *ctx) {
   auto uc = (ucontext_t *)ctx;
 #if defined(__x86_64__)
-  fprintf(stderr, "FAULT signal=%d address=%p rip=", sig, info->si_addr);
+  fprintf(stderr, "FAULT signal=%d code=%d address=%p rip=", sig, info->si_code,
+          info->si_addr);
   show_address(uc->uc_mcontext.gregs[REG_RIP]);
   fprintf(stderr, "REG rdi=%llx rsi=%llx rdx=%llx rax=%llx rbp=%llx rsp=%llx\n",
           (long long)uc->uc_mcontext.gregs[REG_RDI],
@@ -2074,7 +2145,8 @@ static void crash(int sig, siginfo_t *info, void *ctx) {
           (long long)uc->uc_mcontext.gregs[REG_RSP]);
   auto sp = (uintptr_t *)uc->uc_mcontext.gregs[REG_RSP];
 #elif defined(__aarch64__)
-  fprintf(stderr, "FAULT signal=%d address=%p pc=", sig, info->si_addr);
+  fprintf(stderr, "FAULT signal=%d code=%d address=%p pc=", sig, info->si_code,
+          info->si_addr);
   show_address(uc->uc_mcontext.pc);
   fprintf(stderr, "REG x0=%llx x1=%llx x2=%llx x3=%llx x8=%llx x16=%llx x17=%llx fp=%llx sp=%llx lr=",
           (long long)uc->uc_mcontext.regs[0], (long long)uc->uc_mcontext.regs[1],
@@ -3050,6 +3122,8 @@ static void *resolve(const std::string &name) {
       {"_select$1050", (void *)select},
       {"_select$DARWIN_EXTSN", (void *)select},
       {"_sigsetjmp", (void *)__sigsetjmp},
+      {"_sigprocmask", (void *)shim_sigprocmask},
+      {"_pthread_sigmask", (void *)shim_pthread_sigmask},
       {"_setsockopt", (void *)shim_setsockopt},
       {"_send", (void *)shim_send},
       {"_sendmsg", (void *)shim_sendmsg},
