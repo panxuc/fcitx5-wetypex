@@ -53,6 +53,8 @@ jobs:
           ref: ${{ inputs.tag || github.ref_name }}
           persist-credentials: false
 
+      - uses: ./.github/actions/ubuntu-network
+
       - name: 校验标签与源码版本
         shell: bash
         run: |
@@ -154,6 +156,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - uses: ./.github/actions/ubuntu-network
       - name: 安装包元数据检查工具
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends zstd rpm
       - name: 校验并发布，或复用已构建的包恢复发布
