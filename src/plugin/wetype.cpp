@@ -6,6 +6,7 @@
 #include <clipboard_public.h>
 #include <csignal>
 #include <cstddef>
+#include <optional>
 #include <cstdlib>
 #include <cstring>
 #include <fcitx-utils/capabilityflags.h>
@@ -253,7 +254,8 @@ struct State : InputContextProperty {
   uint64_t pendingNumericUntil = 0;
   bool doubleQuoteLeft = true, singleQuoteLeft = true;
   bool english = false, fullWidth = false, traditional = false,
-       englishPunctuation = false, vMode = false, vCalculator = false;
+       vMode = false, vCalculator = false;
+  std::optional<bool> englishPunctuation;
   bool languageInitialized = false;
   uint32_t physicalModifiers = 0;
   uint8_t pressedShifts = 0;
@@ -915,7 +917,7 @@ class WeType : public InputMethodEngineV2 {
       return;
     }
     if (!s->active || !ic->hasFocus() || !symbolAutoChange_ || s->english ||
-        s->englishPunctuation || s->fullWidth || !chinesePunctuation_ ||
+        englishPunctuation(s) || s->fullWidth ||
         voicePending_ || s->vMode || s->vMenu != VMenu::None ||
         !s->preedit.empty() ||
         ic->capabilityFlags().test(CapabilityFlag::Password) ||
@@ -949,7 +951,7 @@ class WeType : public InputMethodEngineV2 {
     if (!entry)
       return std::string(1, ascii);
     const bool useEnglish =
-        asciiMode || s->englishPunctuation || !chinesePunctuation_;
+        asciiMode || englishPunctuation(s);
     if (ascii == '/' && slashPunctuation_ && !useEnglish && !s->fullWidth)
       return "、";
     if (s->fullWidth)
@@ -1158,8 +1160,8 @@ class WeType : public InputMethodEngineV2 {
       return true;
     }
     const bool autoChangeActive = symbolAutoChange_ && !asciiMode &&
-                                  !s->englishPunctuation &&
-                                  chinesePunctuation_ && !s->fullWidth;
+                                  !englishPunctuation(s) &&
+                                  !s->fullWidth;
     const bool numeric = autoChangeActive &&
                          (s->symbolAutoState || !s->pendingNumericText.empty());
     auto emit = [&](const std::string &value) {
@@ -1235,8 +1237,17 @@ class WeType : public InputMethodEngineV2 {
     };
     pageSize_ = std::clamp(int(wire::number(j.get(), "page_size", 5)), 3, 9);
     vertical_ = json_object_get_boolean(wire::get(j.get(), "vertical"));
+    const bool previousPunctuation = chinesePunctuation_;
     auto *punctuation = wire::get(j.get(), "chinese_punctuation");
     chinesePunctuation_ = !punctuation || json_object_get_boolean(punctuation);
+    if (previousPunctuation != chinesePunctuation_)
+      for (const auto &[id, ref] : contexts_)
+        if (auto *ic = ref.get()) {
+          auto *state = ic->propertyFor(&factory_);
+          state->englishPunctuation.reset();
+          state->symbolAutoState = 0;
+          clearNumericCorrection(state);
+        }
     auto *slash = wire::get(j.get(), "slash_punctuation");
     slashPunctuation_ = !slash || json_object_get_boolean(slash);
     auto *symbolChange = wire::get(j.get(), "symbol_auto_change");
@@ -1282,6 +1293,7 @@ class WeType : public InputMethodEngineV2 {
         !wire::get(j.get(), "symbol_auto_pair") ||
         json_object_get_boolean(wire::get(j.get(), "symbol_auto_pair")));
     input->standalone.setValue(!networkEnabled_);
+    input->chinesePunctuation.setValue(chinesePunctuation_);
     input->defaultLanguage.setValue(
         wire::str(j.get(), "default_language") == "english"
             ? wetype_config::DefaultLanguage::English
@@ -1457,6 +1469,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "kaomoji", bool(*input.kaomoji));
     wire::put(json.get(), "large_emoji", bool(*input.largeEmoji));
     wire::put(json.get(), "symbol_emoji", bool(*input.symbolEmoji));
+    wire::put(json.get(), "chinese_punctuation", bool(*input.chinesePunctuation));
     wire::put(json.get(), "slash_punctuation", bool(*input.slashPunctuation));
     wire::put(json.get(), "symbol_auto_change", bool(*input.symbolAutoChange));
     wire::put(json.get(), "symbol_auto_pair", bool(*input.symbolAutoPair));
@@ -2296,6 +2309,9 @@ class WeType : public InputMethodEngineV2 {
     if (vModeChild_ <= 0 && !vModeNative_)
       cancelVMode(ic, "toolbar process exited");
   }
+  bool englishPunctuation(const State *s) const {
+    return s->englishPunctuation.value_or(!chinesePunctuation_);
+  }
   State *state(InputContext *ic) {
     auto *s = ic->propertyFor(&factory_);
     contexts_[s->id] = ic->watch();
@@ -2593,7 +2609,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "mapped", mapped);
     wire::put(json.get(), "pair_cursor", int64_t(pairCursor));
     wire::put(json.get(), "before", op == std::string("predict") ? key : "");
-    wire::put(json.get(), "chinese_punctuation", int64_t(chinesePunctuation_));
+    wire::put(json.get(), "chinese_punctuation", int64_t(!englishPunctuation(s)));
     const auto &inputConfig = *config_.input;
     wire::put(json.get(), "keyboard",
               int64_t(*inputConfig.mode == wetype_config::InputMode::Wubi ? 5 : 0));
@@ -3304,7 +3320,7 @@ public:
     return std::string(s->english ? "英文" : "中文") +
            (s->traditional ? " · 繁体" : " · 简体") +
            (s->fullWidth ? " · 全角" : " · 半角") +
-           (s->english || s->englishPunctuation || !chinesePunctuation_
+           (s->english || englishPunctuation(s)
                 ? " · 英文标点" : " · 中文标点");
   }
   void modeChanged(InputContext *ic, State *s, bool notify = true) {
@@ -3460,7 +3476,7 @@ public:
                               ~uint32_t(KeyState::Shift);
     const bool nativeNumericKey =
         s->preedit.empty() && !s->english && !s->fullWidth &&
-        !s->englishPunctuation && symbolAutoChange_ && chinesePunctuation_ &&
+        !englishPunctuation(s) && symbolAutoChange_ &&
         Key::keySymToUnicode(e.rawKey().sym()) == scalar &&
         ((sym >= FcitxKey_0 && sym <= FcitxKey_9) ||
          (s->symbolAutoState == 3 &&
@@ -3672,8 +3688,9 @@ public:
         e.filterAndAccept();
         return;
       }
-      s->englishPunctuation = !s->englishPunctuation;
+      s->englishPunctuation = !englishPunctuation(s);
       s->symbolAutoState = 0;
+      clearNumericCorrection(s);
       modeChanged(ic, s);
       e.filterAndAccept();
       return;
@@ -4136,8 +4153,8 @@ public:
     // punctuation correction. Numeric punctuation is displayed in
     // Chinese form first; only another digit changes it back to ASCII.
     const bool autoChangeActive = symbolAutoChange_ && !composing &&
-                                  !s->englishPunctuation &&
-                                  chinesePunctuation_ && !s->fullWidth;
+                                  !englishPunctuation(s) &&
+                                  !s->fullWidth;
     if (autoChangeActive && sym == FcitxKey_space &&
         (s->symbolAutoState || !s->pendingNumericText.empty())) {
       appendNumericCorrection(s, " ");
