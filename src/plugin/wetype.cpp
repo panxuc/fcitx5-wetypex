@@ -3875,7 +3875,7 @@ public:
             // Earlier queued keys may switch language or half/full width.
             // Replay decides whether this chord selects an English word.
             (*config_.input->englishCompletion && englishCompletionField(ic) &&
-             key.keyListIndex(englishSelectionKeys()) >= 0) ||
+             Key(sym, key.states()).keyListIndex(englishSelectionKeys()) >= 0) ||
             (*config_.shortcuts->halfFull && key.checkKeyList(*config_.shortcuts->halfFullKeys)) ||
             (*config_.shortcuts->selectCtrl && bareModifier(key) &&
              (sym == FcitxKey_Control_L || sym == FcitxKey_Control_R)) ||
