@@ -2,7 +2,7 @@ FROM ubuntu:20.04
 
 # Focal's 0.0~git packages predate the stable Fcitx5 ABI. Build a pinned SDK;
 # the resulting WeTypeX package still requires a stable Fcitx5 installation.
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+RUN apt-get -o Acquire::Retries=3 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq \
     build-essential cmake clang git pkg-config ca-certificates gettext \
     extra-cmake-modules libboost-dev libboost-iostreams-dev libboost-filesystem-dev \
     libboost-regex-dev libjson-c-dev libssl-dev libc++-dev libc++abi-dev \
@@ -17,19 +17,21 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
 
 # The ARM64 adapter builds a private alternate-layout libc++18. A newer
 # compiler/CMake is only a build dependency; binaries still target Focal libc.
+COPY packaging/keys/llvm-snapshot.asc /tmp/llvm.asc
 RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
-      apt-get update -qq && apt-get install -y -qq wget gnupg python3-pip && \
-      wget -4 -nv --timeout=30 --tries=3 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
+      apt-get -o Acquire::Retries=3 update -qq && \
+      apt-get -o Acquire::Retries=3 install -y -qq gnupg python3-pip && \
       gpg --show-keys --with-colons /tmp/llvm.asc | grep -q ':6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:' && \
       gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm.asc && \
       echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/focal/ llvm-toolchain-focal-18 main' \
         > /etc/apt/sources.list.d/llvm.list && \
-      apt-get update -qq && apt-get install -y -qq clang-18 && \
+      apt-get -o Acquire::Retries=3 update -qq && \
+      apt-get -o Acquire::Retries=3 install -y -qq clang-18 && \
       ln -sf /usr/bin/clang-18 /usr/local/bin/clang && \
       ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++ && \
       pip3 install --no-cache-dir cmake==3.28.4 && \
-      rm -rf /var/lib/apt/lists/* /tmp/llvm.asc; \
-    fi
+      rm -rf /var/lib/apt/lists/*; \
+    fi && rm -f /tmp/llvm.asc
 
 RUN git clone https://github.com/fcitx/xcb-imdkit.git /tmp/xcb-imdkit && \
     git -C /tmp/xcb-imdkit checkout 30e2f16f9a8b0e338e25ce5e3643809a07ad41f0 && \
