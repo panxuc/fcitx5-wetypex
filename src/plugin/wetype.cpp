@@ -248,6 +248,7 @@ struct State : InputContextProperty {
   int candidatePage = 0, candidateCursor = 0;
   std::string preedit;
   std::string englishWord;
+  int englishCandidateCursor = 0;
   size_t cursor = 0;
   std::string displayPreedit;
   size_t displayCursor = 0, editableBegin = 0;
@@ -2400,6 +2401,7 @@ class WeType : public InputMethodEngineV2 {
   }
   void updateEnglishCandidates(InputContext *ic, State *s) {
     if (!englishCompletionEnabled(ic, s) || s->englishWord.size() < 2) {
+      s->englishCandidateCursor = 0;
       ic->inputPanel().setCandidateList(nullptr);
       return;
     }
@@ -2417,6 +2419,8 @@ class WeType : public InputMethodEngineV2 {
     list->setPageSize(pageSize_);
     // Display plain indices independently of the selection shortcut.
     list->setSelectionKey(Key::keyListFromString("1 2 3 4 5 6 7 8 9"));
+    list->setCursorIncludeUnselected(false);
+    list->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
     list->setLayoutHint(vertical_ ? CandidateLayoutHint::Vertical
                                   : CandidateLayoutHint::Horizontal);
     for (auto &word : words) {
@@ -2426,15 +2430,20 @@ class WeType : public InputMethodEngineV2 {
       if (list->totalSize() == pageSize_)
         break;
     }
-    if (list->totalSize())
-      list->setGlobalCursorIndex(0);
-    else
+    if (list->totalSize()) {
+      s->englishCandidateCursor =
+          std::clamp(s->englishCandidateCursor, 0, list->totalSize() - 1);
+      list->setGlobalCursorIndex(s->englishCandidateCursor);
+    } else {
+      s->englishCandidateCursor = 0;
       list.reset();
+    }
     ic->inputPanel().setCandidateList(std::move(list));
   }
   void commitEnglishWord(InputContext *ic, State *s) {
     if (!s->englishWord.empty())
       commitText(ic, std::exchange(s->englishWord, {}));
+    s->englishCandidateCursor = 0;
   }
   bool handleEnglishCompletion(InputContext *ic, State *s, KeyEvent &event,
                                KeySym sym, bool commandModifiers) {
@@ -2458,6 +2467,7 @@ class WeType : public InputMethodEngineV2 {
           return false;
       }
       s->englishWord.push_back(char(sym));
+      s->englishCandidateCursor = 0;
       if (s->englishWord.size() >= 64)
         commitEnglishWord(ic, s);
       panel(ic, s);
@@ -2468,16 +2478,40 @@ class WeType : public InputMethodEngineV2 {
     const auto &key = event.key();
     if (key.check(FcitxKey_BackSpace)) {
       s->englishWord.pop_back();
+      s->englishCandidateCursor = 0;
       panel(ic, s);
       return true;
     }
     const Key selectionKey(sym, key.states());
+    const auto candidates = ic->inputPanel().candidateList();
+    auto *list = dynamic_cast<CommonCandidateList *>(candidates.get());
+    if (list && list->size()) {
+      const bool previous = selectionKey.check(FcitxKey_Left);
+      const bool next = selectionKey.check(FcitxKey_Right);
+      const bool pageUp = selectionKey.check(FcitxKey_Page_Up) ||
+          selectionKey.checkKeyList(instance_->globalConfig().defaultPrevPage());
+      const bool pageDown = selectionKey.check(FcitxKey_Page_Down) ||
+          selectionKey.checkKeyList(instance_->globalConfig().defaultNextPage());
+      if (previous || next || pageUp || pageDown) {
+        if (previous)
+          list->prevCandidate();
+        else if (next)
+          list->nextCandidate();
+        else if (pageUp && list->hasPrev())
+          list->prev();
+        else if (pageDown && list->hasNext())
+          list->next();
+        s->englishCandidateCursor = std::max(list->globalCursorIndex(), 0);
+        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+        return true;
+      }
+    }
     const bool selectWithSpace = selectionKey.check(FcitxKey_space);
+    const int highlighted = candidates ? std::max(candidates->cursorIndex(), 0) : 0;
     // Plain digits and their Alt variants select the same nine positions.
     const int index = selectWithSpace || selectionKey.check(FcitxKey_Tab)
-                          ? 0
+                          ? highlighted
                           : selectionKey.keyListIndex(englishSelectionKeys()) % 9;
-    const auto candidates = ic->inputPanel().candidateList();
     if (index >= 0 && candidates && index < candidates->size()) {
       const auto *word = dynamic_cast<const EnglishCompletionWord *>(
           &candidates->candidate(index));
@@ -3580,6 +3614,7 @@ public:
     clearNumericCorrection(s);
     s->preedit.clear();
     s->englishWord.clear();
+    s->englishCandidateCursor = 0;
     s->cursor = 0;
     clearDisplayState(s);
     s->pendingPairKey = 0;
@@ -3630,6 +3665,7 @@ public:
         word.compare(0, s->englishWord.size(), s->englishWord))
       return;
     s->englishWord.clear();
+    s->englishCandidateCursor = 0;
     if (trailingSpace)
       word.push_back(' ');
     commitText(ic, word);
@@ -4444,6 +4480,28 @@ public:
       return;
     }
 
+    const Key navigationKey(sym, key.states());
+    const bool horizontalNavigation = !s->vMode &&
+        (navigationKey.check(FcitxKey_Left) || navigationKey.check(FcitxKey_Right));
+    if (composing && horizontalNavigation && s->inputSeq > s->applied) {
+      // Wait for this spelling's candidates before moving their highlight.
+      // Later keys, including Space, must follow the queued arrow too.
+      s->deferredKeys.push_back({e.rawKey(), e.isRelease(), e.time(), replayingForwarded_});
+      s->selectionPending = true;
+      e.filterAndAccept();
+      return;
+    }
+    if (composing && horizontalNavigation && list && list->size()) {
+      if (sym == FcitxKey_Left)
+        list->prevCandidate();
+      else
+        list->nextCandidate();
+      s->candidatePage = list->currentPage();
+      s->candidateCursor = list->globalCursorIndex();
+      ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+      e.filterAndAccept();
+      return;
+    }
     if (composing && (sym == FcitxKey_Left || sym == FcitxKey_Right ||
                       sym == FcitxKey_Home || sym == FcitxKey_End)) {
       size_t target = s->cursor;
