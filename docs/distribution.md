@@ -54,6 +54,8 @@ Arch 包在 `package()` 中为 `locale.so` 和 `wcwss_bridge.so` 设置可执行
 
 ## ARM64
 
+旧发行版的 ARM64 构建使用 LLVM 签名 APT 仓库中的 Clang 18。[官方公钥](../packaging/keys/llvm-snapshot.asc)来自 `https://apt.llvm.org/llvm-snapshot.gpg.key`，随构建文件保存；镜像先核对固定指纹，再启用签名仓库，无需每次重新下载公钥。
+
 ARM64 软件包由 `.github/workflows/packages-arm64.yml` 在原生 ARM64 运行器上构建：deb、legacy deb 与 rpm 在目标发行版容器中原生编译，Arch 包在固定摘要的 Arch Linux ARM 环境中构建。ARM64 构建额外编译使用 Apple 替代字符串布局的私有 libc++（LLVM 18.1.8 源码，散列固定在 `PKGBUILD.in`），需要 CMake 3.20+ 和 Clang 16+。Arch ARM 包把 `qemu-user` 列为可选依赖。运行方式见 [ARM64 支持](arm64.md)。
 
 ## 版本号
