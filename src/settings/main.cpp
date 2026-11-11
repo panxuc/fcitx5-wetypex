@@ -844,6 +844,9 @@ int main(int argc, char **argv) {
       {row("智能拼写", "精准匹配候选词，大幅提升打字效率",
            toggle(wetype::settingBool(settings.value("smart_input"), true),
                   true, "smart_input")),
+       row("英文单词补全", "英文模式下按词频显示候选，按空格补全首项",
+           toggle(wetype::settingBool(settings.value("english_completion"), false),
+                  true, "english_completion")),
        row("表情和颜文字推荐", {}, emojiSetup, 50)}));
   auto *languageSetup = new QPushButton("设置..."),
        *fuzzySetup = new QPushButton("设置...");

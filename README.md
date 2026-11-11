@@ -80,7 +80,7 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 ### Arch Linux
 
 ```bash
-sudo pacman -U ./fcitx5-wetypex-3.0.1.684-1-x86_64.pkg.tar.zst   # ARM64: ...-aarch64.pkg.tar.zst
+sudo pacman -U ./fcitx5-wetypex-3.0.1.684-2-x86_64.pkg.tar.zst   # ARM64: ...-aarch64.pkg.tar.zst
 # 或从 AUR 在本机构建
 paru -S fcitx5-wetypex
 ```
@@ -90,7 +90,7 @@ paru -S fcitx5-wetypex
 标准包支持 Ubuntu 22.04 及更新版本、Debian 12/13。
 
 ```bash
-sudo apt install ./fcitx5-wetypex_3.0.1.684-1_amd64.deb          # ARM64: ..._arm64.deb
+sudo apt install ./fcitx5-wetypex_3.0.1.684-2_amd64.deb          # ARM64: ..._arm64.deb
 ```
 
 ### Ubuntu 20.04
@@ -98,19 +98,19 @@ sudo apt install ./fcitx5-wetypex_3.0.1.684-1_amd64.deb          # ARM64: ..._ar
 需先安装稳定版 Fcitx5 框架，见[安装指南](docs/installation.md#ubuntu-2004-legacy-deb)。
 
 ```bash
-sudo apt install ./fcitx5-wetypex-legacy_3.0.1.684-1_amd64.deb   # ARM64: ..._arm64.deb
+sudo apt install ./fcitx5-wetypex-legacy_3.0.1.684-2_amd64.deb   # ARM64: ..._arm64.deb
 ```
 
 ### Fedora 及兼容的 RPM 发行版
 
 ```bash
-sudo dnf install ./fcitx5-wetypex-3.0.1.684-1.x86_64.rpm          # ARM64: ...-1.aarch64.rpm
+sudo dnf install ./fcitx5-wetypex-3.0.1.684-2.x86_64.rpm          # ARM64: ...-2.aarch64.rpm
 ```
 
 ### 便携归档
 
 ```bash
-sudo tar --zstd -C / -xf ./fcitx5-wetypex-3.0.1.684-1-linux-x86_64.tar.zst   # ARM64: ...-linux-aarch64.tar.zst
+sudo tar --zstd -C / -xf ./fcitx5-wetypex-3.0.1.684-2-linux-x86_64.tar.zst   # ARM64: ...-linux-aarch64.tar.zst
 ```
 
 NixOS flake、源码构建、各格式的构建基线与依赖说明见[安装指南](docs/installation.md)。ARM64 的 CPU 要求和旧 CPU 兼容方式见 [ARM64 支持](docs/arm64.md)。

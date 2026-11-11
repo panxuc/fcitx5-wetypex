@@ -7,3 +7,6 @@ Library=wetypex
 Type=SharedLibrary
 OnDemand=False
 Configurable=True
+
+[OptionalDependencies]
+0=spell

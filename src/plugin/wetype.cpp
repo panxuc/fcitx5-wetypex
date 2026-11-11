@@ -1,5 +1,6 @@
 #include "../common/json.hpp"
 #include "config.hpp"
+#include "english_dictionary.hpp"
 #include "wechat_emoji.hpp"
 #include <algorithm>
 #include <cerrno>
@@ -43,6 +44,7 @@
 #include <poll.h>
 #include <queue>
 #include <spawn.h>
+#include <spell_public.h>
 #include <string>
 #include <string_view>
 #include <sys/socket.h>
@@ -245,6 +247,7 @@ struct State : InputContextProperty {
   uint64_t cloudPollUntil = 0, lastCloudPoll = 0;
   int candidatePage = 0, candidateCursor = 0;
   std::string preedit;
+  std::string englishWord;
   size_t cursor = 0;
   std::string displayPreedit;
   size_t displayCursor = 0, editableBegin = 0;
@@ -314,6 +317,16 @@ public:
       : CandidateWord(Text(text)), engine_(e), index_(index),
         revision_(revision) {}
   void select(InputContext *ic) const override;
+};
+class EnglishCompletionWord : public CandidateWord {
+  WeType *engine_;
+  std::string word_;
+
+public:
+  EnglishCompletionWord(WeType *engine, std::string word)
+      : CandidateWord(Text(word)), engine_(engine), word_(std::move(word)) {}
+  void select(InputContext *ic) const override;
+  void select(InputContext *ic, bool trailingSpace) const;
 };
 class VMenuWord : public CandidateWord {
   WeType *engine_;
@@ -803,6 +816,7 @@ class WeType : public InputMethodEngineV2 {
        symbolAutoChange_ = true, clipboardEnabled_ = false,
        networkEnabled_ = true;
   wetype_config::WeTypeConfig config_;
+  std::optional<wetype::EnglishDictionary> englishDictionary_;
   std::filesystem::path stateDirectory() const {
     const char *state = getenv("WETYPE_STATE_DIR"),
                *data = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
@@ -1308,6 +1322,7 @@ class WeType : public InputMethodEngineV2 {
     input->smartInput.setValue(
         !wire::get(j.get(), "smart_input") ||
         json_object_get_boolean(wire::get(j.get(), "smart_input")));
+    input->englishCompletion.setValue(boolSetting("english_completion", false));
     input->emojiRecommend.setValue(
         !wire::get(j.get(), "emoji_recommend") ||
         json_object_get_boolean(wire::get(j.get(), "emoji_recommend")));
@@ -1494,6 +1509,7 @@ class WeType : public InputMethodEngineV2 {
               bool(*input.wubiWildcardComment));
     wire::put(json.get(), "double_pinyin_scheme", int64_t(*input.doublePinyin));
     wire::put(json.get(), "smart_input", bool(*input.smartInput));
+    wire::put(json.get(), "english_completion", bool(*input.englishCompletion));
     wire::put(json.get(), "emoji_recommend", bool(*input.emojiRecommend));
     wire::put(json.get(), "wechat_emoji", bool(*input.wechatEmoji));
     wire::put(json.get(), "normal_emoji", bool(*input.normalEmoji));
@@ -1790,6 +1806,7 @@ class WeType : public InputMethodEngineV2 {
   }
   bool flushBeforeVoice(InputContext *ic, KeyEvent &event) {
     auto *s = state(ic);
+    commitEnglishWord(ic, s);
     if (s->vMode || s->vMenu != VMenu::None ||
         (s->preedit.empty() && s->inputSeq <= s->applied))
       return false;
@@ -2348,14 +2365,163 @@ class WeType : public InputMethodEngineV2 {
     contexts_[s->id] = ic->watch();
     return s;
   }
+  bool inlinePreeditEnabled(InputContext *ic) const {
+    return *config_.appearance->preeditPosition !=
+               wetype_config::PreeditPosition::Candidate &&
+           ic->capabilityFlags().test(CapabilityFlag::Preedit) &&
+           ic->isPreeditEnabled();
+  }
+  static bool englishCompletionField(InputContext *ic) {
+    constexpr auto blocked =
+        uint64_t(CapabilityFlag::Password) | uint64_t(CapabilityFlag::Sensitive) |
+        uint64_t(CapabilityFlag::NoSpellCheck) | uint64_t(CapabilityFlag::Url) |
+        uint64_t(CapabilityFlag::Email) | uint64_t(CapabilityFlag::Digit) |
+        uint64_t(CapabilityFlag::Number) | uint64_t(CapabilityFlag::Dialable) |
+        uint64_t(CapabilityFlag::Terminal);
+    return !(ic->capabilityFlags().toInteger() & blocked);
+  }
+  bool englishCompletionEnabled(InputContext *ic, const State *s) const {
+    return *config_.input->englishCompletion && !s->fullWidth &&
+           englishCompletionField(ic);
+  }
+  static const KeyList &englishSelectionKeys() {
+    static const auto keys = Key::keyListFromString(
+        "Alt+1 Alt+2 Alt+3 Alt+4 Alt+5 Alt+6 Alt+7 Alt+8 Alt+9");
+    return keys;
+  }
+  AddonInstance *spellAddon() {
+    return instance_->addonManager().addon("spell", true);
+  }
+  const wetype::EnglishDictionary &englishDictionary() {
+    if (!englishDictionary_)
+      englishDictionary_.emplace();
+    return *englishDictionary_;
+  }
+  void updateEnglishCandidates(InputContext *ic, State *s) {
+    if (!englishCompletionEnabled(ic, s) || s->englishWord.size() < 2) {
+      ic->inputPanel().setCandidateList(nullptr);
+      return;
+    }
+    const auto &prefix = s->englishWord;
+    auto words = englishDictionary().complete(prefix, size_t(pageSize_));
+    if (words.empty()) {
+      if (auto *spell = spellAddon())
+        words = spell->call<ISpell::hint>("en", prefix, size_t(2 * pageSize_));
+    }
+    if (words.size() == 1 && words.front() == prefix) {
+      ic->inputPanel().setCandidateList(nullptr);
+      return;
+    }
+    auto list = std::make_unique<CommonCandidateList>();
+    list->setPageSize(pageSize_);
+    // Display plain indices independently of the selection shortcut.
+    list->setSelectionKey(Key::keyListFromString("1 2 3 4 5 6 7 8 9"));
+    list->setLayoutHint(vertical_ ? CandidateLayoutHint::Vertical
+                                  : CandidateLayoutHint::Horizontal);
+    for (auto &word : words) {
+      if (word.compare(0, prefix.size(), prefix))
+        continue;
+      list->append<EnglishCompletionWord>(this, std::move(word));
+      if (list->totalSize() == pageSize_)
+        break;
+    }
+    if (list->totalSize())
+      list->setGlobalCursorIndex(0);
+    else
+      list.reset();
+    ic->inputPanel().setCandidateList(std::move(list));
+  }
+  void commitEnglishWord(InputContext *ic, State *s) {
+    if (!s->englishWord.empty())
+      commitText(ic, std::exchange(s->englishWord, {}));
+  }
+  bool handleEnglishCompletion(InputContext *ic, State *s, KeyEvent &event,
+                               KeySym sym, bool commandModifiers) {
+    if (!englishCompletionEnabled(ic, s)) {
+      if (!s->englishWord.empty()) {
+        s->englishWord.clear();
+        panel(ic, s);
+      }
+      return false;
+    }
+    const bool letter = (sym >= FcitxKey_a && sym <= FcitxKey_z) ||
+                        (sym >= FcitxKey_A && sym <= FcitxKey_Z);
+    const bool apostrophe = sym == FcitxKey_apostrophe &&
+                            !s->englishWord.empty() &&
+                            s->englishWord.back() != '\'' &&
+                            s->pendingPairKey != '\'';
+    if (!commandModifiers && (letter || apostrophe)) {
+      if (s->englishWord.empty() && !englishDictionary().available()) {
+        auto *spell = spellAddon();
+        if (!spell || !spell->call<ISpell::checkDict>("en"))
+          return false;
+      }
+      s->englishWord.push_back(char(sym));
+      if (s->englishWord.size() >= 64)
+        commitEnglishWord(ic, s);
+      panel(ic, s);
+      return true;
+    }
+    if (s->englishWord.empty())
+      return false;
+    const auto &key = event.key();
+    if (key.check(FcitxKey_BackSpace)) {
+      s->englishWord.pop_back();
+      panel(ic, s);
+      return true;
+    }
+    const Key selectionKey(sym, key.states());
+    const bool selectWithSpace = selectionKey.check(FcitxKey_space);
+    const int index = selectWithSpace || selectionKey.check(FcitxKey_Tab)
+                          ? 0
+                          : selectionKey.keyListIndex(englishSelectionKeys());
+    const auto candidates = ic->inputPanel().candidateList();
+    if (index >= 0 && candidates && index < candidates->size()) {
+      const auto *word = dynamic_cast<const EnglishCompletionWord *>(
+          &candidates->candidate(index));
+      if (word) {
+        word->select(ic, selectWithSpace);
+        return true;
+      }
+    }
+    if (!commandModifiers && sym >= 0x20 && sym <= 0x7e) {
+      const char ascii = char(sym);
+      const auto *entry = punctuationEntry(ascii);
+      if (entry && (entry->pairType || s->pendingPairKey == ascii)) {
+        // Keep the word and mapped punctuation in one client transaction.
+        TextBatch batch{ic->watch(), {}};
+        ScopedRestore<TextBatch *> restore(textBatch_);
+        if (!textBatch_)
+          textBatch_ = &batch;
+        commitEnglishWord(ic, s);
+        commitSymbol(ic, s, ascii, true);
+        panel(ic, s);
+      } else {
+        s->englishWord.push_back(ascii);
+        commitEnglishWord(ic, s);
+        panel(ic, s);
+      }
+      return true;
+    }
+    const auto word = s->englishWord;
+    commitEnglishWord(ic, s);
+    panel(ic, s);
+    if (virtualKeyboardCursor(ic)) {
+      waitForClient(ic, s, ic->capabilityFlags().test(CapabilityFlag::SurroundingText)
+                              ? word
+                              : std::string{});
+      s->cursorKeys.push_back({event.rawKey(), false, event.time()});
+      return true;
+    }
+    return false;
+  }
   void panel(InputContext *ic, State *s) {
     // The insertion must reach the client before its preedit is replaced.
     flushTextBatch(ic);
-    const bool inlinePreedit =
-        *config_.appearance->preeditPosition !=
-            wetype_config::PreeditPosition::Candidate &&
-        ic->capabilityFlags().test(CapabilityFlag::Preedit) &&
-        ic->isPreeditEnabled();
+    const bool inlinePreedit = inlinePreeditEnabled(ic);
+    const bool englishPreedit = !s->englishWord.empty();
+    if (englishPreedit)
+      updateEnglishCandidates(ic, s);
     const bool voice = voicePending_ && voiceSession_ == s->id &&
                        voiceEpoch_ == s->epoch;
     const auto candidates = ic->inputPanel().candidateList();
@@ -2403,6 +2569,7 @@ class WeType : public InputMethodEngineV2 {
     ic->inputPanel().setAuxUp(aux);
     const std::string displayed =
         voice ? voiceText_
+        : englishPreedit ? s->englishWord
         : !s->displayPreedit.empty() ? s->displayPreedit
         : !s->vMode && *config_.input->mode == wetype_config::InputMode::Pinyin
             ? formatPinyinPreedit(s->preedit)
@@ -2412,7 +2579,7 @@ class WeType : public InputMethodEngineV2 {
     if (!displayed.empty()) {
       text.append(displayed);
       text.setCursor(
-          voice ? displayed.size()
+          voice || englishPreedit ? displayed.size()
           : !s->displayPreedit.empty()
               ? std::min(s->displayCursor, displayed.size())
               : displayCursorForRaw(s->preedit, displayed, s->cursor));
@@ -2430,10 +2597,10 @@ class WeType : public InputMethodEngineV2 {
                         : "正在识别… Enter 立即上屏 · Esc 取消");
     else if (voiceSession_ == s->id && voiceStatusUntil_)
       status.append(voiceError_);
-    else if (!displayed.empty() && (failed_ || !ready_))
+    else if (!englishPreedit && !displayed.empty() && (failed_ || !ready_))
       status.append(failed_ ? "WeTypeX 核心正在恢复…" : "WeTypeX 核心启动中…");
     ic->inputPanel().setAuxDown(status);
-    if (s->preedit.empty() && !s->vMode)
+    if (s->preedit.empty() && !englishPreedit && !s->vMode)
       ic->inputPanel().setCandidateList(nullptr);
     ic->updatePreedit();
     ic->updateUserInterface(UserInterfaceComponent::InputPanel);
@@ -2474,7 +2641,8 @@ class WeType : public InputMethodEngineV2 {
       for (const auto &[id, ref] : contexts_)
         if (auto *ic = ref.get()) {
           const auto *s = ic->propertyFor(&factory_);
-          if (!s->preedit.empty() || s->vMode || s->vMenu != VMenu::None ||
+          if (!s->preedit.empty() || !s->englishWord.empty() || s->vMode ||
+              s->vMenu != VMenu::None ||
               s->seq != s->applied || s->selectionPending ||
               !s->deferredKeys.empty() || !s->cursorKeys.empty() ||
               s->pendingCursorSteps || s->pendingClientKey || s->pendingNumericReplay ||
@@ -2624,14 +2792,23 @@ class WeType : public InputMethodEngineV2 {
     failed_ = true;
     restartNeedsOpen_ = true;
     scheduleRestart();
-    invalidateSessions();
+    invalidateSessions(true);
   }
-  void invalidateSessions() {
+  void invalidateSessions(bool preserveEnglish = false) {
     cancelVoice();
     restartNeedsOpen_ = true;
     for (auto &[id, ref] : contexts_)
       if (auto *ic = ref.get()) {
         auto *s = ic->propertyFor(&factory_);
+        // English completion is local to the frontend. A backend failure
+        // must not commit an unfinished word or discard its candidates.
+        const bool keepEnglish = preserveEnglish && s->active && ic->hasFocus() &&
+                                 s->english && englishCompletionEnabled(ic, s);
+        if (!keepEnglish) {
+          if (s->active && ic->hasFocus() && englishCompletionField(ic))
+            commitEnglishWord(ic, s);
+          s->englishWord.clear();
+        }
         releaseForwardedKeys(ic, s);
         clearCursorMove(s);
         s->physicalModifiers = s->pressedShifts = 0;
@@ -3310,6 +3487,7 @@ public:
   }
   void reloadConfig() override {
     cancelVoice();
+    englishDictionary_.reset();
     reloadSettings();
     if (networkEnabled_)
       startSync();
@@ -3399,6 +3577,7 @@ public:
     s->initialPanelShown = false;
     clearNumericCorrection(s);
     s->preedit.clear();
+    s->englishWord.clear();
     s->cursor = 0;
     clearDisplayState(s);
     s->pendingPairKey = 0;
@@ -3419,7 +3598,12 @@ public:
   }
   void deactivate(const InputMethodEntry &entry,
                   InputContextEvent &e) override {
-    auto *s = state(e.inputContext());
+    auto *ic = e.inputContext();
+    auto *s = state(ic);
+    // Fcitx or the client commits inline preedit when focus leaves.
+    if (englishCompletionField(ic) &&
+        (e.type() != EventType::InputContextFocusOut || !inlinePreeditEnabled(ic)))
+      commitEnglishWord(ic, s);
     if (voiceSession_ == s->id)
       cancelVoice();
     if (e.type() == EventType::InputContextFocusOut && vModeSession_ == s->id &&
@@ -3435,6 +3619,19 @@ public:
     reset(entry, e);
     if (child_ > 0)
       send(e.inputContext(), "close");
+  }
+  void selectEnglishCompletion(InputContext *ic, std::string word,
+                               bool trailingSpace) {
+    auto *s = state(ic);
+    if (!s->active || !ic->hasFocus() || !s->english ||
+        !englishCompletionEnabled(ic, s) || s->englishWord.empty() ||
+        word.compare(0, s->englishWord.size(), s->englishWord))
+      return;
+    s->englishWord.clear();
+    if (trailingSpace)
+      word.push_back(' ');
+    commitText(ic, word);
+    panel(ic, s);
   }
   void select(InputContext *ic, unsigned index, int64_t revision = -1) {
     auto *s = state(ic);
@@ -3535,6 +3732,7 @@ public:
   void switchLanguage(InputContext *ic, State *s) {
     if (s->vMode)
       cancelVMode(ic);
+    commitEnglishWord(ic, s);
     // The queued raw commit must finish before later typing uses the new
     // language, even when the core has not returned the last letter yet.
     if (!s->preedit.empty() || s->inputSeq > s->applied) {
@@ -3674,6 +3872,10 @@ public:
                               ~uint32_t(KeyState::Shift);
         const bool shift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
         const bool inputShortcut = languageSwitchKey(key) || compositionShortcutKey(key) ||
+            // Earlier queued keys may switch language or half/full width.
+            // Replay decides whether this chord selects an English word.
+            (*config_.input->englishCompletion && englishCompletionField(ic) &&
+             key.keyListIndex(englishSelectionKeys()) >= 0) ||
             (*config_.shortcuts->halfFull && key.checkKeyList(*config_.shortcuts->halfFullKeys)) ||
             (*config_.shortcuts->selectCtrl && bareModifier(key) &&
              (sym == FcitxKey_Control_L || sym == FcitxKey_Control_R)) ||
@@ -3965,6 +4167,10 @@ public:
         e.filterAndAccept();
         return;
       }
+      if (!s->englishWord.empty()) {
+        commitEnglishWord(ic, s);
+        panel(ic, s);
+      }
       s->fullWidth = !s->fullWidth;
       s->symbolAutoState = 0;
       modeChanged(ic, s);
@@ -3974,6 +4180,10 @@ public:
     const bool commandModifiers =
         key.states().toInteger() & uint32_t(KeyState::SimpleMask) &
         ~uint32_t(KeyState::Shift);
+    if (s->english && handleEnglishCompletion(ic, s, e, sym, commandModifiers)) {
+      e.filterAndAccept();
+      return;
+    }
     const bool hasComposition = !s->preedit.empty() || s->vMenu != VMenu::None;
     const bool vModeKey = *config_.shortcuts->vMode &&
                           *config_.input->mode ==
@@ -4515,6 +4725,12 @@ public:
 };
 void Word::select(InputContext *ic) const {
   engine_->select(ic, index_, revision_);
+}
+void EnglishCompletionWord::select(InputContext *ic) const {
+  select(ic, false);
+}
+void EnglishCompletionWord::select(InputContext *ic, bool trailingSpace) const {
+  engine_->selectEnglishCompletion(ic, word_, trailingSpace);
 }
 void VMenuWord::select(InputContext *ic) const {
   engine_->selectVMenu(ic, index_, generation_, epoch_, session_);
