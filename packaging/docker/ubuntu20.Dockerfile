@@ -2,7 +2,7 @@ FROM ubuntu:20.04
 
 # Focal's 0.0~git packages predate the stable Fcitx5 ABI. Build a pinned SDK;
 # the resulting WeTypeX package still requires a stable Fcitx5 installation.
-RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+RUN apt-get -o Acquire::Retries=3 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq \
     build-essential cmake clang git pkg-config ca-certificates gettext \
     extra-cmake-modules libboost-dev libboost-iostreams-dev libboost-filesystem-dev \
     libboost-regex-dev libjson-c-dev libssl-dev libc++-dev libc++abi-dev \

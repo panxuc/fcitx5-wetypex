@@ -76,6 +76,7 @@ jobs:
       - name: 构建 Debian 与 Fedora 软件包
         env:
           WETYPEX_BUILD_JOBS: "2"
+          WETYPEX_DOCKER_NETWORK: host
         run: packaging/build-native-packages.sh
 
       - name: 生成源码包与 Arch 构建文件
@@ -84,7 +85,7 @@ jobs:
       - name: 构建 Arch Linux 软件包
         shell: bash
         run: |
-          docker run --rm \
+          docker run --rm --network host \
             -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             archlinux:base-devel bash -euc '

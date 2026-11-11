@@ -1,7 +1,7 @@
 FROM ubuntu:22.04
 
-RUN apt-get update -qq && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+RUN apt-get -o Acquire::Retries=3 update -qq && \
+    DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 install -y -qq \
       build-essential cmake clang git pkg-config libboost-dev \
       libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev \
       fcitx5-modules-dev libfcitx5-qt-dev libimecore-dev libimepinyin-dev \

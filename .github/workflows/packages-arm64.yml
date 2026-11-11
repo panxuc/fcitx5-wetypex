@@ -33,6 +33,8 @@ jobs:
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
           sudo install "$(go env GOPATH)/bin/nfpm" /usr/local/bin/nfpm
       - name: 在目标发行版原生构建 deb、legacy deb 与 rpm
+        env:
+          WETYPEX_DOCKER_NETWORK: host
         run: WETYPEX_BUILD_JOBS=2 packaging/build-native-packages.sh
       - name: 生成源码包与 Arch ARM 构建文件
         run: python3 tools/package_release.py
@@ -43,7 +45,7 @@ jobs:
           # The hosted ARM kernel rejects pacman's Landlock download rules.
           # Disable only that download restriction inside this disposable
           # container; keep syscall filtering, DownloadUser and PGP verification.
-          docker run --rm -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
+          docker run --rm --network host -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             menci/archlinuxarm@sha256:4bf586efc126560618f26d1b3b9f3ea42af2da2b23f2738594e92858beecc6ef \
             bash -euc '

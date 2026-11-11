@@ -134,8 +134,8 @@ jobs:
       - name: 在 Ubuntu 22.04 构建
         run: |
           mkdir -p dist/debian
-          docker build -f packaging/docker/debian.Dockerfile -t wetypex-build-jammy .
-          docker run --rm --user "$(id -u):$(id -g)" \
+          docker build --network host -f packaging/docker/debian.Dockerfile -t wetypex-build-jammy .
+          docker run --rm --network host --user "$(id -u):$(id -g)" \
             -e WETYPEX_BUILD_JOBS=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             wetypex-build-jammy env WETYPEX_LAYER_SHELL=OFF /src/packaging/container-stage.sh /out/debian-root lib
@@ -214,8 +214,8 @@ jobs:
       - name: 在 Ubuntu 20.04 与固定稳定框架 SDK 构建
         run: |
           mkdir -p dist/ubuntu20
-          docker build -f packaging/docker/ubuntu20.Dockerfile -t wetypex-build-focal .
-          docker run --rm --user "$(id -u):$(id -g)" \
+          docker build --network host -f packaging/docker/ubuntu20.Dockerfile -t wetypex-build-focal .
+          docker run --rm --network host --user "$(id -u):$(id -g)" \
             -e WETYPEX_BUILD_JOBS=2 -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             wetypex-build-focal env WETYPEX_LAYER_SHELL=OFF /src/packaging/container-stage.sh /out/ubuntu20-root lib
           docker run --rm -v "$PWD/dist:/out:ro" wetypex-build-focal \
