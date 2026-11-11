@@ -1,0 +1,44 @@
+name: 发现原版更新
+
+on:
+  schedule:
+    - cron: '19 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Inspect official metadata and proposed actions without writing
+        type: boolean
+        default: true
+
+concurrency:
+  group: upstream-discovery
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  discover:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.dry_run) ||
+      vars.WETYPEX_UPSTREAM_AUTOMATION == 'pr' ||
+      vars.WETYPEX_UPSTREAM_AUTOMATION == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+      - name: 复核官方版本、维护生成 PR 并恢复未完成的验证或发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WETYPEX_UPSTREAM_AUTOMATION: ${{ vars.WETYPEX_UPSTREAM_AUTOMATION }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          args=(--reconcile)
+          if [[ "$DRY_RUN" == true ]]; then args+=(--dry-run); fi
+          python3 tools/update_upstream.py "${args[@]}"

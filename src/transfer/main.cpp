@@ -670,6 +670,7 @@ private:
       }
     }
     watchSession();
+    runtimeLease_.release();
     transferCode_.clear();
     incomingCode_.clear();
     boundUin_.clear();
@@ -716,6 +717,10 @@ private:
   void startSession() {
     ++generation_;
     const QString root = dataRoot();
+    if (!runtimeLease_.acquire(root)) {
+      finishSession(QStringLiteral("输入法正在更新，请稍后重新连接"));
+      return;
+    }
     const QString runtime = qEnvironmentVariable(
         "WETYPE_FLURRY_RUNTIME", root + QStringLiteral("/runtime/flurry"));
     const QString host = qEnvironmentVariable(
@@ -1172,6 +1177,7 @@ private:
   QList<QPushButton *> homeActions_;
   QPointer<QMessageBox> invitationPrompt_;
   QJsonObject inviteHistory_;
+  wetype::RuntimeLease runtimeLease_;
   QListWidget *devices_ = nullptr;
   QJsonArray deviceRows_;
   bool devicesLoaded_ = false;

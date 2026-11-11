@@ -1,0 +1,104 @@
+name: 验证原版更新
+run-name: upstream ${{ inputs.expected_head }} base ${{ inputs.expected_base }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_head:
+        required: true
+        type: string
+      expected_base:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-verification-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  packages:
+    uses: ./.github/workflows/build.yml
+    permissions:
+      contents: read
+    with:
+      runtime_checks: true
+  runtime:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: 核对被验证的提交
+        env:
+          EXPECTED_HEAD: ${{ inputs.expected_head }}
+          EXPECTED_BASE: ${{ inputs.expected_base }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$EXPECTED_HEAD" != "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
+          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 2
+      - name: 安装编译和真实运行依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y build-essential cmake clang git pkg-config libboost-dev \
+            libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev fcitx5-modules-dev \
+            libfcitx5-qt-dev libimecore-dev libimepinyin-dev libjson-c-dev libssl-dev \
+            libc++-dev libc++abi-dev libfontconfig1-dev libwayland-dev qtbase5-dev \
+            libqt5svg5-dev qtwebengine5-dev bubblewrap python3-fonttools python3-pil \
+            ffmpeg espeak-ng qemu-user
+      - name: 编译并安装独立验证环境
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/wetypex" \
+            -DWETYPE_QT_VERSION=5 -DWETYPE_LAYER_SHELL=OFF
+          cmake --build build --parallel 2
+          cmake --install build
+          echo "$RUNNER_TEMP/wetypex/bin" >> "$GITHUB_PATH"
+          echo "XDG_DATA_HOME=$RUNNER_TEMP/wetypex-data" >> "$GITHUB_ENV"
+          echo "XDG_CACHE_HOME=$RUNNER_TEMP/wetypex-cache" >> "$GITHUB_ENV"
+          echo "XDG_CONFIG_HOME=$RUNNER_TEMP/wetypex-config" >> "$GITHUB_ENV"
+          echo "WETYPE_KEEP_ARCHIVES=1" >> "$GITHUB_ENV"
+      - name: 真实核心、词典、选词及传输检查
+        shell: bash
+        run: |
+          # Match the root-owned isolated fixtures used by the package/Nix
+          # checks; do not depend on unprivileged user namespaces on the host.
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$RUNNER_TEMP/wetypex" \
+            XDG_DATA_HOME="$XDG_DATA_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+            XDG_CONFIG_HOME="$XDG_CONFIG_HOME" WETYPE_KEEP_ARCHIVES=1 bash -euc '
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --download --accept-upstream-license
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --check --transport
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
+            '
+      - name: 原版匿名配对和语音网络请求
+        shell: bash
+        run: |
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$RUNNER_TEMP/wetypex" \
+            XDG_DATA_HOME="$XDG_DATA_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+            XDG_CONFIG_HOME="$XDG_CONFIG_HOME" bash -euc '
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-account" pairing-code > "$XDG_CACHE_HOME/pairing.json"
+              python3 -c '\''import json,os; assert json.load(open(os.environ["XDG_CACHE_HOME"]+"/pairing.json"))["ok"]'\''
+              espeak-ng -v en-us -s 135 -w "$XDG_CACHE_HOME/speech.wav" "Hello, this is a voice input compatibility check. One two three."
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime > "$XDG_CACHE_HOME/voice.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice.json")); assert v["ok"] and v["text"].strip()'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" status > "$XDG_CACHE_HOME/voice-status.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice-status.json")); assert v["native_ready"] and v["vad"]'\''
+            '
+      - name: 清理独立匿名身份
+        if: always()
+        run: |
+          if [[ -x "$RUNNER_TEMP/wetypex/bin/fcitx5-wetypex-voice" ]]; then
+            sudo env XDG_DATA_HOME="$RUNNER_TEMP/wetypex-data" \
+              XDG_CACHE_HOME="$RUNNER_TEMP/wetypex-cache" \
+              XDG_CONFIG_HOME="$RUNNER_TEMP/wetypex-config" \
+              "$RUNNER_TEMP/wetypex/bin/fcitx5-wetypex-voice" shutdown || true
+          fi
+          sudo rm -rf "$RUNNER_TEMP/wetypex-data" "$RUNNER_TEMP/wetypex-cache" "$RUNNER_TEMP/wetypex-config"

@@ -1,4 +1,9 @@
 name: 发布
+run-name: WeTypeX release ${{ inputs.tag || github.ref_name }}${{ inputs.only_aur && ' (AUR only)' || '' }}
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 on:
   push:
@@ -20,7 +25,15 @@ permissions:
   contents: write
 
 jobs:
+  arm64:
+    if: ${{ !inputs.only_aur }}
+    uses: ./.github/workflows/packages-arm64.yml
+    permissions:
+      contents: read
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
   release:
+    needs: arm64
     if: ${{ !inputs.only_aur }}
     runs-on: ubuntu-latest
     env:
@@ -89,20 +102,16 @@ jobs:
           test "$arch_version" = "$version"
           tar --zstd -C dist/debian-root -cf \
             "dist/fcitx5-wetypex-${version}-linux-x86_64.tar.zst" .
-          (
-            cd dist
-            while IFS= read -r -d '' file; do
-              digest=$(sha256sum "$file" | cut -d' ' -f1)
-              printf '%s  %s\n' "$digest" "$(basename "$file")"
-            done < <(find arch debian fedora ubuntu20 . -maxdepth 1 -type f \
-              \( -name 'fcitx5-wetypex-*.tar.gz' -o \
-                 -name 'fcitx5-wetypex-*.tar.zst' -o \
-                 -name 'fcitx5-wetypex-*.rpm' -o \
-                 -name 'fcitx5-wetypex_*.deb' -o \
-                 -name 'fcitx5-wetypex-legacy_*.deb' -o \
-                 -name 'fcitx5-wetypex-*.pkg.tar.zst' \) \
-              -print0 | sort -z)
-          ) > dist/SHA256SUMS
+
+      - name: 汇总 ARM64 软件包
+        uses: actions/download-artifact@v7
+        with:
+          name: fcitx5-wetypex-arm64-packages
+          path: dist
+
+      - name: 为全部架构生成校验和
+        shell: bash
+        run: python3 tools/update_upstream.py --verify-release-dir dist --tag "$RELEASE_TAG"
 
       - name: 保存构建产物
         uses: actions/upload-artifact@v7
@@ -114,7 +123,7 @@ jobs:
             dist/debian/fcitx5-wetypex_*.deb
             dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
-            dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
+            dist/fcitx5-wetypex-*-linux-*.tar.zst
             dist/SHA256SUMS
 
       - name: 创建 GitHub Release
@@ -128,17 +137,27 @@ jobs:
             dist/debian/fcitx5-wetypex_*.deb
             dist/ubuntu20/fcitx5-wetypex-legacy_*.deb
             dist/fedora/fcitx5-wetypex-*.rpm
-            dist/fcitx5-wetypex-*-linux-x86_64.tar.zst
+            dist/fcitx5-wetypex-*-linux-*.tar.zst
             dist/SHA256SUMS
           )
+          if python3 tools/update_upstream.py --release-complete "$RELEASE_TAG"; then
+            echo 'Published artifacts are already complete; preserving their checksums.'
+            exit 0
+          fi
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --draft=true --repo "$GITHUB_REPOSITORY"
             gh release upload "$RELEASE_TAG" "${files[@]}" --clobber \
               --repo "$GITHUB_REPOSITORY"
           else
             gh release create "$RELEASE_TAG" "${files[@]}" \
               --repo "$GITHUB_REPOSITORY" \
-              --title "WeTypeX ${RELEASE_TAG#v}" --generate-notes
+              --title "WeTypeX ${RELEASE_TAG#v}" --generate-notes --draft --verify-tag
           fi
+          latest=$(python3 tools/update_upstream.py --release-policy "$RELEASE_TAG" | python3 -c 'import json,sys; print(json.load(sys.stdin)["make_latest"])')
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq .id)
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$id" \
+            -F draft=false -F prerelease=false -f make_latest="$latest" >/dev/null
+          python3 tools/update_upstream.py --release-complete "$RELEASE_TAG"
 
   aur:
     needs: release
@@ -157,6 +176,9 @@ jobs:
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
+          version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          revision=$(sed -n 's/^pkgrel=//p' packaging/PKGBUILD.in)
+          test "v$version-$revision" = "$RELEASE_TAG"
           test -n "$AUR_SSH_PRIVATE_KEY"
           useradd --create-home builder
           install -d -o builder -g builder -m0700 /home/builder/.ssh
@@ -172,6 +194,16 @@ jobs:
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
             bash -lc '
               git clone ssh://aur@aur.archlinux.org/fcitx5-wetypex.git "$HOME/aur"
+              version=$(sed -n "s/^project([^ ]* VERSION \([^ ]*\).*/\1/p" "$1/CMakeLists.txt")
+              pkgrel=$(sed -n "s/^pkgrel=//p" "$1/packaging/PKGBUILD.in")
+              if [[ -f "$HOME/aur/PKGBUILD" ]]; then
+                published=$(sed -n "s/^pkgver=//p" "$HOME/aur/PKGBUILD")
+                revision=$(sed -n "s/^pkgrel=//p" "$HOME/aur/PKGBUILD")
+                if [[ $(vercmp "$version-$pkgrel" "$published-$revision") -lt 0 ]]; then
+                  echo "AUR already contains a newer version; keeping it."
+                  exit 0
+                fi
+              fi
               cp "$1/packaging/aur/PKGBUILD" \
                  "$1/packaging/aur/fcitx5-wetypex.install" "$HOME/aur/"
               cd "$HOME/aur"

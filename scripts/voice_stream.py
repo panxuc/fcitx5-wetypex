@@ -227,6 +227,17 @@ def microphone_command(config):
 class Backend:
     def __init__(self, owner):
         self.owner = owner
+        lease_root = DATA / 'fcitx5-wetypex'
+        lease_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.runtime_lease = (lease_root / 'runtime-use.lock').open('a+')
+        try:
+            fcntl.flock(self.runtime_lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            self.runtime_lease.close()
+            raise RuntimeError('输入法正在更新，请稍后重试')
+        if (lease_root/'runtime-transaction.json').exists():
+            self.runtime_lease.close()
+            raise RuntimeError('输入法更新正在恢复，请稍后重试')
         self.ready = threading.Event()
         self.write_lock = threading.Lock()
         self.vad = False
@@ -262,7 +273,7 @@ class Backend:
             raise RuntimeError('请先安装 Bubblewrap')
         command = [wrapper, '--unshare-pid',
                    '--ro-bind', '/usr', '/usr', '--symlink', 'usr/lib', '/lib',
-                   '--ro-bind', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
+                   '--ro-bind-try', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
                    '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/etc']
         for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
             command += ['--ro-bind', '/etc/' + name, '/etc/' + name]
@@ -272,6 +283,7 @@ class Backend:
                     '--bind', str(directory), '/work', '--chdir', '/work',
                     '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/work',
                     '--setenv', 'WETYPE_SUPPORT_DIR', '/support',
+                 '--setenv', 'WETYPE_ENGINE_PROVIDER', os.environ.get('WETYPE_ENGINE_PROVIDER', 'auto'),
                     '--setenv', 'WETYPE_WORK_DIR', '/work/business',
                     '--setenv', 'WETYPE_IDENTITY_FILE', '/work/identity.json',
                     '--setenv', 'WETYPE_DEVICE_MODEL', 'LINUX',
@@ -333,6 +345,7 @@ class Backend:
             self.process.kill()
             self.process.wait()
         self.log.close()
+        self.runtime_lease.close()
 
 
 class Job:
@@ -657,6 +670,11 @@ class Service:
         with self.condition:
             self.last_activity = time.monotonic()
             op = request.get('op')
+            if op == 'quiesce':
+                if self.job and not self.job.done.is_set():
+                    return {'ok': False, 'busy': True}
+                self.shutdown = True
+                return {'ok': True}
             if op == 'shutdown':
                 if self.job and not self.job.done.is_set():
                     self.publish(self.job, 'cancelled')
@@ -783,6 +801,12 @@ def serve():
     def terminate(_signum, _frame):
         raise KeyboardInterrupt
     signal.signal(signal.SIGTERM, terminate)
+    if (DATA/'fcitx5-wetypex/runtime-transaction.json').exists():
+        setup=Path(__file__).with_name('setup_runtime.py')
+        subprocess.run([sys.executable,str(setup),'--activate-pending'],
+                       stdout=subprocess.DEVNULL,check=True,timeout=120)
+        if (DATA/'fcitx5-wetypex/runtime-transaction.json').exists():
+            raise RuntimeError('输入法更新尚未恢复，请稍后重试')
     VOICE.mkdir(mode=0o700, parents=True, exist_ok=True)
     VOICE.chmod(0o700)
     with (VOICE / 'daemon.lock').open('a') as lock:
@@ -835,7 +859,9 @@ def serve():
 
 
 def connect():
-    for attempt in range(40):
+    deadline = time.monotonic() + 10
+    launched = False
+    while time.monotonic() < deadline:
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             connection.connect(ADDRESS)
@@ -845,7 +871,8 @@ def connect():
             return connection
         except (ConnectionRefusedError, FileNotFoundError):
             connection.close()
-            if attempt == 0:
+            if not launched:
+                launched = True
                 VOICE.mkdir(mode=0o700, parents=True, exist_ok=True)
                 with (VOICE / 'daemon.log').open('wb') as log:
                     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), 'serve'],
@@ -858,7 +885,7 @@ def connect():
 def main():
     os.umask(0o077)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('start', 'stop', 'finish', 'cancel', 'copy', 'status', 'serve', 'transcribe', 'shutdown'))
+    parser.add_argument('command', choices=('start', 'stop', 'finish', 'cancel', 'copy', 'status', 'serve', 'transcribe', 'shutdown', 'quiesce'))
     parser.add_argument('args', nargs='*')
     parser.add_argument('--realtime', action='store_true')
     parser.add_argument('--verbose', action='store_true')

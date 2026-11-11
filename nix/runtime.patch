@@ -1,5 +1,3 @@
-diff --git a/scripts/fcitx5-wetypex-account.sh.in b/scripts/fcitx5-wetypex-account.sh.in
-index 5046a76..0bdeed2 100644
 --- a/scripts/fcitx5-wetypex-account.sh.in
 +++ b/scripts/fcitx5-wetypex-account.sh.in
 @@ -1,4 +1,7 @@
@@ -10,8 +8,8 @@ index 5046a76..0bdeed2 100644
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
  umask 077
-
-@@ -7,7 +10,7 @@ if [ "$command_name" = voice-file ]; then
+ 
+@@ -7,7 +10,7 @@
    exec @CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-voice transcribe "${2:-}"
  fi
  if [ "$command_name" = network-info ]; then
@@ -20,7 +18,7 @@ index 5046a76..0bdeed2 100644
    exec "$support/wetypex-engine-host" "$support" network-info
  fi
  if [ "$command_name" = sync-now ]; then
-@@ -51,7 +54,7 @@ case "$command_name" in
+@@ -56,7 +59,7 @@
      group_id="${2:-}"
      case "$group_id" in *[!0-9]*|'') echo "set-functions requires a numeric GROUP_ID" >&2; exit 64;; esac
      case "$operation_value" in *[!0-9]*|'') echo "set-functions requires a numeric function mask" >&2; exit 64;; esac
@@ -29,20 +27,20 @@ index 5046a76..0bdeed2 100644
  import sys
  group, mask = map(int, sys.argv[1:])
  if not 0 < group < 2**64 or not 0 <= mask < 2**64:
-@@ -133,7 +136,7 @@ esac
-
+@@ -139,7 +142,7 @@
  runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
+ . "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
  state="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
 -support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 +support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
  test -f "$runtime/manifest.txt" || {
    echo "Run fcitx5-wetypex-setup first." >&2
    exit 78
-@@ -167,16 +170,14 @@ run_original() {
+@@ -173,16 +176,14 @@
    # database. Wait for the current short operation instead of surfacing an
    # intermittent failure when two callers overlap.
    env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
--      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 \
 -      --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
 +      --ro-bind /nix/store /nix/store --proc /proc --dev /dev --tmpfs /tmp \
        --dir /etc --ro-bind /etc/resolv.conf /etc/resolv.conf \
@@ -56,10 +54,10 @@ index 5046a76..0bdeed2 100644
 -      --setenv PATH /usr/bin --setenv HOME /work \
 +      --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
-       --setenv WETYPE_SUPPORT_DIR /support \
+       --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
        --setenv WETYPE_DEVICE_MODEL "$model" \
        --setenv WETYPE_WORK_DIR /work/business \
-@@ -193,7 +194,7 @@ if ! output="$(run_original)"; then
+@@ -200,7 +201,7 @@
    echo "Unable to initialize the original WeType account service. See $log" >&2
    exit 1
  fi
@@ -68,7 +66,7 @@ index 5046a76..0bdeed2 100644
  import json, sys
  data = json.load(sys.stdin)
  raise SystemExit(0 if data.get("pairing_error") == 0 and len(data.get("match_code", "")) == 6 else 1)
-@@ -203,7 +204,7 @@ raise SystemExit(0 if data.get("pairing_error") == 0 and len(data.get("match_cod
+@@ -210,7 +211,7 @@
    output="$(run_original)"
  fi
  chmod 600 "$log" "$state/identity.json" 2>/dev/null || true
@@ -77,8 +75,6 @@ index 5046a76..0bdeed2 100644
  import json, sys
  data = json.load(sys.stdin)
  command = sys.argv[1]
-diff --git a/scripts/fcitx5-wetypex-ai.sh.in b/scripts/fcitx5-wetypex-ai.sh.in
-index 48a01c0..a32bb28 100644
 --- a/scripts/fcitx5-wetypex-ai.sh.in
 +++ b/scripts/fcitx5-wetypex-ai.sh.in
 @@ -1,4 +1,7 @@
@@ -90,9 +86,9 @@ index 48a01c0..a32bb28 100644
  set -eu
  umask 077
  fetch_only=0
-@@ -16,14 +19,14 @@ fi
- data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+@@ -17,14 +20,14 @@
  runtime="${WETYPE_RUNTIME_DIR:-$data_home/fcitx5-wetypex/runtime}"
+ . "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
  account="${WETYPE_ACCOUNT_STATE_DIR:-$data_home/fcitx5-wetypex/account}"
 -support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 +support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
@@ -108,11 +104,11 @@ index 48a01c0..a32bb28 100644
  if [ "$fetch_only" -eq 1 ]; then
    work="$(mktemp -d "$state/request.XXXXXXXX")"
    trap 'if [ -f "$work/last-ai.log" ]; then mv -f -- "$work/last-ai.log" "$state/last-ai.log"; fi; rm -rf -- "$work"' 0
-@@ -37,18 +40,18 @@ if [ "$fetch_only" -eq 1 ]; then
+@@ -38,18 +41,18 @@
    while [ "$attempt" -lt 3 ]; do
      attempt=$((attempt + 1))
      if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
--      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +      --ro-bind /nix/store /nix/store \
        --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
        --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \
@@ -123,7 +119,7 @@ index 48a01c0..a32bb28 100644
 -      --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
 +      --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
-       --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_NETWORK_LIVE 1 \
+       --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" --setenv WETYPE_NETWORK_LIVE 1 \
        --setenv WETYPE_CORE_UIN "$uin" --setenv WETYPE_CORE_DEVICE_CODE "$device" \
        --setenv WETYPE_DEVICE_MODEL "$(cat /sys/class/dmi/id/product_name 2>/dev/null || printf LINUX)" \
        /support/wetypex-engine-host /input llm-service "$question" > "$raw" 2> "$work/last-ai.log" && \
@@ -132,10 +128,9 @@ index 48a01c0..a32bb28 100644
  import os,pathlib,sys,tempfile
  raw=pathlib.Path(sys.argv[1]).read_text(errors='replace')
  # The service emits successive rendered snapshots while the answer streams.
-diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backend.sh.in
 --- a/scripts/fcitx5-wetypex-backend.sh.in
 +++ b/scripts/fcitx5-wetypex-backend.sh.in
-@@ -1,11 +1,14 @@
+@@ -1,14 +1,17 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
@@ -149,17 +144,21 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
  config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 -support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 +support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
+ runtime_data="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex"
+ if [ -f "$runtime_data/runtime-pending.json" ] || [ -f "$runtime_data/runtime-transaction.json" ]; then
+-  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
++  @NIX_PYTHON@ "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
+ fi
+ . "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
  test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
- mkdir -p "$state/user"
- chmod 700 "$state"
-@@ -18,34 +21,34 @@
-
+@@ -23,34 +26,34 @@
+ 
  standalone=0
  if [ -f "$config_home/fcitx5/wetypex.json" ]; then
 -  standalone="$(python3 -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
 +  standalone="$(@NIX_PYTHON@ -c 'import json,sys; print(1 if json.load(open(sys.argv[1])).get("standalone",False) else 0)' "$config_home/fcitx5/wetypex.json" 2>/dev/null || printf 0)"
  fi
-
+ 
  # The original desktop enables cloud candidates only when networking is
  # available.  Pairing initializes this per-user anonymous device identity.
  if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
@@ -182,7 +181,7 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
    test -n "$model" || model=LINUX
    if [ -n "$uin" ] && [ -n "$device_code" ]; then
      env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
--      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
+-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +      --ro-bind /nix/store /nix/store \
        --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
        --ro-bind-try /etc/localtime /etc/localtime \
@@ -194,25 +193,23 @@ diff --git a/scripts/fcitx5-wetypex-backend.sh.in b/scripts/fcitx5-wetypex-backe
 -      --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
 +      --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
 +      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
-       --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support \
+       --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
        --setenv WETYPE_NETWORK_LIVE 1 --setenv WETYPE_CORE_UIN "$uin" \
        --setenv WETYPE_CORE_DEVICE_CODE "$device_code" --setenv WETYPE_DEVICE_MODEL "$model" \
-@@ -59,10 +62,11 @@
+@@ -64,10 +67,11 @@
  # Offline and standalone sessions retain a private network namespace.
  # Clear the launch environment before bwrap: Focal's 0.4 lacks --clearenv.
  env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-net --unshare-pid --die-with-parent \
--  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 --symlink usr/bin /bin \
+-  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +  --ro-bind /nix/store /nix/store \
    --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
    --ro-bind-try /etc/localtime /etc/localtime \
    --ro-bind "$runtime" /input --ro-bind "$support" /support --bind "$state" /work \
 -  --chdir /work --setenv PATH /usr/bin --setenv HOME /work \
 +  --chdir /work --setenv TZDIR @NIX_TZDIR@ --setenv PATH @NIX_RUNTIME_PATH@ --setenv HOME /work \
-+  --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
-   --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support \
++      --setenv SSL_CERT_FILE @NIX_CA_BUNDLE@ --setenv CURL_CA_BUNDLE @NIX_CA_BUNDLE@ \
+   --setenv TZ "${TZ:-/etc/localtime}" --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
    /support/wetypex-engine-host /input serve
-diff --git a/scripts/fcitx5-wetypex-setup.sh.in b/scripts/fcitx5-wetypex-setup.sh.in
-index 2d3645f..7771e3a 100644
 --- a/scripts/fcitx5-wetypex-setup.sh.in
 +++ b/scripts/fcitx5-wetypex-setup.sh.in
 @@ -1,3 +1,6 @@
@@ -225,8 +222,6 @@ index 2d3645f..7771e3a 100644
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
 +exec "${WETYPE_PYTHON:-@NIX_PYTHON@}" "@NIX_OUT@/share/fcitx5-wetypex/setup_runtime.py" "$@"
-diff --git a/scripts/fcitx5-wetypex-sync.sh.in b/scripts/fcitx5-wetypex-sync.sh.in
-index 5f34d84..caa1a31 100644
 --- a/scripts/fcitx5-wetypex-sync.sh.in
 +++ b/scripts/fcitx5-wetypex-sync.sh.in
 @@ -1,4 +1,4 @@
@@ -235,19 +230,17 @@ index 5f34d84..caa1a31 100644
  """Refresh the device group and request synchronization from the native core."""
  import json
  import os
-@@ -8,6 +8,10 @@ import subprocess
+@@ -7,6 +7,10 @@
+ import subprocess
  import sys
  import time
-
++
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
-+
+ 
  def main():
      if sys.argv[1:] not in ([], ["--refresh-state"]):
-         raise ValueError("用法: fcitx5-wetypex-sync [--refresh-state]")
-diff --git a/scripts/fcitx5-wetypex-syncd.sh.in b/scripts/fcitx5-wetypex-syncd.sh.in
-index 4a6ff64..33c1e0f 100644
 --- a/scripts/fcitx5-wetypex-syncd.sh.in
 +++ b/scripts/fcitx5-wetypex-syncd.sh.in
 @@ -1,4 +1,4 @@
@@ -256,19 +249,17 @@ index 4a6ff64..33c1e0f 100644
  """Synchronize the Fcitx clipboard through the original WeType service."""
  import fcntl
  import base64
-@@ -14,6 +14,10 @@ import sys
+@@ -13,6 +13,10 @@
+ import sys
  import time
  import tempfile
-
++
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
-+
+ 
  data_home = pathlib.Path(os.environ.get("XDG_DATA_HOME", pathlib.Path.home() / ".local/share"))
  state_dir = pathlib.Path(os.environ.get("WETYPE_STATE_DIR", data_home / "fcitx5-wetypex/state"))
- account_tool = os.environ.get("WETYPE_ACCOUNT_TOOL", "@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-account")
-diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.sh.in
-index 629aff3..87779ae 100644
 --- a/scripts/fcitx5-wetypex-voice.sh.in
 +++ b/scripts/fcitx5-wetypex-voice.sh.in
 @@ -1,4 +1,7 @@
@@ -282,8 +273,16 @@ index 629aff3..87779ae 100644
 -exec python3 @CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/voice_stream.py "$@"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
-diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
-index de6e6a4..0c42c66 100644
+--- a/scripts/runtime_lease.sh.in
++++ b/scripts/runtime_lease.sh.in
+@@ -9,6 +9,6 @@
+     break
+   fi
+   exec 8>&-
+-  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || exit 78
++  @NIX_PYTHON@ "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || exit 78
+   test ! -f "$runtime_data/runtime-transaction.json" || exit 78
+ done
 --- a/scripts/setup_runtime.py
 +++ b/scripts/setup_runtime.py
 @@ -1,4 +1,4 @@
@@ -292,18 +291,18 @@ index de6e6a4..0c42c66 100644
  """Install a verified, user-supplied original WeType runtime in user data."""
  import argparse
  import hashlib
-@@ -13,6 +13,10 @@ import tempfile
+@@ -15,6 +15,10 @@
  import urllib.request
  import zipfile
-
+ 
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
 +
- UPSTREAM_VERSION='2.2.3.657'
- UPSTREAM_RELEASE,UPSTREAM_BUILD=UPSTREAM_VERSION.rsplit('.',1)
- UPSTREAM_ARCHIVE=f'WeType_{UPSTREAM_RELEASE}_{UPSTREAM_BUILD}.zip'
-@@ -28,13 +32,26 @@ def install_ui_resources(archive, data):
+ WORKER_STATUS = None
+ WORKER_FD = None
+ 
+@@ -32,13 +36,26 @@
      with zipfile.ZipFile(archive) as z:
          assets={}
          system_theme_root=next((path for path in (
@@ -334,7 +333,7 @@ index de6e6a4..0c42c66 100644
          for name, original in {'input':'icon_setup_sidebar_keyboard.svg',
                                 'voice':'icon_setup_sidebar_microphone.svg',
                                 'phrases':'icon_setup_sidebar_changyongyu.svg',
-@@ -91,6 +108,8 @@ def install_ui_resources(archive, data):
+@@ -95,6 +112,8 @@
          candidate=prefix+'candidate/icons/'
          for theme,variant in (('wetypex-light','light'),
                                ('wetypex-dark','dark')):
@@ -343,35 +342,32 @@ index de6e6a4..0c42c66 100644
              assets['fcitx5/themes/'+theme+'/next.svg']=(
                  candidate+'bubble_normal_arrow_lower_'+variant+'.svg')
              assets['fcitx5/themes/'+theme+'/prev.svg']=(
-@@ -159,7 +178,7 @@ def digest(path):
-     with path.open('rb') as stream:return stream_digest(stream,'sha256')
-
- def validate_runtime(target):
+@@ -277,7 +296,7 @@
+         fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+         with os.fdopen(fd,'wb') as stream:stream.write(result.stderr[-262144:])
+         return False,f'{label} failed (exit {result.returncode}); see {path}'
 -    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','/usr/lib/fcitx5-wetypex'))
 +    support=pathlib.Path(os.environ.get('WETYPE_SUPPORT_DIR','@NIX_OUT@/lib/fcitx5-wetypex'))
      host=support/'wetypex-engine-host'
      locale=support/'locale.so'
      if not locale.exists():locale=support/'wetypex-locale.so'
-@@ -178,12 +197,14 @@ def validate_runtime(target):
+@@ -300,12 +319,13 @@
          return False,'unable to check UTF-8 JSON compatibility'
      with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
          command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
 -                 '--ro-bind','/usr','/usr','--symlink','usr/lib','/lib',
--                 '--ro-bind','/lib64','/lib64','--symlink','usr/bin','/bin',
+-                 '--ro-bind-try','/lib64','/lib64','--symlink','usr/bin','/bin',
 +                 '--ro-bind','/nix/store','/nix/store',
                   '--proc','/proc','--dev','/dev','--tmpfs','/tmp',
                   '--ro-bind',str(target),'/input','--ro-bind',str(support),'/support',
                   '--bind',work,'/work','--chdir','/work',
 -                 '--setenv','PATH','/usr/bin','--setenv','HOME','/work',
-+                 '--setenv','TZDIR','@NIX_TZDIR@',
 +                 '--setenv','PATH','@NIX_RUNTIME_PATH@','--setenv','HOME','/work',
++                 '--setenv','TZDIR','@NIX_TZDIR@',
 +                 '--setenv','SSL_CERT_FILE','@NIX_CA_BUNDLE@',
-+                 '--setenv','CURL_CA_BUNDLE','@NIX_CA_BUNDLE@',
                   '--setenv','WETYPE_SUPPORT_DIR','/support',
+                  '--setenv', 'WETYPE_ENGINE_PROVIDER', os.environ.get('WETYPE_ENGINE_PROVIDER', 'auto'),
                   '/support/wetypex-engine-host','/input','validate']
-         try:
-diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
-index 6546c8e..bda0776 100644
 --- a/scripts/voice_stream.py
 +++ b/scripts/voice_stream.py
 @@ -1,4 +1,4 @@
@@ -380,10 +376,10 @@ index 6546c8e..bda0776 100644
  """PipeWire/PulseAudio capture and session control for the original native voice engine."""
  import argparse
  import array
-@@ -20,12 +20,16 @@ import threading
+@@ -22,12 +22,16 @@
  import time
  import uuid
-
+ 
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
@@ -398,12 +394,12 @@ index 6546c8e..bda0776 100644
  CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
  ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
  LIMIT = 131072
-@@ -163,16 +167,17 @@ class Backend:
+@@ -272,16 +276,16 @@
          if not wrapper:
              raise RuntimeError('请先安装 Bubblewrap')
          command = [wrapper, '--unshare-pid',
 -                   '--ro-bind', '/usr', '/usr', '--symlink', 'usr/lib', '/lib',
--                   '--ro-bind', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
+-                   '--ro-bind-try', '/lib64', '/lib64', '--symlink', 'usr/bin', '/bin',
 +                   '--ro-bind', '/nix/store', '/nix/store',
                     '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp', '--dir', '/etc']
 -        for name in ('resolv.conf', 'hosts', 'nsswitch.conf'):
@@ -415,15 +411,12 @@ index 6546c8e..bda0776 100644
          command += ['--ro-bind', str(RUNTIME), '/input', '--ro-bind', str(SUPPORT), '/support',
                      '--bind', str(directory), '/work', '--chdir', '/work',
 -                    '--setenv', 'PATH', '/usr/bin', '--setenv', 'HOME', '/work',
-+                    '--setenv', 'TZDIR', '@NIX_TZDIR@',
 +                    '--setenv', 'PATH', '@NIX_RUNTIME_PATH@', '--setenv', 'HOME', '/work',
++                    '--setenv', 'TZDIR', '@NIX_TZDIR@',
 +                    '--setenv', 'SSL_CERT_FILE', '@NIX_CA_BUNDLE@',
-+                    '--setenv', 'CURL_CA_BUNDLE', '@NIX_CA_BUNDLE@',
                      '--setenv', 'WETYPE_SUPPORT_DIR', '/support',
+                  '--setenv', 'WETYPE_ENGINE_PROVIDER', os.environ.get('WETYPE_ENGINE_PROVIDER', 'auto'),
                      '--setenv', 'WETYPE_WORK_DIR', '/work/business',
-                     '--setenv', 'WETYPE_IDENTITY_FILE', '/work/identity.json',
-diff --git a/scripts/wechat_emoticons.py b/scripts/wechat_emoticons.py
-index 01a65a5..2c11403 100644
 --- a/scripts/wechat_emoticons.py
 +++ b/scripts/wechat_emoticons.py
 @@ -1,4 +1,4 @@
@@ -432,53 +425,49 @@ index 01a65a5..2c11403 100644
  """Build a local candidate-only colour font from verified original artwork."""
  import argparse
  import io
-@@ -9,6 +9,10 @@ import subprocess
+@@ -8,6 +8,10 @@
+ import subprocess
  import tempfile
  import zipfile
-
++
 +os.environ["PATH"] = "@NIX_RUNTIME_PATH@" + os.pathsep + os.environ.get("PATH", "")
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
-+
+ 
  FAMILY = 'WeTypeX WeChat Emoticons v1'
  ARCHIVE_PREFIX = ('WeType.app/Contents/MacOS/WeTypeSettings.app/Contents/'
-                   'Frameworks/App.framework/Versions/A/Resources/flutter_assets/'
-diff --git a/src/backend/darwin_locale.cpp b/src/backend/darwin_locale.cpp
-index 9988779..e70edaf 100644
 --- a/src/backend/darwin_locale.cpp
 +++ b/src/backend/darwin_locale.cpp
-@@ -23,7 +23,7 @@ static uint32_t darwin_mask(std::ctype_base::mask m) {
+@@ -33,7 +33,7 @@
    return r;
  }
  extern "C" void *wetype_locale_use_facet(void *locale, void *id) {
 -  static void *h = dlopen("libc++.so.1", RTLD_NOW);
-+  static void *h = dlopen("@NIX_LIBCXX@", RTLD_NOW);
++  static void *h = dlopen(nullptr, RTLD_NOW);
    static auto fn = (void *(*)(void *, void *))dlsym(
        h, "_ZNKSt3__16locale9use_facetERNS0_2idE");
    void *facet = fn(locale, id);
-@@ -51,7 +51,7 @@ extern "C" void *wetype_locale_use_facet(void *locale, void *id) {
+@@ -61,7 +61,7 @@
    return c->object;
  }
  extern "C" uint32_t wetype_get_classname(const char *s, bool ignorecase) {
 -  static void *h = dlopen("libc++.so.1", RTLD_NOW);
-+  static void *h = dlopen("@NIX_LIBCXX@", RTLD_NOW);
++  static void *h = dlopen(nullptr, RTLD_NOW);
    static auto fn = (std::ctype_base::mask (*)(const char *, bool))dlsym(
        h, "_ZNSt3__115__get_classnameEPKcb");
    return darwin_mask(fn(s, ignorecase));
-diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
-index 4a4153f..f26bb65 100644
 --- a/src/backend/macos_host.cpp
 +++ b/src/backend/macos_host.cpp
-@@ -1139,7 +1139,7 @@ extern "C" void shim_promise_void_get_future(void *output, void *promise) {
-   }
-   using Original = void (*)(void *, void *);
-   static Original original = [] {
--    void *library = dlopen("libc++.so.1", RTLD_NOW | RTLD_NOLOAD);
-+    void *library = dlopen("@NIX_LIBCXX@", RTLD_NOW | RTLD_NOLOAD);
-     return reinterpret_cast<Original>(
-         dlsym(library, "_ZNSt3__17promiseIvE10get_futureEv"));
-   }();
-@@ -1457,7 +1457,7 @@ extern "C" void *shim_dlsym(void *h, const char *n) {
+@@ -67,7 +67,7 @@
+   uintptr_t data = 0, dataBytes = 0, end = 0;
+ };
+ static std::vector<DarwinTLSImage> tls_images;
+-static std::string active_libcxx_path = "libc++.so.1";
++static std::string active_libcxx_path = "@NIX_LIBCXX@";
+ static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
+ static bool service_mode = false;
+ static bool original_cpu_supported() {
+@@ -1675,7 +1675,7 @@
    if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
      h = RTLD_DEFAULT;
    if (!strcmp(n, "__cxa_throw")) {
@@ -487,22 +476,18 @@ index 4a4153f..f26bb65 100644
      return dlsym(abi, n);
    }
    return dlsym(h, n);
-@@ -2832,8 +2832,8 @@ int main(int argc, char **argv) {
-   sigaction(SIGBUS, &sa, nullptr);
-   sigaction(SIGILL, &sa, nullptr);
-   sigaction(SIGABRT, &sa, nullptr);
--  if (!dlopen("libc++.so.1", RTLD_NOW | RTLD_GLOBAL) ||
+@@ -3388,7 +3388,7 @@
+   }
+ #endif
+   if (!dlopen(active_libcxx_path.c_str(), RTLD_NOW | RTLD_GLOBAL) ||
 -      !dlopen("libc++abi.so.1", RTLD_NOW | RTLD_GLOBAL)) {
-+  if (!dlopen("@NIX_LIBCXX@", RTLD_NOW | RTLD_GLOBAL) ||
 +      !dlopen("@NIX_LIBCXXABI@", RTLD_NOW | RTLD_GLOBAL)) {
      fputs(dlerror(), stderr);
      return 2;
    }
-diff --git a/src/backend/wcwss_bridge.cpp b/src/backend/wcwss_bridge.cpp
-index 3a797c5..0e69bee 100644
 --- a/src/backend/wcwss_bridge.cpp
 +++ b/src/backend/wcwss_bridge.cpp
-@@ -137,6 +137,9 @@ void run(const std::shared_ptr<Connection> &connection) {
+@@ -137,6 +137,9 @@
    curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
    curl_easy_setopt(curl, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
    curl_easy_setopt(curl, CURLOPT_HAPPY_EYEBALLS_TIMEOUT_MS, 200L);
@@ -512,60 +497,9 @@ index 3a797c5..0e69bee 100644
    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 1L);
    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
-diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
-index e733fa7..5d3d027 100644
---- a/src/plugin/config.hpp
-+++ b/src/plugin/config.hpp
-@@ -220,7 +220,7 @@ FCITX_CONFIGURATION(
-
- FCITX_CONFIGURATION(UpdateConfig,
-                     Option<bool> autoUpdate{this, "AutoUpdate",
--                                            "有新版本时自动更新", true};)
-+                                            "有新版本时自动更新", false};)
-
- FCITX_CONFIGURATION(
-     WeTypeConfig, Option<InputConfig> input{this, "Input", "输入"};
-diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
-index 863d070..a411c8e 100644
---- a/src/plugin/wetype.cpp
-+++ b/src/plugin/wetype.cpp
-@@ -291,7 +291,7 @@ class WeType : public InputMethodEngine {
-   uint64_t activity_ = 0;
-   uint64_t restartAt_ = 0, restartBackoff_ = 250000;
-   bool restartNeedsOpen_ = false;
--  uint64_t syncTick_ = 0, updateTick_ = 0;
-+  uint64_t syncTick_ = 0;
-   uint64_t voiceWarmTick_ = 0;
-   uint64_t lastVoiceVersion_ = 0;
-   pid_t vModeChild_ = -1;
-@@ -752,8 +752,7 @@ class WeType : public InputMethodEngine {
-     loadKeys(shortcuts->nextPageKeys, "next_page_keys");
-     loadKeys(shortcuts->secondCandidateKeys, "second_candidate_keys");
-     loadKeys(shortcuts->thirdCandidateKeys, "third_candidate_keys");
--    config_.update.mutableValue()->autoUpdate.setValue(
--        boolSetting("auto_update", true));
-+    config_.update.mutableValue()->autoUpdate.setValue(false);
-   }
-   void saveNativeConfig() {
-     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-@@ -2222,11 +2221,7 @@ public:
-           if (focused && networkEnabled_ && time >= voiceWarmTick_ + 60000000)
-             primeVoice();
-           pollVModeWindow();
--          if (networkEnabled_ && *config_.update->autoUpdate &&
--              time >= updateTick_ + 3600000000ULL) {
--            updateTick_ = time;
--            startProcess({WETYPE_UPDATE});
--          }
-+          // The Nix package is updated through its declarative configuration.
-           const auto next = time + (voicePending_ ? 40000 : 100000);
-           source->setAccuracy(panelWake ? 1000 : 0);
-           source->setTime(panelWake ? std::min(next, panelWake) : next);
-diff --git a/src/settings/main.cpp b/src/settings/main.cpp
-index 7340720..4088329 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -907,7 +907,10 @@ int main(int argc, char **argv) {
+@@ -935,7 +935,10 @@
    auto *microphone = new QComboBox;
    microphone->addItem("自动检测");
    QProcess pipewire;
@@ -577,25 +511,20 @@ index 7340720..4088329 100644
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1480,10 +1483,7 @@ int main(int argc, char **argv) {
+@@ -1525,7 +1528,7 @@
          QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
    });
    about.body->addWidget(rowsCard(
 -      {row("有新版本时自动更新", {},
--           toggle(wetype::settingBool(settings.value("auto_update"), true),
--                  true, "auto_update"),
--           48),
-+      {row("软件更新", "由 Nix 管理，请更新 Nix 配置并重新构建", nullptr, 48),
-        row("我要反馈", {}, feedback, 48)}));
-   about.body->addStretch();
-   auto *copyright =
-diff --git a/tools/prepare_macos_runtime.py b/tools/prepare_macos_runtime.py
-index 9ddefe2..c1f0daa 100644
++      {row("原版核心自动更新", "适配器通过 Nix 配置更新",
+            toggle(wetype::settingBool(settings.value("auto_update"), true),
+                   true, "auto_update"),
+            48),
 --- a/tools/prepare_macos_runtime.py
 +++ b/tools/prepare_macos_runtime.py
 @@ -1,4 +1,4 @@
 -#!/usr/bin/env python3
 +#!@NIX_PYTHON@
- """Prepare the pinned x86-64 Mach-O runtime using only the Python standard library."""
+ """Inspect and prepare verified Mach-O slices using the Python standard library."""
  import argparse
  import hashlib

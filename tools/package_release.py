@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Create a source-only release and a pinned Arch build recipe."""
-import gzip,hashlib,pathlib,tarfile
+import gzip,hashlib,pathlib,re,tarfile
 root=pathlib.Path(__file__).resolve().parent.parent
 output=root/'dist/arch';output.mkdir(parents=True,exist_ok=True)
-version='2.2.3.657';archive=output/f'fcitx5-wetypex-{version}.tar.gz'
+version=re.search(r'project\(fcitx5-wetypex VERSION ([0-9.]+)',(root/'CMakeLists.txt').read_text()).group(1);archive=output/f'fcitx5-wetypex-{version}.tar.gz'
 files=[]
-for name in ['CMakeLists.txt','README.md','LICENSE','NOTICE','CONTRIBUTING.md','SECURITY.md','.dockerignore','.editorconfig','.gitattributes','.gitignore','flake.nix','flake.lock','nix','cmake','src','data','scripts','tools','packaging','docs']:
+for name in ['CMakeLists.txt','README.md','LICENSE','NOTICE','CONTRIBUTING.md','SECURITY.md','.dockerignore','.editorconfig','.gitattributes','.gitignore','.markdownlint-cli2.jsonc','flake.nix','flake.lock','nix','cmake','src','data','scripts','tools','packaging','docs']:
     p=root/name
     files.extend([p] if p.is_file() else (x for x in p.rglob('*') if x.is_file() and '__pycache__' not in x.parts))
 with archive.open('wb') as raw,gzip.GzipFile(fileobj=raw,mode='wb',mtime=0,filename='') as compressed,tarfile.open(fileobj=compressed,mode='w') as tar:

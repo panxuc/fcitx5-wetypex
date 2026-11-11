@@ -1,18 +1,60 @@
 #!/usr/bin/env python3
-"""Prepare the pinned x86-64 Mach-O runtime using only the Python standard library."""
+"""Inspect and prepare verified Mach-O slices using the Python standard library."""
 import argparse
 import hashlib
+import json
 import pathlib
 import struct
 
 FAT_MAGIC = 0xCAFEBABE
+FAT_MAGIC_64 = 0xCAFEBABF
 CPU_TYPE_X86_64 = 0x01000007
+CPU_TYPE_ARM64 = 0x0100000C
+ARCHITECTURES = {'x86_64': CPU_TYPE_X86_64, 'arm64': CPU_TYPE_ARM64}
 MH_MAGIC_64 = 0xFEEDFACF
 LC_SEGMENT_64 = 0x19
 LC_SYMTAB = 0x2
 LC_DYLD_INFO_ONLY = 0x80000022
 LC_DYLD_CHAINED_FIXUPS = 0x80000034
 EXPECTED = 'a68a92300cc38e5941f59832c516a37eb098c10c6bbe47ab3dcbe812705cf5ee'
+
+
+def select_slice(raw, architecture):
+    """Select a real thin/universal slice without interpreting executable code."""
+    if len(raw) < 32:
+        raise ValueError('truncated Mach-O header')
+    magic, count = struct.unpack_from('>II', raw)
+    available = []
+    if magic in (FAT_MAGIC, FAT_MAGIC_64):
+        entry_size = 20 if magic == FAT_MAGIC else 32
+        if not 0 < count <= 16 or 8 + count * entry_size > len(raw):
+            raise ValueError('invalid universal Mach-O architecture table')
+        for index in range(count):
+            values = struct.unpack_from('>IIIII' if entry_size == 20 else
+                                        '>IIQQII', raw, 8 + index * entry_size)
+            cpu, subtype, offset, size, alignment = values[:5]
+            if alignment > 31 or offset % (1 << alignment) or \
+                    offset < 8 + count * entry_size or size < 32 or \
+                    offset > len(raw) or size > len(raw) - offset:
+                raise ValueError('invalid universal Mach-O slice range')
+            available.append((cpu, subtype, offset, size))
+    else:
+        header = struct.unpack_from('<8I', raw)
+        if header[0] != MH_MAGIC_64:
+            raise ValueError('unsupported Mach-O container')
+        available.append((header[1], header[2], 0, len(raw)))
+    matches = [item for item in available if item[0] == ARCHITECTURES[architecture]]
+    if len(matches) != 1:
+        raise ValueError(f'{architecture} Mach-O slice is missing or ambiguous')
+    cpu, subtype, offset, size = matches[0]
+    if cpu == CPU_TYPE_ARM64 and subtype & 0x00ffffff != 0:
+        raise ValueError('ARM64e/authenticated-pointer slices require a separate ABI adapter')
+    thin = raw[offset:offset + size]
+    header = struct.unpack_from('<8I', thin)
+    if header[0] != MH_MAGIC_64 or header[1:3] != (cpu, subtype):
+        raise ValueError('Mach-O slice header does not match architecture table')
+    return thin, [dict(cpu=hex(c), subtype=hex(s), offset=o, size=n)
+                  for c, s, o, n in available]
 
 
 def cstring(data, offset, limit=None):
@@ -156,31 +198,23 @@ def parse_rebase_stream(data, start, size, segments, slide):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('binary', type=pathlib.Path)
-    parser.add_argument('output', type=pathlib.Path)
+    parser.add_argument('output', type=pathlib.Path, nargs='?')
     parser.add_argument('--expected-sha256', default=EXPECTED)
-    parser.add_argument('--slide', type=lambda value:int(value,0), default=0)
+    parser.add_argument('--architecture', choices=ARCHITECTURES, default='x86_64')
+    parser.add_argument('--inspect', action='store_true',
+                        help='Read metadata only; do not prepare or execute a runtime')
+    allocation = parser.add_mutually_exclusive_group()
+    allocation.add_argument('--slide', type=lambda value:int(value,0), default=0)
+    allocation.add_argument('--after-module', type=pathlib.Path, action='append',
+                            default=[], help='Place this image after mapped module ranges')
     parser.add_argument('--export-prefix', action='append', default=[])
     args = parser.parse_args()
-    args.output.mkdir(parents=True, exist_ok=True)
-
     raw = args.binary.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != args.expected_sha256:
+    digest = hashlib.sha256(raw).hexdigest()
+    if not args.inspect and digest != args.expected_sha256:
         raise ValueError('unsupported original engine build')
-    magic, count = struct.unpack_from('>II', raw)
-    if magic != FAT_MAGIC or count >= 16:
-        raise ValueError('invalid universal Mach-O container')
-    architectures = [struct.unpack_from('>IIIII', raw, 8 + i * 20)
-                     for i in range(count)]
-    arch = next((item for item in architectures if item[0] == CPU_TYPE_X86_64), None)
-    if not arch:
-        raise ValueError('x86-64 Mach-O slice is missing')
-    thin = raw[arch[2]:arch[2] + arch[3]]
-    if len(thin) != arch[3]:
-        raise ValueError('truncated x86-64 Mach-O slice')
-
+    thin, architectures = select_slice(raw, args.architecture)
     header = struct.unpack_from('<8I', thin)
-    if header[0] != MH_MAGIC_64 or header[1] != CPU_TYPE_X86_64:
-        raise ValueError('invalid x86-64 Mach-O header')
     ncmds, sizeofcmds = header[4], header[5]
     if 32 + sizeofcmds > len(thin):
         raise ValueError('truncated Mach-O load commands')
@@ -234,6 +268,31 @@ def main():
             names[value] = name
     symbols_by_name = {name: value for value, name in symbol_rows if value and name}
 
+    imagebase = next(segment['vmaddr'] for segment in segments
+                     if segment['name'] != '__PAGEZERO' and segment['fileoff'] == 0)
+    if args.after_module:
+        end = 0
+        for module in args.after_module:
+            with (module / 'image.macho').open('rb') as stream:
+                module_header = stream.read(32)
+            if len(module_header) != 32 or struct.unpack_from('<II', module_header) != \
+                    (MH_MAGIC_64, ARCHITECTURES[args.architecture]):
+                raise ValueError('cannot allocate images from different architectures')
+            for line in (module / 'manifest.txt').read_text().splitlines():
+                fields = line.split()
+                if fields and fields[0] == 'SEG' and fields[-1] != '__LINKEDIT':
+                    if len(fields) != 7:
+                        raise ValueError('invalid mapped segment record')
+                    address, size = (int(value, 16) for value in fields[1:3])
+                    if size <= 0 or address < 0 or address + size >= 1 << 48:
+                        raise ValueError('invalid mapped segment address range')
+                    end = max(end, address + size)
+        if not end:
+            raise ValueError('no existing mapped image ranges')
+        args.slide = ((end + 65535) & ~65535) - imagebase
+    if args.slide < 0 or args.slide % 4096:
+        raise ValueError('image slide must be a nonnegative page-aligned offset')
+
     lines = []
     for segment in segments:
         if segment['name'] == '__PAGEZERO':
@@ -258,8 +317,6 @@ def main():
         elif value and name and any(name.startswith(p) for p in args.export_prefix):
             lines.append(f'SYM {value+args.slide:x} {name}')
 
-    imagebase = next(segment['vmaddr'] for segment in segments
-                     if segment['name'] != '__PAGEZERO' and segment['fileoff'] == 0)
     for section in sections:
         if section['name'] in ('__thread_vars', '__thread_data', '__thread_bss', '__eh_frame'):
             lines.append(f"SECTION {section['address']+args.slide:x} {section['size']:x} {section['name']}")
@@ -282,7 +339,7 @@ def main():
             for position, (first, page, lsda_off) in enumerate(indices[:-1]):
                 for item in range(lsda_off, indices[position + 1][2], 8):
                     function, lsda = struct.unpack_from('<II', content, item)
-                    lsdas[function] = imagebase + lsda
+                    lsdas[function] = imagebase + lsda + args.slide
                 kind, = struct.unpack_from('<I', content, page)
                 if kind == 2:
                     entry_off, entry_n = struct.unpack_from('<HH', content, page + 4)
@@ -303,7 +360,9 @@ def main():
             unwind.sort()
             for index, (function, encoding) in enumerate(unwind):
                 end = unwind[index + 1][0] if index + 1 < len(unwind) else indices[-1][0]
-                if ((encoding >> 24) & 15) == 1:
+                mode = (encoding >> 24) & 15
+                if ((args.architecture == 'x86_64' and mode == 1) or
+                        (args.architecture == 'arm64' and mode in (2, 4))):
                     lines.append(f'UNWIND {imagebase + function + args.slide:x} {end - function:x} '
                                  f'{encoding:x} {lsdas.get(function, 0):x}')
 
@@ -311,12 +370,34 @@ def main():
                    if value and name and
                    (name.startswith(('_wxime_', '_business_', '_net_', '_voice_engine_')) or
                     'SetReportExceptionCallBack' in name)}
+    constructors = [line.split(' ', 2)[2] for line in lines if line.startswith('CTOR ')]
+    report = dict(architecture=args.architecture, architectures=architectures,
+                  sha256=digest, slice_sha256=hashlib.sha256(thin).hexdigest(),
+                  image_base=hex(imagebase), mapped_base=hex(imagebase + args.slide),
+                  slide=hex(args.slide),
+                  symbol_count=len(symbols_by_name),
+                  imports=sorted({line.split(' ', 3)[3] for line in lines
+                                  if line.startswith('BIND ')}),
+                  exports=sorted(name for name in symbols_by_name
+                                 if name.startswith(('_wxime_', '_business_',
+                                                     '_net_', '_voice_engine_'))),
+                  constructors=constructors,
+                  unwind_adapter='x86_64-rbp' if args.architecture == 'x86_64'
+                                 else 'arm64-compact',
+                  execution_validated=False)
+    if args.inspect:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
+    if args.output is None:
+        parser.error('output is required unless --inspect is specified')
+    args.output.mkdir(parents=True, exist_ok=True)
     (args.output / 'image.macho').write_bytes(thin)
     (args.output / 'manifest.txt').write_text('\n'.join(lines) + '\n')
     (args.output / 'symbols.txt').write_text('\n'.join(
         f'{value:x} {name}' for value, name in sorted(debug_names.items())) + '\n')
     (args.output / 'sha256.txt').write_text(hashlib.sha256(raw).hexdigest() + '\n')
-    print(f'Prepared {len(thin)} byte x86-64 image; metadata only.')
+    (args.output / 'macho-info.json').write_text(json.dumps(report, indent=2) + '\n')
+    print(f'Prepared {len(thin)} byte {args.architecture} image; metadata only.')
 
 
 if __name__ == '__main__':

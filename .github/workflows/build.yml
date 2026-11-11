@@ -4,10 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
+    inputs:
+      runtime_checks:
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  arm64:
+    uses: ./.github/workflows/packages-arm64.yml
+    permissions:
+      contents: read
+    with:
+      runtime_checks: true
   nix:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
@@ -19,6 +38,38 @@ jobs:
       - name: 检查 flake 并构建 Nix 包
         run: |
           nix flake check --no-write-lock-file --print-build-logs
+      - name: 验证 Nix 包的真实核心、传输与语音
+        shell: bash
+        run: |
+          nix build .#fcitx5-wetypex --no-write-lock-file --out-link "$RUNNER_TEMP/wetypex-runtime"
+          prefix=$(readlink -f "$RUNNER_TEMP/wetypex-runtime")
+          "$prefix/bin/fcitx5-wetypex-account" network-info > "$RUNNER_TEMP/wetypex-network.json"
+          if ! python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["execution_ready"]' "$RUNNER_TEMP/wetypex-network.json"; then
+            nix build --impure --no-write-lock-file --out-link "$RUNNER_TEMP/wetypex-runtime" --expr \
+              'let f = builtins.getFlake (toString ./.); in (builtins.getAttr builtins.currentSystem f.packages).default.override { enableCompatibilityProvider = true; }'
+            prefix=$(readlink -f "$RUNNER_TEMP/wetypex-runtime")
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends espeak-ng
+          # Use an independent root-owned fixture; the original process still
+          # runs inside the package sandbox and receives no Actions credentials.
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$prefix" \
+            XDG_DATA_HOME="$RUNNER_TEMP/wetypex-data" \
+            XDG_CACHE_HOME="$RUNNER_TEMP/wetypex-cache" \
+            XDG_CONFIG_HOME="$RUNNER_TEMP/wetypex-config" bash -euc '
+              trap '\''status=$?; if [ "$status" -ne 0 ]; then python3 -c "import json,os; from pathlib import Path; p=Path(os.environ[\"XDG_CACHE_HOME\"])/\"voice.json\"; v=json.loads(p.read_text()) if p.exists() else {}; print({k:v.get(k) for k in (\"ok\",\"state\",\"error\")})"; tail -n 80 "$XDG_DATA_HOME/fcitx5-wetypex/state/voice/backend.log" | grep -Eiv "cookie|token|identity|match_code|uin" || true; fi'\'' EXIT
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --download --accept-upstream-license
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --check --transport
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-account" pairing-code > "$XDG_CACHE_HOME/pairing.json"
+              python3 -c '\''import json,os; assert json.load(open(os.environ["XDG_CACHE_HOME"]+"/pairing.json"))["ok"]'\''
+              espeak-ng -v en-us -s 135 -w "$XDG_CACHE_HOME/speech.wav" "Hello, this is a voice input compatibility check. One two three."
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime > "$XDG_CACHE_HOME/voice.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice.json")); assert v["ok"] and v["text"].strip()'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" shutdown
+            '
+      - name: 清理独立运行数据
+        if: always()
+        run: sudo rm -rf "$RUNNER_TEMP/wetypex-data" "$RUNNER_TEMP/wetypex-cache" "$RUNNER_TEMP/wetypex-config"
       - name: 检查源码包中的 Nix 入口
         run: |
           python3 tools/package_release.py
@@ -103,6 +154,19 @@ jobs:
           test "$(dpkg-deb -f dist/debian/*.deb Version)" = "$version-$revision"
           cd dist/debian
           sha256sum fcitx5-wetypex_*.deb > SHA256SUMS
+      - name: 在旧基线上运行真实原版核心与 TLS 通道
+        run: |
+          docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -v "$PWD/dist:/out:ro" wetypex-build-jammy bash -euc '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              dpkg --unpack /out/debian/*.deb
+              fcitx5-wetypex-setup --download --accept-upstream-license
+              fcitx5-wetypex-setup --check --transport || {
+                cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+              }
+            '
       - name: 保存兼容旧系统的 deb
         uses: actions/upload-artifact@v7
         with:
@@ -175,6 +239,19 @@ jobs:
           test "$(dpkg-deb -f dist/ubuntu20/*.deb Version)" = "$version-$revision"
           cd dist/ubuntu20
           sha256sum *.deb > SHA256SUMS
+      - name: 在 Focal 与稳定框架 SDK 中运行真实核心
+        run: |
+          docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+            --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+            -v "$PWD/dist:/out:ro" wetypex-build-focal bash -euc '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              dpkg --unpack /out/ubuntu20/*.deb
+              fcitx5-wetypex-setup --download --accept-upstream-license
+              fcitx5-wetypex-setup --check --transport || {
+                cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+              }
+            '
       - uses: actions/upload-artifact@v7
         with:
           name: fcitx5-wetypex-focal-legacy

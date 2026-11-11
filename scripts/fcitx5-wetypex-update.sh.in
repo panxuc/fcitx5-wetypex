@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import pathlib
+import platform
 import re
 import shutil
 import subprocess
@@ -18,20 +19,24 @@ CURRENT_VERSION = "@PROJECT_VERSION@"
 CURRENT_PACKAGE_RELEASE = "@WETYPE_PACKAGE_RELEASE@"
 RELEASE_API = os.environ.get(
     "WETYPE_UPDATE_API",
-    "https://api.github.com/repos/panxuc/fcitx5-wetypex/releases/latest",
+    "https://api.github.com/repos/panxuc/fcitx5-wetypex/releases?per_page=100",
 )
 CHECK_INTERVAL = 24 * 60 * 60
 RETRY_INTERVAL = 60 * 60
+PACKAGE_UPDATES = True
 
 
 def version_tuple(value):
+    if not isinstance(value, str):
+        return None
     match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)\.(\d+)(?:-(\d+))?", value or "")
     return tuple(int(part or 0) for part in match.groups()) if match else None
 
 
 def read_json(path, fallback=None):
     try:
-        return json.loads(path.read_text())
+        value = json.loads(path.read_text())
+        return value if isinstance(value, dict) else ({} if fallback is None else fallback)
     except (OSError, ValueError):
         return {} if fallback is None else fallback
 
@@ -43,7 +48,20 @@ def atomic_json(path, value):
     temporary.replace(path)
 
 
-def request_bytes(url, timeout=20):
+def timestamp(value):
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def available_asset(asset):
+    return (isinstance(asset, dict) and isinstance(asset.get('name'), str) and
+            asset.get('state', 'uploaded') == 'uploaded' and
+            isinstance(asset.get('size', 1), int) and asset.get('size', 1) > 0)
+
+
+def request_bytes(url, timeout=20, limit=4 * 1024 * 1024):
     request = urllib.request.Request(
         url,
         headers={
@@ -53,7 +71,52 @@ def request_bytes(url, timeout=20):
         },
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+        data = response.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError('release metadata exceeds its size limit')
+        return data
+
+
+def download_package(url, target):
+    value = hashlib.sha256()
+    total = 0
+    with urllib.request.urlopen(url, timeout=120) as response, target.open('wb') as output:
+        os.chmod(target, 0o600)
+        while True:
+            block = response.read(1024 * 1024)
+            if not block:
+                break
+            total += len(block)
+            if total > 128 * 1024 * 1024:
+                raise ValueError('release package exceeds its size limit')
+            output.write(block)
+            value.update(block)
+        output.flush()
+        os.fsync(output.fileno())
+    return value.hexdigest()
+
+
+def package_version(name):
+    match = re.fullmatch(
+        r'fcitx5-wetypex(?:-legacy)?[-_](\d+\.\d+\.\d+\.\d+-\d+)'
+        r'(?:_(?:amd64|arm64)\.deb|\.(?:x86_64|aarch64)\.rpm|'
+        r'-(?:x86_64|aarch64)\.pkg\.tar\.zst)', name)
+    return version_tuple(match[1]) if match else None
+
+
+def retire_package(root, state, installed):
+    """Only remove the unchanged package recorded by our verified download."""
+    path = pathlib.Path(state.get('package', ''))
+    version = package_version(path.name)
+    if (path.parent != root or not version or version > installed or
+            path.is_symlink() or not path.is_file()):
+        return
+    value = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''):
+            value.update(block)
+    if value.hexdigest() == state.get('sha256'):
+        path.unlink()
 
 
 def linux_family():
@@ -75,11 +138,17 @@ def linux_family():
     return ""
 
 
-def select_asset(assets, family):
+def select_asset(assets, family, release):
+    architecture = platform.machine().lower()
+    if architecture not in ('x86_64', 'amd64', 'aarch64', 'arm64'):
+        return None
+    arm = architecture in ('aarch64', 'arm64')
+    native, deb = ('aarch64', 'arm64') if arm else ('x86_64', 'amd64')
+    exact = re.escape(release.lstrip('v'))
     patterns = {
-        "arch": re.compile(r"^fcitx5-wetypex-[^-]+-\d+-x86_64\.pkg\.tar\.zst$"),
-        "debian": re.compile(r"^fcitx5-wetypex_[^_]+_amd64\.deb$"),
-        "fedora": re.compile(r"^fcitx5-wetypex-[^-]+-\d+\.x86_64\.rpm$"),
+        "arch": re.compile(rf"^fcitx5-wetypex-{exact}-{native}\.pkg\.tar\.zst$"),
+        "debian": re.compile(rf"^fcitx5-wetypex_{exact}_{deb}\.deb$"),
+        "fedora": re.compile(rf"^fcitx5-wetypex-{exact}\.{native}\.rpm$"),
     }
     pattern = patterns.get(family)
     if family == "debian":
@@ -88,13 +157,32 @@ def select_asset(assets, family):
         except (OSError, ValueError, AttributeError):
             glibc = ()
         if glibc and glibc < (2, 35):
-            pattern = re.compile(r"^fcitx5-wetypex-legacy_[^_]+_amd64\.deb$")
+            pattern = re.compile(rf"^fcitx5-wetypex-legacy_{exact}_{deb}\.deb$")
     if not pattern:
         return None
     return next(
-        (asset for asset in assets if pattern.fullmatch(asset.get("name", ""))),
+        (asset for asset in assets if available_asset(asset) and pattern.fullmatch(asset['name'])),
         None,
     )
+
+
+def select_release(payload, family):
+    """Rebuilt historical tags and partial uploads must not hide a newer release."""
+    releases = [payload] if isinstance(payload, dict) else payload
+    if not isinstance(releases, list):
+        raise ValueError('release metadata is not a list or object')
+    candidates = []
+    for release in releases:
+        if not isinstance(release, dict) or release.get('draft') or release.get('prerelease'):
+            continue
+        version = version_tuple(release.get('tag_name', ''))
+        assets = release.get('assets', [])
+        if version and isinstance(assets, list) and select_asset(assets, family, release['tag_name']) and any(
+                available_asset(asset) and asset['name'] == 'SHA256SUMS' for asset in assets):
+            candidates.append((version, release))
+    if not candidates:
+        raise ValueError('no complete published release supports this distribution and architecture')
+    return max(candidates, key=lambda item: item[0])[1]
 
 
 def notify_and_offer_install(package, version, family):
@@ -153,27 +241,75 @@ def main():
         lock.close()
         return 0
     try:
-        return check_update(root)
+        check_runtime_update(root)
+        return check_update(root) if PACKAGE_UPDATES else 0
     finally:
         lock.close()
+
+
+def check_runtime_update(update_root):
+    """Only prepare profiles shipped with this adapter; activation waits for idle."""
+    data = pathlib.Path(os.environ.get('XDG_DATA_HOME', pathlib.Path.home() / '.local/share'))
+    root = data / 'fcitx5-wetypex'
+    runtime = pathlib.Path(os.environ.get('WETYPE_RUNTIME_DIR', root / 'runtime'))
+    state_path = update_root / 'runtime-check.json'
+    now = int(time.time())
+    adapter = CURRENT_VERSION + '-' + CURRENT_PACKAGE_RELEASE
+    state = read_json(state_path)
+    if ('--force' not in sys.argv and state.get('adapter') == adapter and
+            now < timestamp(state.get('next_check', 0))):
+        return
+    setup = '@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-setup'
+    try:
+        result = subprocess.run([setup, '--status'], capture_output=True, timeout=30, check=True)
+        status = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + RETRY_INTERVAL))
+        return
+    desired = status.get('default')
+    if (not status.get('update_available') or not desired or
+            read_json(root / 'runtime-policy.json').get('suppressed_default') == desired or
+            read_json(root / 'runtime-pending.json').get('version') == desired):
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + CHECK_INTERVAL))
+        return
+    try:
+        result = subprocess.run([setup, '--update',
+                        '--download', '--accept-upstream-license', '--defer'],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=900)
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + (CHECK_INTERVAL if result.returncode == 0 else RETRY_INTERVAL)))
+    except (OSError, subprocess.TimeoutExpired):
+        atomic_json(state_path, dict(adapter=adapter, next_check=now + RETRY_INTERVAL))
 
 
 def check_update(root):
     state_path = root / "state.json"
     state = read_json(state_path)
+    interrupted = pathlib.Path(state.get('partial', ''))
+    if (interrupted.parent == root and interrupted.name.endswith('.part') and
+            package_version(interrupted.name[:-5]) and not interrupted.is_symlink()):
+        interrupted.unlink(missing_ok=True)
     now = int(time.time())
-    if "--force" not in sys.argv and now < int(state.get("next_check", 0)):
+    if "--force" not in sys.argv and now < timestamp(state.get("next_check", 0)):
         return 0
     try:
-        release = json.loads(request_bytes(RELEASE_API))
+        family = linux_family()
+        release = select_release(json.loads(request_bytes(RELEASE_API)), family)
         version = version_tuple(release.get("tag_name", ""))
         current = version_tuple(f"{CURRENT_VERSION}-{CURRENT_PACKAGE_RELEASE}")
         if not version or not current:
             raise ValueError("invalid release version")
         if version <= current:
+            retire_package(root, state, current)
+            # A withdrawn/incomplete release may leave a newer verified cache.
+            # Keep its receipt so a later check can reuse or safely retire it.
+            retained = {key: state[key] for key in ('package', 'sha256', 'notified_sha256') if key in state}
+            if not pathlib.Path(state.get('package', '')).is_file():
+                retained = {}
             atomic_json(
                 state_path,
                 {
+                    **retained,
                     "checked_at": now,
                     "next_check": now + CHECK_INTERVAL,
                     "latest_version": release.get("tag_name", ""),
@@ -181,8 +317,7 @@ def check_update(root):
             )
             return 0
         assets = release.get("assets", [])
-        family = linux_family()
-        package_asset = select_asset(assets, family)
+        package_asset = select_asset(assets, family, release['tag_name'])
         checksums = next(
             (item for item in assets if item.get("name") == "SHA256SUMS"), None
         )
@@ -190,9 +325,8 @@ def check_update(root):
             raise ValueError("release has no package for this distribution")
         package = root / package_asset["name"]
         partial = package.with_suffix(package.suffix + ".part")
-        partial.write_bytes(request_bytes(package_asset["browser_download_url"], 120))
-        partial.chmod(0o600)
-        digest = hashlib.sha256(partial.read_bytes()).hexdigest()
+        state['partial'] = str(partial)
+        atomic_json(state_path, state)
         checksum_text = request_bytes(checksums["browser_download_url"]).decode()
         expected = None
         for line in checksum_text.splitlines():
@@ -203,14 +337,29 @@ def check_update(root):
             ):
                 expected = fields[0].lower()
                 break
-        if (
-            not expected
-            or not re.fullmatch(r"[0-9a-f]{64}", expected)
-            or digest != expected
-        ):
+        if not expected or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            raise ValueError('release has no valid checksum for the selected package')
+        digest = None
+        if package.is_file() and not package.is_symlink():
+            value = hashlib.sha256()
+            with package.open('rb') as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b''):
+                    value.update(block)
+            if value.hexdigest() == expected:
+                digest = expected
+        downloaded = digest is None
+        if downloaded:
+            digest = download_package(package_asset["browser_download_url"], partial)
+        if digest != expected:
             partial.unlink(missing_ok=True)
             raise ValueError("release checksum mismatch")
-        partial.replace(package)
+        if downloaded:
+            partial.replace(package)
+        elif partial.is_file() and not partial.is_symlink():
+            partial.unlink()
+        # Only remove the package named in our previous verified receipt.
+        if pathlib.Path(state.get('package', '')) != package:
+            retire_package(root, state, version)
         atomic_json(
             state_path,
             {
@@ -219,9 +368,11 @@ def check_update(root):
                 "latest_version": release.get("tag_name", ""),
                 "package": str(package),
                 "sha256": digest,
+                "notified_sha256": digest,
             },
         )
-        if os.environ.get("WETYPE_UPDATE_NO_NOTIFY") != "1":
+        if (os.environ.get("WETYPE_UPDATE_NO_NOTIFY") != "1" and
+                (state.get('notified_sha256') != digest or '--force' in sys.argv)):
             notify_and_offer_install(
                 package, release["tag_name"].lstrip("v"), family
             )
@@ -230,12 +381,17 @@ def check_update(root):
         OSError,
         ValueError,
         KeyError,
+        TypeError,
         urllib.error.URLError,
         json.JSONDecodeError,
     ) as error:
+        partial = pathlib.Path(state.get('partial', ''))
+        if partial.parent == root and package_version(partial.name[:-5]) and partial.name.endswith('.part') and not partial.is_symlink():
+            partial.unlink(missing_ok=True)
         atomic_json(
             state_path,
             {
+                **state,
                 "checked_at": now,
                 "next_check": now + RETRY_INTERVAL,
                 "error": str(error)[:300],

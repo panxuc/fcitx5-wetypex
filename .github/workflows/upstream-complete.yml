@@ -1,0 +1,53 @@
+name: 合并并发布通过验证的原版更新
+
+on:
+  workflow_dispatch:
+    inputs:
+      verification_run:
+        description: Successful upstream verification run to inspect or resume
+        required: true
+        type: string
+      publish:
+        description: Resume merge/tag/publication (requires release automation mode)
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: [验证原版更新]
+    types: [completed]
+
+concurrency:
+  group: upstream-publication
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  complete:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.WETYPEX_UPSTREAM_AUTOMATION == 'release' &&
+       github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'upstream/runtime-'))
+    runs-on: ubuntu-24.04
+    steps:
+      # Never load candidate code/artifacts in this privileged job.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: 复核完整补丁与所有检查，单提交合并或恢复发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN: ${{ inputs.verification_run || github.event.workflow_run.id }}
+          PUBLISH: ${{ github.event_name == 'workflow_run' || inputs.publish }}
+          AUTOMATION_MODE: ${{ vars.WETYPEX_UPSTREAM_AUTOMATION }}
+        run: |
+          args=(--complete-run "$VERIFIED_RUN")
+          if [[ "$PUBLISH" == true ]]; then
+            test "$AUTOMATION_MODE" = release
+            args+=(--publish)
+          fi
+          python3 tools/update_upstream.py "${args[@]}"

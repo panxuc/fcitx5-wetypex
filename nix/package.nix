@@ -3,6 +3,7 @@
   stdenv,
   fetchFromGitHub,
   writeText,
+  symlinkJoin,
   cmake,
   ninja,
   pkg-config,
@@ -25,6 +26,7 @@
   pipewire,
   pulseaudio,
   ffmpeg,
+  qemu,
   wl-clipboard,
   desktop-file-utils,
   src ? lib.cleanSource ../.,
@@ -32,13 +34,14 @@
   enableVoice ? true,
   enableLayerShell ? true,
   enableWeTypeTheme ? true,
+  enableCompatibilityProvider ? false,
   defaultSettings ? { },
 }:
 
 assert lib.assertMsg (builtins.isAttrs defaultSettings)
   "WeTypeX defaultSettings must be an attribute set";
 assert lib.assertMsg (builtins.all builtins.isBool [
-  enableAI enableVoice enableLayerShell enableWeTypeTheme
+  enableAI enableVoice enableLayerShell enableWeTypeTheme enableCompatibilityProvider
 ]) "WeTypeX feature switches must be booleans";
 
 let
@@ -52,6 +55,20 @@ let
   version = "${upstreamVersion}-${lib.removePrefix "pkgrel=" releaseLine}";
   # WeTypeX requires WS/WSS, disabled in the default nixpkgs curl build.
   transportCurl = curl.override { websocketSupport = true; };
+  arm64 = stdenv.hostPlatform.isAarch64;
+  compatibilityProvider = qemu.override {
+    userOnly = true;
+    hostCpuTargets = [ "aarch64-linux-user" ];
+  };
+  privateLibcxx = llvmPackages.libcxx.overrideAttrs (old: {
+    cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+      "-DLIBCXX_ABI_DEFINES=_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT"
+    ];
+  });
+  privateCxxRoot = symlinkJoin {
+    name = "wetypex-darwin-libcxx";
+    paths = [ (lib.getDev privateLibcxx) (lib.getLib privateLibcxx) ];
+  };
   python = python3.withPackages (ps: [
     ps.fonttools
     ps.pillow
@@ -133,11 +150,8 @@ stdenv.mkDerivation {
   ++ lib.optional enableLayerShell kdePackages.layer-shell-qt;
 
   postPatch = ''
-    # Distribution installers cannot update an immutable Nix store package.
-    cat > scripts/fcitx5-wetypex-update.sh.in <<'PY'
-    #!@NIX_PYTHON@
-    print("WeTypeX 由 Nix 管理，请更新 Nix 配置中的版本并重新构建。")
-    PY
+    substituteInPlace scripts/fcitx5-wetypex-update.sh.in \
+      --replace-fail 'PACKAGE_UPDATES = True' 'PACKAGE_UPDATES = False'
     while IFS= read -r -d "" file; do
       substituteInPlace "$file" \
         --replace-quiet '@NIX_RUNTIME_PATH@' '${runtimePath}' \
@@ -175,6 +189,11 @@ stdenv.mkDerivation {
     "-DWETYPE_DEFAULT_SETTINGS_FILE=${defaultSettingsFile}"
     "-DWETYPE_BUNDLED_CURL=OFF"
     "-DWETYPE_CLANGXX=${llvmPackages.libcxxStdenv.cc}/bin/clang++"
+  ] ++ lib.optionals arm64 [
+    "-DWETYPE_DARWIN_LIBCXX_ROOT=${privateCxxRoot}"
+    "-DWETYPE_DARWIN_LIBCXX_LICENSE=${privateLibcxx.src}/libcxx/LICENSE.TXT"
+  ] ++ lib.optionals (arm64 && enableCompatibilityProvider) [
+    "-DWETYPE_QEMU_AARCH64=${compatibilityProvider}/bin/qemu-aarch64"
   ];
 
   doCheck = true;
@@ -234,7 +253,7 @@ stdenv.mkDerivation {
       isc
       bsd2
     ];
-    platforms = [ "x86_64-linux" ];
+    platforms = [ "x86_64-linux" "aarch64-linux" ];
     mainProgram = "fcitx5-wetypex-settings";
   };
 }

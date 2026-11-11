@@ -15,27 +15,43 @@ RUN apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq 
     libwayland-dev wayland-protocols libegl1-mesa-dev iso-codes xkb-data \
     appstream appstream-util python3 && rm -rf /var/lib/apt/lists/*
 
+# The ARM64 adapter builds a private alternate-layout libc++18. A newer
+# compiler/CMake is only a build dependency; binaries still target Focal libc.
+RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
+      apt-get update -qq && apt-get install -y -qq wget gnupg python3-pip && \
+      wget -4 -nv --timeout=30 --tries=3 --retry-connrefused --retry-on-http-error=429,500,502,503,504 -O /tmp/llvm.asc https://apt.llvm.org/llvm-snapshot.gpg.key && \
+      gpg --show-keys --with-colons /tmp/llvm.asc | grep -q ':6084F3CF814B57C1CF12EFD515CF4D18AF4F7421:' && \
+      gpg --dearmor -o /usr/share/keyrings/llvm.gpg /tmp/llvm.asc && \
+      echo 'deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/focal/ llvm-toolchain-focal-18 main' \
+        > /etc/apt/sources.list.d/llvm.list && \
+      apt-get update -qq && apt-get install -y -qq clang-18 && \
+      ln -sf /usr/bin/clang-18 /usr/local/bin/clang && \
+      ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++ && \
+      pip3 install --no-cache-dir cmake==3.28.4 && \
+      rm -rf /var/lib/apt/lists/* /tmp/llvm.asc; \
+    fi
+
 RUN git clone https://github.com/fcitx/xcb-imdkit.git /tmp/xcb-imdkit && \
     git -C /tmp/xcb-imdkit checkout 30e2f16f9a8b0e338e25ce5e3643809a07ad41f0 && \
-    cmake -S /tmp/xcb-imdkit -B /tmp/xcb-build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu && \
+    cmake -S /tmp/xcb-imdkit -B /tmp/xcb-build -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/$(gcc -dumpmachine) && \
     cmake --build /tmp/xcb-build --parallel 2 && cmake --install /tmp/xcb-build
 RUN git clone https://github.com/fcitx/fcitx5.git /tmp/fcitx5 && \
     git -C /tmp/fcitx5 checkout 769928a30313329ca1a440210383e62856843b13 && \
     cmake -S /tmp/fcitx5 -B /tmp/fcitx-build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu \
+      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/$(gcc -dumpmachine) \
       -DENABLE_TEST=OFF -DENABLE_EMOJI=OFF -DENABLE_ENCHANT=OFF -DENABLE_LIBUUID=OFF && \
     cmake --build /tmp/fcitx-build --parallel 2 && cmake --install /tmp/fcitx-build && ldconfig
 RUN git clone https://github.com/fcitx/fcitx5-qt.git /tmp/fcitx5-qt && \
     git -C /tmp/fcitx5-qt checkout 814bc3980fa4f1e0451242c723b437459f82f8cb && \
     cmake -S /tmp/fcitx5-qt -B /tmp/qt-build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu \
+      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/$(gcc -dumpmachine) \
       -DENABLE_QT4=OFF -DENABLE_QT6=OFF && \
     cmake --build /tmp/qt-build --parallel 2 && cmake --install /tmp/qt-build
 RUN git clone https://github.com/fcitx/libime.git /tmp/libime && \
     git -C /tmp/libime checkout f21f48b01dc6b84c10e009b876c39e768b21905d && \
     git -C /tmp/libime submodule update --init --recursive && \
     cmake -S /tmp/libime -B /tmp/libime-build -DCMAKE_BUILD_TYPE=Release \
-      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/x86_64-linux-gnu -DENABLE_TEST=OFF && \
+      -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib/$(gcc -dumpmachine) -DENABLE_TEST=OFF && \
     cmake --build /tmp/libime-build --target IMEPinyin --parallel 2 && \
     cmake --install /tmp/libime-build/src/libime/core && \
     cmake --install /tmp/libime-build/src/libime/pinyin && ldconfig && \

@@ -1,5 +1,7 @@
 #pragma once
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
 #include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -11,8 +13,31 @@
 #include <limits>
 #include <memory>
 #include <utility>
+#include <sys/file.h>
 
 namespace wetype {
+class RuntimeLease {
+public:
+  bool acquire(const QString &root) {
+    if (file_.isOpen())
+      return true;
+    if (!QDir().mkpath(root))
+      return false;
+    file_.setFileName(root + QStringLiteral("/runtime-use.lock"));
+    if (!file_.open(QIODevice::ReadWrite))
+      return false;
+    file_.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    if (flock(file_.handle(), LOCK_SH | LOCK_NB) ||
+        QFile::exists(root + QStringLiteral("/runtime-transaction.json"))) {
+      file_.close();
+      return false;
+    }
+    return true;
+  }
+  void release() { file_.close(); }
+private:
+  QFile file_;
+};
 inline void initializeHighDpi() {
 #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
   QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);

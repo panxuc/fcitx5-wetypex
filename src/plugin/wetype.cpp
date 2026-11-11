@@ -9,6 +9,7 @@
 #include <optional>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <fcitx-utils/capabilityflags.h>
 #include <fcitx-utils/event.h>
 #include <fcitx-utils/key.h>
@@ -33,6 +34,7 @@
 #include <fcitx/userinterfacemanager.h>
 #include <fcntl.h>
 #include <filesystem>
+#include <set>
 #include <fstream>
 #include <iterator>
 #include <libime/pinyin/pinyinencoder.h>
@@ -232,6 +234,7 @@ struct DeferredKey {
   Key key;
   bool release;
   int time;
+  bool applicationForwarded = false;
 };
 enum class VMenu { None, Main, Clipboard, Hotwords, SymbolGroups, Symbols };
 struct State : InputContextProperty {
@@ -258,6 +261,7 @@ struct State : InputContextProperty {
   std::optional<bool> englishPunctuation;
   bool languageInitialized = false;
   uint32_t physicalModifiers = 0;
+  std::set<KeySym> heldModifierKeys;
   uint8_t pressedShifts = 0;
   int pendingCursorSteps = 0;
   uint64_t cursorDeadline = 0;
@@ -377,6 +381,26 @@ class WeType : public InputMethodEngineV2 {
   pid_t syncChild_ = -1;
   bool replayingKeys_ = false, replayingCursor_ = false;
   const KeyEvent *currentKeyEvent_ = nullptr;
+  bool replayingForwarded_ = false;
+  struct MaintenanceKey {
+    TrackableObjectReference<InputContext> context;
+    uint64_t epoch;
+    DeferredKey event;
+  };
+  std::vector<MaintenanceKey> maintenanceKeys_;
+  enum class RuntimePhase { Idle, Draining, Applying };
+  RuntimePhase runtimePhase_ = RuntimePhase::Idle;
+  pid_t runtimeWorker_ = -1, runtimeSync_ = -1;
+  uint64_t runtimePollAt_ = 0, runtimeRetryAt_ = 0, lastKeyAt_ = 0;
+  uint64_t runtimeDrainAt_ = 0;
+  bool runtimePending_ = false;
+  bool runtimeConfigApply_ = false;
+  std::filesystem::path runtimeRoot() const {
+    const char *data = getenv("XDG_DATA_HOME"), *home = getenv("HOME");
+    return (data ? std::filesystem::path(data)
+                 : std::filesystem::path(home ? home : "") / ".local/share") /
+           "fcitx5-wetypex";
+  }
   static bool waylandV2(InputContext *ic) {
     return std::string_view(ic->frontend()) == "wayland_v2";
   }
@@ -390,14 +414,17 @@ class WeType : public InputMethodEngineV2 {
            !ic->capabilityFlags().test(CapabilityFlag::SurroundingText);
   }
   template <typename System>
-  static bool modifiersHeld(System *instance, InputContext *ic, State *s) {
+  static bool modifiersHeld(System *instance, InputContext *ic, const State *s,
+                             bool maintenance = false) {
     if constexpr (HasXkbMask<System>::value) {
       if (const auto mask = instance->xkbStateMask(ic->display()))
         return std::get<0>(*mask) || std::get<1>(*mask);
     }
     (void)instance;
     (void)ic;
-    return s->physicalModifiers != 0;
+    // Old frameworks expose no live mask. A modifier reported on a character
+    // event may remain stale after a compositor-only modifiers update.
+    return maintenance ? !s->heldModifierKeys.empty() : s->physicalModifiers != 0;
   }
   static bool samePhysicalKey(const Key &a, const Key &b) {
     return a.code() && b.code() ? a.code() == b.code() : a.sym() == b.sym();
@@ -558,6 +585,7 @@ class WeType : public InputMethodEngineV2 {
     TextBatch batch{ic->watch(), {}};
     ScopedRestore<TextBatch *> restoreBatch(textBatch_);
     ScopedRestore<bool> restoreReplay(replayingKeys_);
+    ScopedRestore<bool> restoreForwarded(replayingForwarded_);
     ScopedRestore<bool> restoreCursor(replayingCursor_);
     replayingCursor_ = cursorReplay;
     // A virtual-keyboard replay can produce several immediate text commits.
@@ -572,12 +600,13 @@ class WeType : public InputMethodEngineV2 {
           !target->propertyFor(&factory_)->active ||
           target->capabilityFlags().test(CapabilityFlag::Password))
         break;
+      replayingForwarded_ = key.applicationForwarded;
       KeyEvent event(target, key.key, key.release, key.time);
       const bool handled = target->keyEvent(event);
       if (key.release && handled &&
           std::string_view(target->frontend()) == "ibus")
         releaseForwardedKey(target, state(target), key.key);
-      if (!handled) {
+      if (!handled && !key.applicationForwarded) {
         const auto scalar = Key::keySymToUnicode(key.key.sym());
         const auto commands = key.key.states().toInteger() &
                               uint32_t(KeyState::SimpleMask) &
@@ -740,6 +769,8 @@ class WeType : public InputMethodEngineV2 {
     return s->pendingCursorSteps || s->pendingClientKey;
   }
   void startSync() {
+    if (runtimePhase_ != RuntimePhase::Idle)
+      return;
     if (syncChild_ > 0 && waitpid(syncChild_, nullptr, WNOHANG) == 0)
       return;
     syncChild_ = -1;
@@ -1070,7 +1101,7 @@ class WeType : public InputMethodEngineV2 {
       clearNumericCorrection(s);
     }
     if (!event.isRelease() && !event.key().isModifier() && !event.filtered() &&
-        !event.accepted() && legacyClientKeys(ic) &&
+        !event.accepted() && !replayingForwarded_ && legacyClientKeys(ic) &&
         (modifiers || scalar <= 0x20 || scalar == 0x7f))
       waitForClient(ic, s);
     if (!*config_.appearance->autoSpace) {
@@ -1768,7 +1799,7 @@ class WeType : public InputMethodEngineV2 {
       // Re-enter the shortcut after the queued letters have committed, just
       // as later typing waits behind a candidate selection. Do not discard
       // unfinished spelling when dictation starts.
-      s->deferredKeys.push_back({event.rawKey(), event.isRelease(), event.time()});
+      s->deferredKeys.push_back({event.rawKey(), event.isRelease(), event.time(), replayingForwarded_});
       ic->inputPanel().setCandidateList(nullptr);
       panel(ic, s);
       return true;
@@ -2407,6 +2438,162 @@ class WeType : public InputMethodEngineV2 {
     ic->updatePreedit();
     ic->updateUserInterface(UserInterfaceComponent::InputPanel);
   }
+  bool pollRuntimeUpdate(uint64_t time) {
+    if (runtimePhase_ == RuntimePhase::Idle) {
+      if (time < runtimePollAt_)
+        return false;
+      runtimePollAt_ = time + 1000000;
+      // A fresh heartbeat lets settings distinguish a live-upgrade capable
+      // frontend from a pre-upgrade Fcitx process still using the old module.
+      std::error_code clientError;
+      std::filesystem::create_directories(runtimeRoot(), clientError);
+      if (!clientError) {
+        auto report = wire::object();
+        wire::put(report.get(), "protocol", 1);
+        wire::put(report.get(), "pid", static_cast<int>(getpid()));
+        wire::put(report.get(), "updated_at", static_cast<int64_t>(std::time(nullptr)));
+        const auto path = runtimeRoot() / "runtime-client.json";
+        const auto temporary = runtimeRoot() / (".runtime-client-" + std::to_string(getpid()));
+        std::ofstream output(temporary, std::ios::trunc);
+        chmod(temporary.c_str(), 0600);
+        output << wire::dump(report.get()) << '\n';
+        output.close();
+        if (output)
+          std::filesystem::rename(temporary, path, clientError);
+      }
+      std::ifstream file(runtimeRoot() / "runtime-pending.json");
+      std::string bytes(16385, '\0');
+      file.read(bytes.data(), bytes.size());
+      bytes.resize(file.gcount());
+      auto pending = bytes.size() <= 16384 ? wire::parse(bytes) : wire::Json{};
+      runtimePending_ = pending && !wire::str(pending.get(), "generation").empty();
+      if (!runtimePending_ || time < runtimeRetryAt_ ||
+          !wire::str(pending.get(), "error").empty() || voicePending_ ||
+          time < lastKeyAt_ + 2000000 || !outbound_.empty())
+        return false;
+      for (const auto &[id, ref] : contexts_)
+        if (auto *ic = ref.get()) {
+          const auto *s = ic->propertyFor(&factory_);
+          if (!s->preedit.empty() || s->vMode || s->vMenu != VMenu::None ||
+              s->seq != s->applied || s->selectionPending ||
+              !s->deferredKeys.empty() || !s->cursorKeys.empty() ||
+              s->pendingCursorSteps || s->pendingClientKey || s->pendingNumericReplay ||
+              !s->forwardedKeys.empty() || !s->pendingNumericText.empty() ||
+              modifiersHeld(instance_, ic, s, true))
+            return false;
+        }
+      runtimePhase_ = RuntimePhase::Draining;
+      runtimeDrainAt_ = time;
+      (void)voiceControl("quiesce");
+      if (syncChild_ > 0) {
+        runtimeSync_ = syncChild_;
+        syncChild_ = -1;
+        kill(runtimeSync_, SIGTERM);
+      }
+      reader_.reset();
+      writer_.reset();
+      if (write_ >= 0)
+        close(write_);
+      if (read_ >= 0)
+        close(read_);
+      read_ = write_ = -1;
+      ready_ = false;
+      restartAt_ = 0;
+    }
+    if (runtimePhase_ == RuntimePhase::Draining) {
+      if (child_ > 0) {
+        if (waitpid(child_, nullptr, WNOHANG) == 0) {
+          if (time >= runtimeDrainAt_ + 10000000)
+            kill(child_, SIGKILL);
+          else if (time >= runtimeDrainAt_ + 5000000)
+            kill(child_, SIGTERM);
+          return true;
+        }
+        child_ = -1;
+      }
+      if (runtimeSync_ > 0) {
+        if (waitpid(runtimeSync_, nullptr, WNOHANG) == 0) {
+          if (time >= runtimeDrainAt_ + 10000000)
+            kill(runtimeSync_, SIGKILL);
+          return true;
+        }
+        runtimeSync_ = -1;
+      }
+      const char *override = getenv("WETYPE_SETUP_LAUNCHER");
+      std::string launcher = override && *override ? override : WETYPE_SETUP;
+      std::string operation = "--activate-pending";
+      char *arguments[] = {launcher.data(), operation.data(), nullptr};
+      posix_spawn_file_actions_t actions;
+      posix_spawn_file_actions_init(&actions);
+      posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+      posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+      posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+      const int result = posix_spawn(&runtimeWorker_, launcher.c_str(), &actions,
+                                     nullptr, arguments, environ);
+      posix_spawn_file_actions_destroy(&actions);
+      if (result)
+        runtimeWorker_ = -1;
+      runtimePhase_ = RuntimePhase::Applying;
+    }
+    if (runtimeWorker_ > 0 && waitpid(runtimeWorker_, nullptr, WNOHANG) == 0)
+      return true;
+    runtimeWorker_ = -1;
+    runtimePhase_ = RuntimePhase::Idle;
+    std::error_code runtimeError;
+    const bool stillPending = std::filesystem::exists(
+        runtimeRoot() / "runtime-pending.json", runtimeError);
+    runtimeRetryAt_ = stillPending || runtimeError ? time + 60000000 : 0;
+    inbound_.clear();
+    outbound_.clear();
+    restartNeedsOpen_ = true;
+    for (const auto &[id, ref] : contexts_)
+      if (auto *ic = ref.get()) {
+        auto *s = ic->propertyFor(&factory_);
+        ++s->epoch;
+        s->seq = s->applied = s->inputSeq = s->appliedUpdate = 0;
+        s->cloudPollUntil = 0;
+        if (s->active && ic->hasFocus()) {
+          ic->inputPanel().reset();
+          ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+        }
+      }
+    if (!start()) {
+      failed_ = true;
+      scheduleRestart();
+    } else {
+      // Open the new sessions before replaying any input. A late open on the
+      // ready reply would otherwise discard keys queued behind a selection.
+      restartNeedsOpen_ = false;
+      for (const auto &[id, ref] : contexts_)
+        if (auto *ic = ref.get(); ic && ic->hasFocus() && state(ic)->active &&
+            !ic->capabilityFlags().test(CapabilityFlag::Password))
+          send(ic, "open");
+    }
+    if (runtimeConfigApply_ && networkEnabled_)
+      applyDeviceFunctions();
+    runtimeConfigApply_ = false;
+    if (networkEnabled_)
+      startSync();
+    auto keys = std::move(maintenanceKeys_);
+    maintenanceKeys_.clear();
+    for (size_t i = 0; i < keys.size();) {
+      const auto &queued = keys[i];
+      auto *ic = queued.context.get();
+      if (!ic || state(ic)->epoch != queued.epoch + 1) {
+        ++i;
+        continue;
+      }
+      // Validate the captured context once. An intentional Escape/reset
+      // inside this batch may advance its epoch before the next queued word.
+      std::vector<DeferredKey> batch;
+      const auto epoch = queued.epoch;
+      do {
+        batch.push_back(keys[i++].event);
+      } while (i < keys.size() && keys[i].context.get() == ic && keys[i].epoch == epoch);
+      replayDeferredKeys(ic, std::move(batch));
+    }
+    return false;
+  }
   void stop() {
     stopVModeWindow("input backend stopped");
     reader_.reset();
@@ -2448,6 +2635,7 @@ class WeType : public InputMethodEngineV2 {
         releaseForwardedKeys(ic, s);
         clearCursorMove(s);
         s->physicalModifiers = s->pressedShifts = 0;
+        s->heldModifierKeys.clear();
         ++s->epoch;
         s->seq = s->applied = s->inputSeq = 0;
         s->appliedUpdate = 0;
@@ -2476,6 +2664,8 @@ class WeType : public InputMethodEngineV2 {
       }
   }
   bool start() {
+    if (runtimePhase_ != RuntimePhase::Idle)
+      return true;
     if (child_ > 0)
       return true;
     int to[2], from[2];
@@ -3011,6 +3201,11 @@ public:
     timer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, now(CLOCK_MONOTONIC) + 100000, 0,
         [this](auto *source, uint64_t time) {
+          if (pollRuntimeUpdate(time)) {
+            source->setTime(time + 10000);
+            source->setEnabled(true);
+            return true;
+          }
           bool pending = false;
           bool focused = false;
           uint64_t panelWake = 0;
@@ -3051,10 +3246,10 @@ public:
             syncTick_ = time;
             receiveVoice();
           }
-          if (focused && networkEnabled_ && time >= voiceWarmTick_ + 60000000)
+          if (focused && networkEnabled_ && !runtimePending_ && time >= voiceWarmTick_ + 60000000)
             primeVoice();
           pollVModeWindow();
-          if (networkEnabled_ && *config_.update->autoUpdate &&
+          if (*config_.update->autoUpdate &&
               time >= updateTick_ + 3600000000ULL) {
             updateTick_ = time;
             startProcess({WETYPE_UPDATE});
@@ -3092,6 +3287,10 @@ public:
     config_.load(raw, true);
     saveNativeConfig();
     applyAppearance();
+    if (runtimePhase_ != RuntimePhase::Idle) {
+      runtimeConfigApply_ = true;
+      return;
+    }
     if (networkEnabled_) {
       applyDeviceFunctions();
       startSync();
@@ -3116,6 +3315,9 @@ public:
       startSync();
     else
       stopSync();
+    if (runtimePhase_ != RuntimePhase::Idle) {
+      return;
+    }
     stop();
     invalidateSessions();
     if (!start()) {
@@ -3181,6 +3383,7 @@ public:
     releaseForwardedKeys(ic, s);
     clearCursorMove(s);
     s->physicalModifiers = s->pressedShifts = 0;
+    s->heldModifierKeys.clear();
     if (voicePending_ && voiceSession_ == s->id)
       cancelVoice();
     if (vModeSession_ == s->id)
@@ -3457,6 +3660,46 @@ public:
       if (e.isRelease())
         releaseForwardedKey(ic, s, e.rawKey());
     }
+    if (!replayingKeys_) {
+      if (key.isModifier()) {
+        if (e.isRelease())
+          s->heldModifierKeys.erase(sym);
+        else
+          s->heldModifierKeys.insert(sym);
+      }
+      lastKeyAt_ = now(CLOCK_MONOTONIC);
+      if (runtimePhase_ != RuntimePhase::Idle) {
+        const auto commands = key.states().toInteger() &
+                              uint32_t(KeyState::SimpleMask) &
+                              ~uint32_t(KeyState::Shift);
+        const bool shift = sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
+        const bool inputShortcut = languageSwitchKey(key) || compositionShortcutKey(key) ||
+            (*config_.shortcuts->halfFull && key.checkKeyList(*config_.shortcuts->halfFullKeys)) ||
+            (*config_.shortcuts->selectCtrl && bareModifier(key) &&
+             (sym == FcitxKey_Control_L || sym == FcitxKey_Control_R)) ||
+            (*config_.shortcuts->vMode && !s->english &&
+             *config_.input->mode == wetype_config::InputMode::Pinyin &&
+             key.checkKeyList(*config_.shortcuts->vModeKeys)) ||
+            (networkEnabled_ &&
+             ((*config_.shortcuts->aiAssistant && key.checkKeyList(*config_.shortcuts->aiAssistantKeys)) ||
+              (*config_.voice->launchShortcut && key.checkKeyList(*config_.voice->launchKey)) ||
+              (*config_.voice->holdShortcut && key.checkKeyList(*config_.voice->holdKey))));
+        // Application commands run against the text already committed. Keep
+        // their position in the IME event stream too, so a Ctrl+S between a
+        // modifier press/release cannot turn into bare-Ctrl candidate choice.
+        const bool forwarded = (commands || (key.isModifier() && !shift)) &&
+                               !inputShortcut;
+        maintenanceKeys_.push_back({ic->watch(), s->epoch,
+                                   {e.rawKey(), e.isRelease(), e.time(), forwarded}});
+        if (forwarded)
+          return;
+        ic->inputPanel().setCandidateList(nullptr);
+        ic->inputPanel().setAuxUp(Text("正在应用更新，输入将自动继续"));
+        ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+        e.filterAndAccept();
+        return;
+      }
+    }
     const auto *numericBoundarySymbol =
         sym >= 0x20 && sym <= 0x7e ? punctuationEntry(char(sym)) : nullptr;
     const bool numericEdit =
@@ -3500,7 +3743,7 @@ public:
         (!s->pendingNumericText.empty() && numericEdit)) {
       if (!e.isRelease())
         s->modifierCandidate = Key();
-      s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time()});
+      s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time(), replayingForwarded_});
       if (!s->pendingClientKey) {
         s->pendingNumericReplay = true;
         scheduleNumericCorrection();
@@ -3533,7 +3776,7 @@ public:
           // nested bracket is processed.
           if (!e.isRelease())
             s->modifierCandidate = Key();
-          s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time()});
+          s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time(), replayingForwarded_});
           e.filterAndAccept();
           return;
         }
@@ -3566,10 +3809,16 @@ public:
     }
     // A later key must not operate on the preedit awaiting a select reply.
     // Re-enter normal event processing after that reply has committed it.
-    if (s->selectionPending && sym != FcitxKey_Escape) {
-      if (s->deferredKeys.size() < 64)
-        s->deferredKeys.push_back({e.rawKey(), e.isRelease(), e.time()});
+    if (s->selectionPending && (sym != FcitxKey_Escape || replayingKeys_)) {
+      s->deferredKeys.push_back({e.rawKey(), e.isRelease(), e.time(), replayingForwarded_});
       e.filterAndAccept();
+      return;
+    }
+    if (replayingForwarded_) {
+      s->modifierCandidate = Key();
+      s->symbolAutoState = 0;
+      clearNumericCorrection(s);
+      clearSpacing(s);
       return;
     }
     const bool ctrlModifier =

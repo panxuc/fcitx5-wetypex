@@ -7,6 +7,16 @@
 #include <locale>
 #include <map>
 #include <mutex>
+#include <string>
+#if defined(__aarch64__)
+// Darwin ARM64 long double is binary64; Linux ARM64 long double is binary128.
+// Preserve the original argument width and the private libc++ string ABI.
+std::string wetype_to_string_long_double(double value)
+    asm("wetype_to_string_long_double");
+std::string wetype_to_string_long_double(double value) {
+  return std::to_string(value);
+}
+#endif
 static uint32_t darwin_mask(std::ctype_base::mask m) {
   uint32_t r = 0;
   const std::pair<std::ctype_base::mask, uint32_t> pairs[] = {

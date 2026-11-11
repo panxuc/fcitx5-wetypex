@@ -137,6 +137,7 @@ PY
 esac
 
 runtime="${WETYPE_RUNTIME_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/runtime}"
+. "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
 state="${WETYPE_ACCOUNT_STATE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex/account}"
 support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 test -f "$runtime/manifest.txt" || {
@@ -172,7 +173,7 @@ run_original() {
   # database. Wait for the current short operation instead of surfacing an
   # intermittent failure when two callers overlap.
   env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
-      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind /lib64 /lib64 \
+      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 \
       --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
       --dir /etc --ro-bind /etc/resolv.conf /etc/resolv.conf \
       --ro-bind /etc/hosts /etc/hosts \
@@ -182,7 +183,7 @@ run_original() {
       --ro-bind "$runtime" /input --ro-bind "$support" /support \
       --bind "$state" /work --chdir /work \
       --setenv PATH /usr/bin --setenv HOME /work \
-      --setenv WETYPE_SUPPORT_DIR /support \
+      --setenv WETYPE_SUPPORT_DIR /support --setenv WETYPE_ENGINE_PROVIDER "${WETYPE_ENGINE_PROVIDER:-auto}" \
       --setenv WETYPE_DEVICE_MODEL "$model" \
       --setenv WETYPE_WORK_DIR /work/business \
       --setenv WETYPE_IDENTITY_FILE /work/identity.json \

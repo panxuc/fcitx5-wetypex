@@ -1,8 +1,6 @@
-diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
-index 734ee11..56b9a30 100644
 --- a/src/plugin/config.hpp
 +++ b/src/plugin/config.hpp
-@@ -32,8 +32,6 @@ enum class WubiScheme { Wubi86, Wubi98, NewCentury };
+@@ -32,8 +32,6 @@
  FCITX_CONFIG_ENUM_NAME(WubiScheme, "86 五笔", "98 五笔", "新世纪五笔")
  enum class DefaultLanguage { Chinese, English };
  FCITX_CONFIG_ENUM_NAME(DefaultLanguage, "中文", "英文")
@@ -11,8 +9,8 @@ index 734ee11..56b9a30 100644
  enum class CandidateLabelStyle { WeType, Fcitx };
  FCITX_CONFIG_ENUM_NAME(CandidateLabelStyle, "微信风格", "Fcitx 默认")
  enum class PreeditPosition { Client, Candidate };
-@@ -123,8 +121,6 @@ FCITX_CONFIGURATION(PhraseClipboardConfig,
-
+@@ -125,8 +123,6 @@
+ 
  FCITX_CONFIGURATION(
      AppearanceConfig,
 -    Option<int, IntConstrain> candidateSize{this, "CandidateSize", "候选字大小",
@@ -20,30 +18,28 @@ index 734ee11..56b9a30 100644
      Option<int, IntConstrain> pageSize{this, "PageSize", "每页候选数", 5,
                                         IntConstrain(3, 9)};
      Option<bool> vertical{this, "Vertical", "候选词竖排", false};
-@@ -132,8 +128,7 @@ FCITX_CONFIGURATION(
+@@ -139,8 +135,7 @@
          this, "PreeditPosition", "拼音显示位置", PreeditPosition::Client};
      Option<CandidateLabelStyle> labelStyle{this, "CandidateLabelStyle",
                                             "候选序号样式",
 -                                           CandidateLabelStyle::WeType};
 -    Option<ThemeMode> theme{this, "Theme", "主题模式", ThemeMode::System};)
 +                                           CandidateLabelStyle::WeType};)
-
+ 
  FCITX_CONFIGURATION(
      ShortcutConfig, Option<bool> shiftSwitch{this, "ShiftSwitch",
-diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
-index e59dfe3..56815d3 100644
 --- a/src/plugin/wetype.cpp
 +++ b/src/plugin/wetype.cpp
-@@ -865,8 +865,6 @@ class WeType : public InputMethodEngine {
+@@ -1401,8 +1401,6 @@
      phrases->clipboard.setValue(clipboardEnabled_);
      auto *appearance = config_.appearance.mutableValue();
      appearance->pageSize.setValue(pageSize_);
 -    appearance->candidateSize.setValue(
 -        std::clamp(int(wire::number(j.get(), "candidate_size", 13)), 10, 18));
      appearance->vertical.setValue(vertical_);
-     appearance->preeditPosition.setValue(
-         wire::str(j.get(), "preedit_position") == "candidate"
-@@ -876,8 +874,6 @@ class WeType : public InputMethodEngine {
+     appearance->autoSpace.setValue(boolSetting("auto_space", false));
+     appearance->autoSpaceEnglish.setValue(
+@@ -1416,8 +1414,6 @@
          wire::str(j.get(), "candidate_label_style") == "fcitx"
              ? wetype_config::CandidateLabelStyle::Fcitx
              : wetype_config::CandidateLabelStyle::WeType);
@@ -52,15 +48,15 @@ index e59dfe3..56815d3 100644
      auto *devices = config_.devices.mutableValue();
      devices->clipboardSync.setValue(
          json_object_get_boolean(wire::get(j.get(), "device_clipboard_sync")));
-@@ -1017,7 +1013,6 @@ class WeType : public InputMethodEngine {
+@@ -1564,7 +1560,6 @@
      wire::put(json.get(), "fuzzy_eng_ong", bool(*input.fuzzyEngOng));
      const auto &appearance = *config_.appearance;
      wire::put(json.get(), "page_size", int64_t(*appearance.pageSize));
 -    wire::put(json.get(), "candidate_size", int64_t(*appearance.candidateSize));
      wire::put(json.get(), "vertical", bool(*appearance.vertical));
-     wire::put(json.get(), "preedit_position",
-               std::string(*appearance.preeditPosition ==
-@@ -1029,7 +1024,6 @@ class WeType : public InputMethodEngine {
+     wire::put(json.get(), "auto_space", bool(*appearance.autoSpace));
+     wire::put(json.get(), "auto_space_english",
+@@ -1580,7 +1575,6 @@
                                    wetype_config::CandidateLabelStyle::Fcitx
                                ? "fcitx"
                                : "wetype"));
@@ -68,10 +64,11 @@ index e59dfe3..56815d3 100644
      wire::put(json.get(), "clipboard_enabled",
                bool(config_.phrases->clipboard.value()));
      const auto &devices = *config_.devices;
-@@ -1100,56 +1094,6 @@ class WeType : public InputMethodEngine {
+@@ -1658,56 +1652,6 @@
+     chmod(temporary.c_str(), 0600);
      std::filesystem::rename(temporary, path, error);
      reloadSettings();
-   }
+-  }
 -  void applyAppearance() {
 -    const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
 -    std::filesystem::path path =
@@ -121,23 +118,20 @@ index e59dfe3..56815d3 100644
 -    std::filesystem::rename(temporary, path, error);
 -    if (!error)
 -      instance_->reloadAddonConfig("classicui");
--  }
+   }
    void applyDeviceFunctions() {
      std::ifstream input(stateDirectory() / "sync-state.json");
-     std::string bytes((std::istreambuf_iterator<char>(input)), {});
-@@ -2466,7 +2410,6 @@ public:
+@@ -3334,7 +3278,6 @@
      config_.load(raw, true);
      enforceBuildFeatures();
      saveNativeConfig();
 -    applyAppearance();
-     if (networkEnabled_) {
-       applyDeviceFunctions();
-       startSync();
-diff --git a/src/settings/main.cpp b/src/settings/main.cpp
-index ae04939..4f2121d 100644
+     if (runtimePhase_ != RuntimePhase::Idle) {
+       runtimeConfigApply_ = true;
+       return;
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -240,32 +240,6 @@ static bool editHotword(QWidget *owner, const QJsonObject &existing = {}) {
+@@ -240,32 +240,6 @@
    });
    return dialog.exec() == QDialog::Accepted;
  }
@@ -170,7 +164,7 @@ index ae04939..4f2121d 100644
  static QFrame *rowsCard(const QList<QWidget *> &rows) {
    auto *frame = card();
    auto *layout = new QVBoxLayout(frame);
-@@ -541,40 +515,6 @@ static QWidget *shortcutRow(const QString &title, bool checked,
+@@ -559,40 +533,6 @@
                       [setting](bool value) { writeSetting(setting, value); });
    return container;
  }
@@ -211,7 +205,7 @@ index ae04939..4f2121d 100644
  using ToggleSpec = std::tuple<QString, QString, bool>;
  static void runToggleDialog(QWidget *owner, const QString &title,
                              const QList<ToggleSpec> &options) {
-@@ -665,7 +605,6 @@ int main(int argc, char **argv) {
+@@ -684,7 +624,6 @@
    if (!preferences.exists() && !preferences.isSymLink())
      QProcess::execute(QStringLiteral(WETYPE_INIT_SETTINGS), QStringList{});
    const auto settings = readSettings();
@@ -219,7 +213,7 @@ index ae04939..4f2121d 100644
    app.setStyleSheet(R"(
      * { font-family:"Microsoft YaHei","Noto Sans CJK SC",sans-serif; font-size:14px; color:#202124; }
      QWidget#windowSurface,QWidget#contentPage,QScrollArea#pageScroll,QScrollArea#pageScroll>QWidget>QWidget { background:#f7f7f7; }
-@@ -1151,31 +1090,8 @@ int main(int argc, char **argv) {
+@@ -1185,31 +1124,8 @@
    preview->setStyleSheet(
        "background:#ccefd3;border-radius:10px;font-size:18px;");
    visual.body->addWidget(preview);
@@ -253,7 +247,7 @@ index ae04939..4f2121d 100644
    auto *preeditPosition = new QComboBox;
    preeditPosition->addItems({"输入框内", "候选框内"});
    preeditPosition->setCurrentIndex(
-@@ -1214,18 +1130,6 @@ int main(int argc, char **argv) {
+@@ -1248,18 +1164,6 @@
                                               : QStringLiteral("wetype"));
                       updatePreview();
                     });
@@ -270,5 +264,5 @@ index ae04939..4f2121d 100644
 -  QObject::connect(theme, qOverload<int>(&QComboBox::currentIndexChanged),
 -                   [=](int) { applyVisual(); });
    pages->addWidget(visual.widget);
-
+ 
    auto shortcuts = page("快捷键");

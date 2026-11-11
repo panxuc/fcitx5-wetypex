@@ -8,19 +8,21 @@ command -v gtk-update-icon-cache >/dev/null 2>&1 && \
 
 cat <<'EOF'
 
-WeTypeX 已安装。首次使用请依次执行：
+WeTypeX 已安装。请以日常使用输入法的用户身份完成设置：
 
-  1. 准备官方运行时（二选一）：
+  1. 准备官方运行时（先阅读并接受上游软件许可）：
      fcitx5-wetypex-setup --download --accept-upstream-license
-     fcitx5-wetypex-setup --archive /path/to/WeType_2.2.3_657.zip
 
-  2. 检查输入核心：
-     fcitx5-wetypex-setup --check
+  2. 检查核心和本地传输：
+     fcitx5-wetypex-setup --check --transport
 
-  3. 打开 fcitx5-configtool，将 WeTypeX 添加到当前输入法列表。
+  3. 重启 Fcitx5，让它加载新插件：
+     KDE Plasma Wayland：在系统设置的“虚拟键盘”中先选择“无”，再选择 Fcitx 5；
+                         也可注销并重新登录。
+     X11 或独立启动的 Fcitx5：fcitx5 -r -d
 
-  4. 重启 Fcitx5：
-     fcitx5 -rd
+  4. 打开 fcitx5-configtool，将 WeTypeX 加入输入法列表。
 
-完整说明：https://github.com/panxuc/fcitx5-wetypex#首次设置
+离线安装、旧版迁移和其他桌面环境：
+https://github.com/panxuc/fcitx5-wetypex/blob/main/docs/installation.md
 EOF

@@ -1,0 +1,127 @@
+name: ARM64 软件包
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        required: false
+        type: string
+      runtime_checks:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: 安装发布工具
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zstd
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
+          sudo install "$(go env GOPATH)/bin/nfpm" /usr/local/bin/nfpm
+      - name: 在目标发行版原生构建 deb、legacy deb 与 rpm
+        run: WETYPEX_BUILD_JOBS=2 packaging/build-native-packages.sh
+      - name: 生成源码包与 Arch ARM 构建文件
+        run: python3 tools/package_release.py
+      - name: 在固定摘要的 Arch Linux ARM 环境构建
+        # This image bootstraps signed Arch Linux ARM packages. Its digest is
+        # reviewed together with dependency changes, never updated by the bot.
+        run: |
+          # The hosted ARM kernel rejects pacman's Landlock download rules.
+          # Disable only that download restriction inside this disposable
+          # container; keep syscall filtering, DownloadUser and PGP verification.
+          docker run --rm -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
+            -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
+            menci/archlinuxarm@sha256:4bf586efc126560618f26d1b3b9f3ea42af2da2b23f2738594e92858beecc6ef \
+            bash -euc '
+              pacman -Syu --disable-sandbox-filesystem --noconfirm git cmake clang boost fcitx5 fcitx5-qt libime libc++ \
+                json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig \
+                qt6-base qt6-svg qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit qemu-user
+              useradd -m builder
+              cp -a /src/dist/arch /tmp/arch
+              chown -R builder:builder /tmp/arch
+              cp /etc/makepkg.conf /tmp/wetypex-makepkg.conf
+              printf '\''%s\n'\'' '\''PKGEXT=".pkg.tar.zst"'\'' >> /tmp/wetypex-makepkg.conf
+              su builder -c "cd /tmp/arch && makepkg --config /tmp/wetypex-makepkg.conf -C -f --noconfirm"
+              cp /tmp/arch/fcitx5-wetypex-[0-9]*-aarch64.pkg.tar.zst /out/arch/
+            '
+      - name: 核对架构、版本与安装后的真实启动
+        shell: bash
+        run: |
+          version=$(sed -n 's/^project([^ ]* VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          revision=$(sed -n 's/^pkgrel=//p' packaging/PKGBUILD.in)
+          test "$(dpkg-deb -f dist/debian/*.deb Architecture)" = arm64
+          test "$(dpkg-deb -f dist/debian/*.deb Version)" = "$version-$revision"
+          test "$(dpkg-deb -f dist/ubuntu20/*.deb Version)" = "$version-$revision"
+          test "$(tar --zstd -xOf dist/arch/*.pkg.tar.zst .PKGINFO | sed -n 's/^arch = //p')" = aarch64
+          for target in debian ubuntu20; do
+            image=wetypex-build-$target
+            docker run --rm -v "$PWD/dist:/out:ro" "$image" \
+              env WETYPE_SUPPORT_DIR=/out/$target-root/usr/lib/fcitx5-wetypex \
+              /out/$target-root/usr/bin/fcitx5-wetypex-account network-info
+          done
+          sudo apt-get install -y ./dist/debian/*.deb
+          fcitx5-wetypex-account network-info
+          status=0
+          QT_QPA_PLATFORM=offscreen timeout 5 fcitx5-wetypex-settings || status=$?
+          test "$status" -eq 124
+          tar --zstd -C dist/debian-root -cf "dist/fcitx5-wetypex-$version-$revision-linux-aarch64.tar.zst" .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcitx5-wetypex-arm64-packages
+          path: |
+            dist/arch/fcitx5-wetypex-*-aarch64.pkg.tar.zst
+            dist/debian/fcitx5-wetypex_*_arm64.deb
+            dist/ubuntu20/fcitx5-wetypex-legacy_*_arm64.deb
+            dist/fedora/fcitx5-wetypex-*.aarch64.rpm
+            dist/fcitx5-wetypex-*-linux-aarch64.tar.zst
+          if-no-files-found: error
+          retention-days: 14
+      - name: 在两个旧基线上验证真实 ARM64 核心和 TLS
+        if: inputs.runtime_checks
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/wetypex-archives"
+          for family in debian ubuntu20; do
+            docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN \
+              --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
+              -e WETYPEX_PACKAGE_FAMILY="$family" -e WETYPE_KEEP_ARCHIVES=1 \
+              -e WETYPE_RUNTIME_CACHE=/runtime-archives \
+              -v "$RUNNER_TEMP/wetypex-archives:/runtime-archives" -v "$PWD/dist:/out:ro" \
+              "wetypex-build-$family" bash -euc '
+                apt-get update -qq
+                apt-get install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig qemu-user espeak-ng ffmpeg
+                dpkg --unpack /out/"$WETYPEX_PACKAGE_FAMILY"/*.deb
+                fcitx5-wetypex-setup --download --accept-upstream-license
+                fcitx5-wetypex-setup --check --transport || {
+                  cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
+                }
+                if [[ "$WETYPEX_PACKAGE_FAMILY" == debian ]]; then
+                  fcitx5-wetypex-setup --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
+                  fcitx5-wetypex-account pairing-code > /tmp/pairing.json
+                  python3 -c '\''import json; assert json.load(open("/tmp/pairing.json"))["ok"]'\''
+                  espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is a voice input compatibility check. One two three."
+                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/voice.json
+                  python3 -c '\''import json; v=json.load(open("/tmp/voice.json")); assert v["ok"] and v["text"].strip()'\''
+                  fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --update --version 2.2.3.657 --download --accept-upstream-license
+                  fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/legacy-voice.json
+                  python3 -c '\''import json; v=json.load(open("/tmp/legacy-voice.json")); assert v["ok"] and v["text"].strip()'\''
+                  fcitx5-wetypex-voice shutdown
+                  fcitx5-wetypex-setup --rollback
+                fi
+              '
+          done

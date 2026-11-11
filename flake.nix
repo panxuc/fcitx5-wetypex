@@ -6,16 +6,16 @@
   outputs =
     { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = import nixpkgs { inherit system; };
-      wetypex = pkgs.callPackage ./nix/package.nix { src = self.outPath; };
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forSystems = nixpkgs.lib.genAttrs systems;
+      packageFor = system: (import nixpkgs { inherit system; }).callPackage ./nix/package.nix { src = self.outPath; };
     in
     {
-      packages.${system} = {
+      packages = forSystems (system: let wetypex = packageFor system; in {
         fcitx5-wetypex = wetypex;
         default = wetypex;
-      };
-      checks.${system} = {
+      });
+      checks = forSystems (system: let wetypex = packageFor system; in {
         package = wetypex;
         minimal = wetypex.override {
           enableAI = false;
@@ -38,6 +38,6 @@
           enableAI = true;
           enableVoice = false;
         };
-      };
+      });
     };
 }
