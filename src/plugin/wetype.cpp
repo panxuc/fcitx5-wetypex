@@ -2399,6 +2399,15 @@ class WeType : public InputMethodEngineV2 {
       englishDictionary_.emplace();
     return *englishDictionary_;
   }
+  void moveHorizontalCandidate(CommonCandidateList &list, bool next) const {
+    if (!list.totalSize())
+      return;
+    const int target = std::clamp(std::max(list.globalCursorIndex(), 0) +
+                                      (next ? 1 : -1),
+                                  0, list.totalSize() - 1);
+    list.setPage(target / pageSize_);
+    list.setGlobalCursorIndex(target);
+  }
   void updateEnglishCandidates(InputContext *ic, State *s) {
     if (!englishCompletionEnabled(ic, s) || s->englishWord.size() < 2) {
       s->englishCandidateCursor = 0;
@@ -2493,10 +2502,8 @@ class WeType : public InputMethodEngineV2 {
       const bool pageDown = selectionKey.check(FcitxKey_Page_Down) ||
           selectionKey.checkKeyList(instance_->globalConfig().defaultNextPage());
       if (previous || next || pageUp || pageDown) {
-        if (previous)
-          list->prevCandidate();
-        else if (next)
-          list->nextCandidate();
+        if (previous || next)
+          moveHorizontalCandidate(*list, next);
         else if (pageUp && list->hasPrev())
           list->prev();
         else if (pageDown && list->hasNext())
@@ -4491,11 +4498,16 @@ public:
       e.filterAndAccept();
       return;
     }
-    if (composing && horizontalNavigation && list && list->size()) {
-      if (sym == FcitxKey_Left)
-        list->prevCandidate();
-      else
-        list->nextCandidate();
+    // Match the original controller: at the first candidate Left edits the
+    // spelling; Right edits until the caret reaches its end, then selects.
+    // Wubi navigates candidates directly because it has no pinyin caret.
+    const bool candidateNavigation = composing && horizontalNavigation &&
+        list && list->size() &&
+        (*config_.input->mode == wetype_config::InputMode::Wubi ||
+         (sym == FcitxKey_Left && list->globalCursorIndex() > 0) ||
+         (sym == FcitxKey_Right && s->cursor >= s->preedit.size()));
+    if (candidateNavigation) {
+      moveHorizontalCandidate(*list, sym == FcitxKey_Right);
       s->candidatePage = list->currentPage();
       s->candidateCursor = list->globalCursorIndex();
       ic->updateUserInterface(UserInterfaceComponent::InputPanel);
@@ -4526,7 +4538,11 @@ public:
         }
         target = previous;
       } else if (sym == FcitxKey_Right && target < s->preedit.size()) {
-        target += firstUtf8Size(std::string_view(s->preedit).substr(target));
+        const auto next = std::upper_bound(s->cursorStops.begin(),
+                                           s->cursorStops.end(), target);
+        target = next != s->cursorStops.end()
+                     ? *next
+                     : target + firstUtf8Size(std::string_view(s->preedit).substr(target));
       }
       target = std::min(target, s->preedit.size());
       if (target != s->cursor) {
