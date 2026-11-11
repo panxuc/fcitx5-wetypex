@@ -133,6 +133,11 @@ jobs:
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
       - name: 在 Ubuntu 22.04 构建
         run: |
+          printf 'Runner DNS configuration:\n'
+          cat /etc/resolv.conf
+          for host in archive.ubuntu.com security.ubuntu.com github.com; do
+            timeout 10 getent ahostsv4 "$host" || true
+          done
           mkdir -p dist/debian
           docker build --network host -f packaging/docker/debian.Dockerfile -t wetypex-build-jammy .
           docker run --rm --network host --user "$(id -u):$(id -g)" \
@@ -213,6 +218,11 @@ jobs:
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
       - name: 在 Ubuntu 20.04 与固定稳定框架 SDK 构建
         run: |
+          printf 'Runner DNS configuration:\n'
+          cat /etc/resolv.conf
+          for host in archive.ubuntu.com security.ubuntu.com github.com; do
+            timeout 10 getent ahostsv4 "$host" || true
+          done
           mkdir -p dist/ubuntu20
           docker build --network host -f packaging/docker/ubuntu20.Dockerfile -t wetypex-build-focal .
           docker run --rm --network host --user "$(id -u):$(id -g)" \
