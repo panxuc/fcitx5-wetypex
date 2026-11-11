@@ -2386,6 +2386,7 @@ class WeType : public InputMethodEngineV2 {
   }
   static const KeyList &englishSelectionKeys() {
     static const auto keys = Key::keyListFromString(
+        "1 2 3 4 5 6 7 8 9 "
         "Alt+1 Alt+2 Alt+3 Alt+4 Alt+5 Alt+6 Alt+7 Alt+8 Alt+9");
     return keys;
   }
@@ -2472,9 +2473,10 @@ class WeType : public InputMethodEngineV2 {
     }
     const Key selectionKey(sym, key.states());
     const bool selectWithSpace = selectionKey.check(FcitxKey_space);
+    // Plain digits and their Alt variants select the same nine positions.
     const int index = selectWithSpace || selectionKey.check(FcitxKey_Tab)
                           ? 0
-                          : selectionKey.keyListIndex(englishSelectionKeys());
+                          : selectionKey.keyListIndex(englishSelectionKeys()) % 9;
     const auto candidates = ic->inputPanel().candidateList();
     if (index >= 0 && candidates && index < candidates->size()) {
       const auto *word = dynamic_cast<const EnglishCompletionWord *>(
