@@ -49,6 +49,8 @@ FCITX_CONFIGURATION(
     Option<bool> wubiWildcardComment{this, "WubiWildcardComment",
                                      "通配符编码提示", false};
     Option<bool> smartInput{this, "SmartInput", "智能拼写", true};
+    Option<bool> englishCompletion{this, "EnglishCompletion", "英文单词补全",
+                                   false};
     Option<bool> emojiRecommend{this, "EmojiRecommend", "表情和颜文字推荐",
                                 true};
     Option<bool> wechatEmoji{this, "WechatEmoji",
