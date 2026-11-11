@@ -1,0 +1,22 @@
+name: Check Ubuntu build networking
+description: Recover a failing hosted runner resolver before installing packages
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        if ! timeout 10 getent ahostsv4 archive.ubuntu.com > /dev/null; then
+          echo 'The hosted runner cannot resolve the Ubuntu archive; retrying with public DNS.'
+          interface=$(ip -o route get 1.1.1.1 | awk '{for (i=1; i<NF; i++) if ($i=="dev") {print $(i+1); exit}}')
+          test -n "$interface"
+          sudo resolvectl dns "$interface" 1.1.1.1 8.8.8.8
+          sudo resolvectl domain "$interface" '~.'
+          sudo resolvectl flush-caches
+        fi
+        for host in archive.ubuntu.com security.ubuntu.com ports.ubuntu.com; do
+          if ! timeout 15 getent ahostsv4 "$host"; then
+            resolvectl status --no-pager
+            exit 1
+          fi
+        done

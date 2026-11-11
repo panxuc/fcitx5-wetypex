@@ -22,6 +22,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
+      - uses: ./.github/actions/ubuntu-network
       - uses: actions/setup-go@v7
         with:
           go-version: stable

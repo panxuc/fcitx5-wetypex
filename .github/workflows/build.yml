@@ -29,6 +29,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/ubuntu-network
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31
         with:
           extra_nix_config: |
@@ -125,6 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/ubuntu-network
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -133,11 +135,6 @@ jobs:
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
       - name: 在 Ubuntu 22.04 构建
         run: |
-          printf 'Runner DNS configuration:\n'
-          cat /etc/resolv.conf
-          for host in archive.ubuntu.com security.ubuntu.com github.com; do
-            timeout 10 getent ahostsv4 "$host" || true
-          done
           mkdir -p dist/debian
           docker build --network host -f packaging/docker/debian.Dockerfile -t wetypex-build-jammy .
           docker run --rm --network host --user "$(id -u):$(id -g)" \
@@ -189,7 +186,9 @@ jobs:
       fail-fast: false
       matrix:
         image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:bookworm-slim", "debian:trixie-slim"]
-    container: ${{ matrix.image }}
+    container:
+      image: ${{ matrix.image }}
+      options: --dns 1.1.1.1 --dns 8.8.8.8
     steps:
       - uses: actions/download-artifact@v7
         with:
@@ -210,6 +209,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: ./.github/actions/ubuntu-network
       - uses: actions/setup-go@v7
         with:
           go-version: stable
@@ -218,11 +218,6 @@ jobs:
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
       - name: 在 Ubuntu 20.04 与固定稳定框架 SDK 构建
         run: |
-          printf 'Runner DNS configuration:\n'
-          cat /etc/resolv.conf
-          for host in archive.ubuntu.com security.ubuntu.com github.com; do
-            timeout 10 getent ahostsv4 "$host" || true
-          done
           mkdir -p dist/ubuntu20
           docker build --network host -f packaging/docker/ubuntu20.Dockerfile -t wetypex-build-focal .
           docker run --rm --network host --user "$(id -u):$(id -g)" \
