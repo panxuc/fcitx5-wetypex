@@ -79,6 +79,18 @@ jobs:
           QT_QPA_PLATFORM=offscreen timeout 5 fcitx5-wetypex-settings || status=$?
           test "$status" -eq 124
           tar --zstd -C dist/debian-root -cf "dist/fcitx5-wetypex-$version-$revision-linux-aarch64.tar.zst" .
+      - name: 记录构建源码
+        run: |
+          git diff --exit-code HEAD
+          SOURCE_SHA=$(git rev-parse HEAD) python3 - <<'PY'
+          import json, os, re
+          from pathlib import Path
+          version = re.search(r'project\(fcitx5-wetypex VERSION ([0-9.]+)', Path('CMakeLists.txt').read_text())[1]
+          revision = re.search(r'^pkgrel=(\d+)$', Path('packaging/PKGBUILD.in').read_text(), re.M)[1]
+          Path('dist/release-source-aarch64.json').write_text(json.dumps(dict(
+              schema=1, tag='v' + version + '-' + revision, commit=os.environ['SOURCE_SHA'],
+              architecture='aarch64', run_id=int(os.environ['GITHUB_RUN_ID']))))
+          PY
       - uses: actions/upload-artifact@v7
         with:
           name: fcitx5-wetypex-arm64-packages
@@ -88,6 +100,7 @@ jobs:
             dist/ubuntu20/fcitx5-wetypex-legacy_*_arm64.deb
             dist/fedora/fcitx5-wetypex-*.aarch64.rpm
             dist/fcitx5-wetypex-*-linux-aarch64.tar.zst
+            dist/release-source-aarch64.json
           if-no-files-found: error
           retention-days: 14
       - name: 在两个旧基线上验证真实 ARM64 核心和 TLS

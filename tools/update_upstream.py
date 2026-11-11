@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -305,8 +306,11 @@ def release_complete(tag):
     release = optional_api('/releases/tags/' + tag)
     if not release or release['draft'] or release['prerelease']:
         return False
-    assets = {row['name'] for row in release['assets'] if row['size'] > 0}
-    return release_files(tag) <= assets
+    from publish_release import remote_manifest
+    try:
+        return remote_manifest(release, tag) is not None
+    except (ValueError, OSError):
+        return False
 
 
 def release_runs(tag):
@@ -326,7 +330,20 @@ def request_release(tag):
             raise ValueError('publication was cancelled; resume that run manually')
         if latest.get('run_attempt', 1) >= MAX_AUTOMATIC_ATTEMPTS:
             raise ValueError('publication repeatedly failed; inspect the run before retrying')
-        api('/actions/runs/' + str(latest['id']) + '/rerun-failed-jobs', 'POST')
+        jobs = pages('/actions/runs/' + str(latest['id']) + '/jobs?filter=all', 'jobs')
+        if any(job['name'] == 'packages' for job in jobs):
+            api('/actions/runs/' + str(latest['id']) + '/rerun-failed-jobs', 'POST')
+        else:
+            # Old workflow revisions combined compilation and publication.
+            # Recover their sealed artifacts with the fixed control workflow.
+            built = any(job['name'] == 'release' and
+                        {'为全部架构生成校验和', '保存构建产物'} <= {
+                            step['name'] for step in job['steps'] if step['conclusion'] == 'success'}
+                        for job in jobs)
+            inputs = dict(tag=tag, only_aur=False)
+            if built:
+                inputs['recover_run'] = str(latest['id'])
+            api('/actions/workflows/release.yml/dispatches', 'POST', dict(ref='main', inputs=inputs))
     else:
         api('/actions/workflows/release.yml/dispatches', 'POST',
             dict(ref='main', inputs=dict(tag=tag, only_aur=False)))
@@ -576,9 +593,12 @@ def verify_release_directory(directory, tag):
                 raise ValueError('Debian package metadata mismatch: ' + name)
         elif name.endswith('.rpm'):
             arch = 'aarch64' if name.endswith('.aarch64.rpm') else 'x86_64'
-            actual = subprocess.check_output(['docker', 'run', '--rm', '-v', str(root) + ':/out:ro',
-                'wetypex-build-fedora', 'rpm', '-qp', '--queryformat', '%{VERSION}-%{RELEASE}\n%{ARCH}',
-                '/out/' + str(path.relative_to(root))], text=True).strip().splitlines()
+            command = (['rpm', '-qp', '--queryformat', '%{VERSION}-%{RELEASE}\n%{ARCH}', str(path)]
+                       if shutil.which('rpm') else
+                       ['docker', 'run', '--rm', '-v', str(root) + ':/out:ro',
+                        'wetypex-build-fedora', 'rpm', '-qp', '--queryformat',
+                        '%{VERSION}-%{RELEASE}\n%{ARCH}', '/out/' + str(path.relative_to(root))])
+            actual = subprocess.check_output(command, text=True).strip().splitlines()
             if actual != [expected, arch]:
                 raise ValueError('RPM package metadata mismatch: ' + name)
         elif name.endswith('.pkg.tar.zst'):

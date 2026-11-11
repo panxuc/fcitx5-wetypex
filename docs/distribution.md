@@ -73,12 +73,25 @@ ARM64 软件包由 `.github/workflows/packages-arm64.yml` 在原生 ARM64 运行
 
 ## GitHub Release
 
-推送 `v<版本>-<修订>` 标签会启动 `release.yml`。也可以为已有标签手动触发：
+推送 `v<版本>-<修订>` 标签会启动 `release.yml`。x86-64 与 ARM64 并行构建，发布作业随后检查源码来源、两种架构的包元数据和全部 SHA-256。所有文件校验通过后才公开草稿，最后同步 AUR。也可以为已有标签手动触发：
 
 ```bash
 gh workflow run release.yml -f tag=v<版本>-<修订>
 gh workflow run release.yml -f tag=v<版本>-<修订> -f only_aur=true   # 只发布 AUR 元数据
 ```
+
+### 恢复中断的发布
+
+编译完成、上传或公开 Release 失败时，先找到失败的发布运行 ID。用已保存的构建产物做一次只读验证：
+
+```bash
+gh workflow run release.yml --ref main \
+  -f tag=v<版本>-<修订> -f recover_run=<失败运行ID> -F dry_run=true
+```
+
+验证通过后，去掉 `-F dry_run=true` 重复执行即可恢复发布，不需要重新编译。恢复时会核对运行所属仓库与工作流、标签提交、构建来源、GitHub 记录的 ZIP 散列、源码归档和所有包的版本、架构与校验和。验证模式不会公开 Release 或同步 AUR。
+
+发布草稿通过数字 ID 查询和公开，不使用只返回已发布版本的按标签查询接口。完整的公开版本保持原有文件与校验和；草稿中已上传且散列一致的文件也会复用。新流水线将构建与发布分为独立作业，重跑失败的发布作业会保留已成功的构建。
 
 原版更新自动化在 `release` 模式下会自行创建标签并触发发布，见[维护者自动化](maintainer-automation.md#标签与发布)。
 
