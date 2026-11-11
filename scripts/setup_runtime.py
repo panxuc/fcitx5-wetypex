@@ -437,6 +437,8 @@ def main():
     modes.add_argument('--rollback',action='store_true',help='Restore the previous runtime and its data snapshot')
     modes.add_argument('--cleanup',action='store_true',help='Remove unused runtime generations and original ZIP caches')
     modes.add_argument('--icons-only',action='store_true')
+    modes.add_argument('--repair-voice-resources',action='store_true',
+                       help='Restore original VAD models without switching the input core')
     modes.add_argument('--cache-archive',type=pathlib.Path,help='Import an official ZIP for offline setup')
     modes.add_argument('--query-upstream',action='store_true')
     modes.add_argument('--verify-upgrade-from',metavar='VERSION',
@@ -557,6 +559,22 @@ def main():
             archive=manager.archive(profile['assets_archive'],args.download)
             install_ui_resources(archive,data)
         print('Original UI assets installed in '+str(data/'fcitx5-wetypex/ui'))
+        return 0
+    if args.repair_voice_resources:
+        installed=manager.status()['current']
+        if not installed or (args.version and args.version!=installed):
+            ap.error('--repair-voice-resources requires an installed runtime of the selected version')
+        try:
+            with lock(manager.setup_lock), lock(manager.state/'voice/daemon.lock',blocking=False), \
+                    lock(manager.cache_lock,exclusive=False):
+                if args.archive:
+                    manager.cache_archive(args.archive)
+                profile=manager.profile(installed)
+                archive=manager.archive(profile['assets_archive'],args.download)
+                install_voice_resources(archive,data)
+        except BlockingIOError as error:
+            raise ValueError('Finish voice input and run fcitx5-wetypex-voice shutdown before repairing models') from error
+        print('Original voice models restored in '+str(data/'fcitx5-wetypex/voice/vad'))
         return 0
     if not args.archive and not args.download and not args.update:
         ap.error('Supply --archive FILE or --download, or use --update with cached originals')

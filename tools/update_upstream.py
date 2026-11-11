@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 import urllib.error
@@ -22,13 +23,26 @@ import zipfile
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
 sys.path.insert(0, str(ROOT / 'tools'))
-from runtime_catalog import discover, fetch, validate_url, DOWNLOAD_HOSTS, download_archive
+from runtime_catalog import discover, validate_url, DOWNLOAD_HOSTS, download_archive
 from prepare_macos_runtime import select_slice
 
 CATALOG = 'data/runtime-profiles.json'
 PATHS = (CATALOG, 'CMakeLists.txt', 'packaging/PKGBUILD.in',
          'packaging/aur/PKGBUILD', 'README.md')
 VERIFY_WORKFLOW = 'upstream-verify.yml'
+COMPLETE_WORKFLOW = 'upstream-complete.yml'
+MAX_AUTOMATIC_ATTEMPTS = 3
+REQUIRED_JOBS = frozenset((
+    'packages / arch-linux', 'packages / ubuntu-jammy-deb',
+    'packages / ubuntu-focal-legacy', 'packages / arm64 / packages',
+    'packages / nix (ubuntu-24.04)', 'packages / nix (ubuntu-24.04-arm)',
+    'packages / deb-runtime (debian:bookworm-slim)',
+    'packages / deb-runtime (debian:trixie-slim)',
+    'packages / deb-runtime (ubuntu:22.04)',
+    'packages / deb-runtime (ubuntu:24.04)',
+    'packages / deb-runtime (ubuntu:26.04)',
+    'runtime (ubuntu-24.04)', 'runtime (ubuntu-24.04-arm)',
+))
 
 
 def version(value):
@@ -49,6 +63,8 @@ def inspect_archive(path, metadata):
         raise ValueError('official archive MD5 mismatch')
     with zipfile.ZipFile(path) as source:
         member = 'WeType.app/Contents/MacOS/WeType'
+        if sum(row.filename == member for row in source.infolist()) != 1:
+            raise ValueError('original archive has a missing or duplicate core')
         info = source.getinfo(member)
         if info.file_size > 512 * 1024 * 1024:
             raise ValueError('original core exceeds its size limit')
@@ -59,7 +75,8 @@ def inspect_archive(path, metadata):
             if not info.filename.startswith(prefix) or info.is_dir():
                 continue
             name = info.filename[len(prefix):]
-            if Path(name).name != name or name in ('', '.', '..') or info.file_size > 512 * 1024 * 1024:
+            if (Path(name).name != name or name in ('', '.', '..') or name in dictionaries or
+                    info.file_size > 512 * 1024 * 1024):
                 raise ValueError('invalid original dictionary member')
             value = hashlib.sha256()
             with source.open(info) as stream:
@@ -115,7 +132,7 @@ def render(files, metadata, archive):
     catalog['profiles'][new] = profile
     catalog['default'] = new
     result[CATALOG] = json.dumps(catalog, ensure_ascii=False, indent=2) + '\n'
-    project = re.search(r'project\(fcitx5-wetypex VERSION ([0-9.]+)', files['CMakeLists.txt'])
+    project = re.search(r'^project\(fcitx5-wetypex VERSION ([0-9.]+)', files['CMakeLists.txt'], re.M)
     if not project:
         raise ValueError('adapter project version is missing')
     previous = project.group(1)
@@ -133,14 +150,263 @@ def render(files, metadata, archive):
 
 def api(path, method='GET', data=None):
     repository = os.environ['GITHUB_REPOSITORY']
+    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
+        raise ValueError('invalid GitHub repository')
     request = urllib.request.Request('https://api.github.com/repos/' + repository + path,
         method=method, data=None if data is None else json.dumps(data).encode(), headers={
             'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
             'Accept': 'application/vnd.github+json', 'User-Agent': 'WeTypeX upstream updater',
             'X-GitHub-Api-Version': '2022-11-28', 'Content-Type': 'application/json'})
     with urllib.request.urlopen(request, timeout=60) as response:
-        content = response.read(4 * 1024 * 1024)
+        content = response.read(4 * 1024 * 1024 + 1)
+    if len(content) > 4 * 1024 * 1024:
+        raise ValueError('GitHub response exceeds its size limit')
     return json.loads(content) if content else {}
+
+
+def optional_api(path):
+    try:
+        return api(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        return None
+
+
+def pages(path, key=None):
+    result = []
+    separator = '&' if '?' in path else '?'
+    for page in range(1, 21):
+        value = api(path + separator + 'per_page=100&page=' + str(page))
+        batch = value[key] if key else value
+        result.extend(batch)
+        if len(batch) < 100:
+            return result
+    raise ValueError('GitHub result requires manual pagination beyond 2000 entries')
+
+
+def git(*arguments, input=None, env=None):
+    process_env = os.environ.copy()
+    process_env.update(GIT_TERMINAL_PROMPT='0', GIT_TRACE='0', GIT_TRACE_CURL='0',
+                       GIT_CURL_VERBOSE='0', GIT_TRACE_PACKET='0')
+    if env:
+        process_env.update(env)
+    token = os.environ.get('GH_TOKEN')
+    if token:
+        count = int(process_env.get('GIT_CONFIG_COUNT', '0'))
+        process_env['GIT_CONFIG_COUNT'] = str(count + 1)
+        process_env['GIT_CONFIG_KEY_' + str(count)] = 'http.https://github.com/.extraheader'
+        credential = base64.b64encode(('x-access-token:' + token).encode()).decode()
+        process_env['GIT_CONFIG_VALUE_' + str(count)] = 'Authorization: Basic ' + credential
+    result = subprocess.run(['git', *arguments], input=input, text=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=process_env)
+    if result.returncode:
+        raise RuntimeError('git operation failed: ' + result.stderr[-1200:])
+    return result.stdout.strip()
+
+
+def remote_url():
+    return 'https://github.com/' + os.environ['GITHUB_REPOSITORY'] + '.git'
+
+
+def generated_commit(base, files, changed, original_version):
+    """Create a single commit without checking out or running candidate files."""
+    git('fetch', '--no-tags', remote_url(), base)
+    with tempfile.TemporaryDirectory(prefix='wetypex-upstream-index-') as directory:
+        env = dict(GIT_INDEX_FILE=str(Path(directory) / 'index'),
+                   GIT_AUTHOR_NAME='github-actions[bot]',
+                   GIT_AUTHOR_EMAIL='41898282+github-actions[bot]@users.noreply.github.com',
+                   GIT_COMMITTER_NAME='github-actions[bot]',
+                   GIT_COMMITTER_EMAIL='41898282+github-actions[bot]@users.noreply.github.com')
+        git('read-tree', base, env=env)
+        for path in changed:
+            blob = git('hash-object', '-w', '--stdin', input=files[path])
+            git('update-index', '--add', '--cacheinfo', '100644', blob, path, env=env)
+        tree = git('write-tree', env=env)
+        return git('commit-tree', tree, '-p', base,
+                   input='Update original core to ' + original_version + '\n', env=env)
+
+
+def sealed_metadata(files):
+    catalog = json.loads(files[CATALOG])
+    profile = catalog['profiles'][catalog['default']]
+    package = catalog['archives'][catalog['components'][profile['components']['engine']]['archive']]
+    version(package['version'])
+    validate_url(package['url'], DOWNLOAD_HOSTS)
+    validate_url(package['metadata_url'], DOWNLOAD_HOSTS)
+    if not re.fullmatch(r'[a-f0-9]{32}', package.get('md5', '')):
+        raise ValueError('generated archive has no verified official digest')
+    return dict(version=package['version'], archive_url=package['url'],
+                archive_md5=package['md5'], metadata_url=package['metadata_url'])
+
+
+def bot_pr(pr):
+    repository = os.environ['GITHUB_REPOSITORY']
+    return (pr['user']['login'] == 'github-actions[bot]' and
+            pr['head'].get('repo') is not None and
+            pr['head']['repo']['full_name'] == repository and
+            pr['base']['ref'] == 'main' and not pr['draft'])
+
+
+def canonical_candidate(head, archive, pr=None):
+    commit = api('/git/commits/' + head)
+    if len(commit['parents']) != 1:
+        raise ValueError('the generated branch must contain one commit on its base')
+    base = commit['parents'][0]['sha']
+    changed = (pages('/pulls/' + str(pr['number']) + '/files') if pr else
+               api('/compare/' + base + '...' + head)['files'])
+    if (not changed or len(changed) > len(PATHS) or
+            (pr and len(changed) != pr['changed_files']) or any(
+                row['filename'] not in PATHS or row['status'] != 'modified' for row in changed)):
+        raise ValueError('the branch contains changes outside the generated update')
+    before, after = remote_files(base), remote_files(head)
+    verify_generated_modes(head)
+    metadata = sealed_metadata(after)
+    expected = render(before, metadata, archive)
+    if expected == before or expected != after:
+        raise ValueError('the branch does not exactly match the canonical generated update')
+    return base, after
+
+
+def verification_runs(branch, head):
+    query = urllib.parse.urlencode(dict(branch=branch, event='workflow_dispatch', head_sha=head))
+    return pages('/actions/workflows/' + VERIFY_WORKFLOW + '/runs?' + query, 'workflow_runs')
+
+
+def request_verification(branch, head, base, dry_run=False):
+    runs = [row for row in verification_runs(branch, head)
+            if row['display_title'] == 'upstream ' + head + ' base ' + base]
+    if any(row['status'] != 'completed' or row['conclusion'] == 'success' for row in runs):
+        return
+    if len(runs) >= MAX_AUTOMATIC_ATTEMPTS:
+        raise ValueError('verification repeatedly failed; inspect it before retrying manually')
+    if not dry_run:
+        api('/actions/workflows/' + VERIFY_WORKFLOW + '/dispatches', 'POST',
+            dict(ref=branch, inputs=dict(expected_head=head, expected_base=base)))
+
+
+def release_files(tag):
+    match = re.fullmatch(r'v(\d+\.\d+\.\d+\.\d+)-(\d+)', tag)
+    if not match:
+        raise ValueError('invalid adapter release tag')
+    core, revision = match.groups()
+    release = core + '-' + revision
+    result = {'SHA256SUMS', 'fcitx5-wetypex-' + core + '.tar.gz'}
+    for native, deb in (('x86_64', 'amd64'), ('aarch64', 'arm64')):
+        result.update((f'fcitx5-wetypex-{release}-{native}.pkg.tar.zst',
+                       f'fcitx5-wetypex_{release}_{deb}.deb',
+                       f'fcitx5-wetypex-legacy_{release}_{deb}.deb',
+                       f'fcitx5-wetypex-{release}.{native}.rpm',
+                       f'fcitx5-wetypex-{release}-linux-{native}.tar.zst'))
+    return result
+
+
+def release_complete(tag):
+    release = optional_api('/releases/tags/' + tag)
+    if not release or release['draft'] or release['prerelease']:
+        return False
+    assets = {row['name'] for row in release['assets'] if row['size'] > 0}
+    return release_files(tag) <= assets
+
+
+def release_runs(tag):
+    return [row for row in pages('/actions/workflows/release.yml/runs', 'workflow_runs')
+            if row['display_title'] == 'WeTypeX release ' + tag]
+
+
+def request_release(tag):
+    runs = release_runs(tag)
+    if any(row['status'] != 'completed' for row in runs):
+        return
+    if release_complete(tag) and any(row['conclusion'] == 'success' for row in runs):
+        return
+    if runs and runs[0]['conclusion'] != 'success':
+        latest = runs[0]
+        if latest['conclusion'] == 'cancelled':
+            raise ValueError('publication was cancelled; resume that run manually')
+        if latest.get('run_attempt', 1) >= MAX_AUTOMATIC_ATTEMPTS:
+            raise ValueError('publication repeatedly failed; inspect the run before retrying')
+        api('/actions/runs/' + str(latest['id']) + '/rerun-failed-jobs', 'POST')
+    else:
+        api('/actions/workflows/release.yml/dispatches', 'POST',
+            dict(ref='main', inputs=dict(tag=tag, only_aur=False)))
+
+
+def reconcile(dry_run=False, archive_path=None, base_ref=None):
+    """Discover, rebase only untouched bot proposals, and resume interrupted work."""
+    metadata = discover('stable')
+    base = base_ref or api('/git/ref/heads/main')['object']['sha']
+    before = remote_files(base)
+    current = json.loads(before[CATALOG])['default']
+    branch = 'upstream/runtime-' + metadata['version']
+    repository = os.environ['GITHUB_REPOSITORY']
+    query = urllib.parse.urlencode(dict(state='all', base='main',
+                                        head=repository.split('/')[0] + ':' + branch))
+    candidates = pages('/pulls?' + query)
+    if version(metadata['version']) <= version(current):
+        if metadata['version'] == current:
+            sealed = sealed_metadata(before)
+            if any(metadata[key] != sealed[key] for key in ('archive_url', 'archive_md5')):
+                raise ValueError('same-version upstream replacement requires manual review')
+            if os.environ.get('WETYPEX_UPSTREAM_AUTOMATION') == 'release':
+                for row in candidates:
+                    pr = api('/pulls/' + str(row['number']))
+                    if bot_pr(pr) and pr.get('merged'):
+                        runs = verification_runs(branch, pr['head']['sha'])
+                        parents = api('/git/commits/' + pr['head']['sha'])['parents']
+                        title = ('upstream ' + pr['head']['sha'] + ' base ' + parents[0]['sha']) if len(parents) == 1 else ''
+                        successful = next((run for run in runs if run['conclusion'] == 'success' and
+                                           run['display_title'] == title), None)
+                        tag = 'v' + current + '-1'
+                        publications = release_runs(tag)
+                        settled = release_complete(tag) and any(row['conclusion'] == 'success' for row in publications)
+                        active = any(row['status'] != 'completed' for row in publications)
+                        if successful and not settled and not active and not dry_run:
+                            api('/actions/workflows/' + COMPLETE_WORKFLOW + '/dispatches', 'POST',
+                                dict(ref='main', inputs=dict(verification_run=str(successful['id']), publish=True)))
+                        break
+        print(json.dumps(dict(version=metadata['version'], action='up_to_date', dry_run=dry_run)))
+        return
+    if candidates:
+        pr = api('/pulls/' + str(candidates[0]['number']))
+        if not bot_pr(pr) or pr['state'] != 'open':
+            print(json.dumps(dict(version=metadata['version'], action='manual_pr_left_unchanged')))
+            return
+    else:
+        pr = None
+    reference = optional_api('/git/ref/heads/' + branch)
+    previous = reference['object']['sha'] if reference else None
+    if pr and previous != pr['head']['sha']:
+        raise ValueError('the proposal changed during discovery')
+    with tempfile.TemporaryDirectory(prefix='wetypex-upstream-discovery-') as directory:
+        archive = archive_path or download(metadata, directory)
+        if previous:
+            old_base, after = canonical_candidate(previous, archive, pr)
+            ancestry = api('/compare/' + old_base + '...' + base)['status']
+            if ancestry not in ('ahead', 'identical'):
+                raise ValueError('the proposal base is not in main history')
+            sealed = sealed_metadata(after)
+            if any(metadata[key] != sealed[key] for key in ('version', 'archive_url', 'archive_md5')):
+                raise ValueError('the original package changed after the proposal was created')
+        updated = render(before, metadata, archive)
+    changed = [path for path in PATHS if before[path] != updated[path]]
+    print(json.dumps(dict(version=metadata['version'], branch=branch, base=base,
+                          action='rebase' if previous else 'create', changed=changed,
+                          dry_run=dry_run)))
+    if dry_run:
+        return
+    if previous and old_base == base:
+        head = previous
+    else:
+        head = generated_commit(base, updated, changed, metadata['version'])
+        ref = 'refs/heads/' + branch
+        git('push', '--force-with-lease=' + ref + ':' + (previous or ''),
+            remote_url(), head + ':' + ref)
+    if not pr:
+        pr = api('/pulls', 'POST', dict(title='Update original core to ' + metadata['version'],
+            head=branch, base='main', body='更新原版输入核心和词典，保留已验证的传输模块与旧版回退档案。\n\n'
+            '验证覆盖 x86-64、ARM64、旧系统软件包、原版核心、TLS、语音和用户数据迁移。'))
+    request_verification(branch, head, base)
 
 
 def remote_files(ref):
@@ -153,11 +419,19 @@ def remote_files(ref):
     return result
 
 
-def complete(run_id, publish):
+def verify_generated_modes(head):
+    tree = api('/git/trees/' + head + '?recursive=1')
+    entries = {row['path']: row for row in tree['tree']}
+    if tree.get('truncated') or any(entries.get(path, {}).get('mode') != '100644' for path in PATHS):
+        raise ValueError('generated files must remain ordinary non-executable files')
+
+
+def complete(run_id, publish, archive_path=None):
     """Use trusted main code and API data only; never checkout a candidate."""
     run = api('/actions/runs/' + str(int(run_id)))
     repository = os.environ['GITHUB_REPOSITORY']
-    if (run['event'] != 'workflow_dispatch' or run['conclusion'] != 'success' or
+    if (run['event'] != 'workflow_dispatch' or run['status'] != 'completed' or
+            run['conclusion'] != 'success' or
             run['head_repository']['full_name'] != repository or
             run['path'] != '.github/workflows/' + VERIFY_WORKFLOW or
             not re.fullmatch(r'upstream/runtime-\d+\.\d+\.\d+\.\d+', run['head_branch'])):
@@ -172,33 +446,38 @@ def complete(run_id, publish):
     if title is None or title.group(1) != head:
         raise ValueError('the verification run has no immutable head/base identity')
     base = title.group(2)
-    already_merged = bool(pr.get('merged'))
+    main_head = api('/git/ref/heads/main')['object']['sha']
+    already_merged = bool(pr.get('merged')) or main_head == head
     if [parent['sha'] for parent in api('/git/commits/' + head)['parents']] != [base]:
         raise ValueError('the candidate must be one generated commit on the verified base')
     if (pr['user']['login'] != 'github-actions[bot]' or pr['head']['repo']['full_name'] != repository or
             pr['draft'] or head != run['head_sha']):
         raise ValueError('the bot candidate changed or its base is no longer current')
-    if not already_merged and (pr['state'] != 'open' or
-            api('/git/ref/heads/main')['object']['sha'] != base):
+    if not already_merged and (pr['state'] != 'open' or main_head != base):
         raise ValueError('the verified base is stale; rebase and rerun the complete matrix')
     changed = api('/pulls/' + str(pr['number']) + '/files?per_page=100')
     if len(changed) != pr['changed_files'] or any(
             item['filename'] not in PATHS or item['status'] != 'modified' for item in changed):
         raise ValueError('automatic updates may only contain the generated version/profile files')
     before, after = remote_files(base), remote_files(head)
+    verify_generated_modes(head)
     metadata = discover('stable')
+    target = sealed_metadata(after)
+    if run['head_branch'] != 'upstream/runtime-' + target['version']:
+        raise ValueError('verification branch does not match the generated version')
     if already_merged:
-        # Resume a tag/dispatch interrupted after the squash, even if the
-        # website has moved on to another release. Its immutable official
-        # installation JSON remains the source of truth.
-        catalog = json.loads(after[CATALOG])
-        profile = catalog['profiles'][catalog['default']]
-        package = catalog['archives'][catalog['components'][profile['components']['engine']]['archive']]
-        data = json.loads(fetch(package['metadata_url'], DOWNLOAD_HOSTS, 1024 * 1024))
-        metadata = dict(version=data['zip_version'], archive_url=data['zip_download_url'],
-                        archive_md5=data['zip_download_md5'], metadata_url=package['metadata_url'])
+        # The sealed profile survives a moved/removed version-specific JSON.
+        # An official rollback still requires maintainer review.
+        if version(metadata['version']) < version(target['version']):
+            raise ValueError('the official stable channel withdrew this version')
+        if metadata['version'] == target['version'] and any(
+                metadata[key] != target[key] for key in ('archive_url', 'archive_md5')):
+            raise ValueError('the published original changed after verification')
+        metadata = target
+    elif any(metadata[key] != target[key] for key in target):
+        raise ValueError('the proposal no longer matches current official stable metadata')
     with tempfile.TemporaryDirectory(prefix='wetypex-upstream-review-') as directory:
-        expected = render(before, metadata, download(metadata, directory))
+        expected = render(before, metadata, archive_path or download(metadata, directory))
     if expected == before or after != expected:
         raise ValueError('the PR does not exactly match the independently rendered official update')
     # Check every job in the dispatched verification, including all reusable
@@ -211,23 +490,34 @@ def complete(run_id, publish):
         if len(batch) < 100:
             break
         page += 1
-    if len(jobs) < 8 or any(job['conclusion'] != 'success' for job in jobs):
+    names = {job['name'] for job in jobs}
+    if not REQUIRED_JOBS <= names or any(job['conclusion'] != 'success' for job in jobs):
         raise ValueError('the complete verification/package matrix must succeed')
     release = metadata['version'] + '-1'
     print(json.dumps(dict(pr=pr['number'], head=head, release=release, publish=publish)))
     if not publish:
         return
-    # The merge API rejects a racing head; recheck main immediately before it.
+    # Each generated proposal is already a single commit on the verified base.
+    # A non-forced fast-forward atomically rejects a racing main update, unlike
+    # the PR merge API (which accepts an expected head but no expected base).
     if not already_merged and api('/git/ref/heads/main')['object']['sha'] != base:
         raise ValueError('main advanced; dispatch verification against the new base')
-    merged = dict(merged=True, sha=pr['merge_commit_sha']) if already_merged else api('/pulls/' + str(pr['number']) + '/merge', 'PUT',
-                 dict(sha=head, merge_method='squash', commit_title='Update original core to ' + metadata['version']))
-    if not merged.get('merged'):
-        raise ValueError('GitHub did not merge the validated candidate')
-    commit = api('/git/commits/' + merged['sha'])
+    if not already_merged:
+        latest_pr = api('/pulls/' + str(pr['number']))
+        if latest_pr['head']['sha'] != head or latest_pr['state'] != 'open' or not bot_pr(latest_pr):
+            raise ValueError('the proposal was edited during verification')
+        git('fetch', '--no-tags', remote_url(), head)
+        git('push', remote_url(), head + ':refs/heads/main')
+    applied = pr['merge_commit_sha'] if pr.get('merged') else head
+    commit = api('/git/commits/' + applied)
     if ([parent['sha'] for parent in commit['parents']] != [base] or
             commit['tree']['sha'] != api('/git/commits/' + head)['tree']['sha']):
         raise ValueError('the merge base changed during merge; rerun verification before publication')
+    main_head = api('/git/ref/heads/main')['object']['sha']
+    if api('/compare/' + applied + '...' + main_head)['status'] not in ('ahead', 'identical'):
+        raise ValueError('the verified commit is no longer in main history')
+    if api('/pulls/' + str(pr['number']))['head']['sha'] != head:
+        raise ValueError('the proposal was edited while merging; publication stopped')
     tag = 'v' + release
     try:
         existing = api('/git/ref/tags/' + tag)
@@ -236,16 +526,78 @@ def complete(run_id, publish):
             raise
         existing = None
     if existing:
-        if existing['object']['sha'] != merged['sha']:
+        target_ref = existing['object']
+        for _ in range(5):
+            if target_ref['type'] != 'tag':
+                break
+            target_ref = api('/git/tags/' + target_ref['sha'])['object']
+        if target_ref['type'] != 'commit' or target_ref['sha'] != applied:
             raise ValueError('the release tag already identifies another commit')
     else:
-        api('/git/refs', 'POST', dict(ref='refs/tags/' + tag, sha=merged['sha']))
-    runs = api('/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100')['workflow_runs']
-    if any(item['display_title'] == 'WeTypeX release ' + tag and
-           item.get('conclusion') in (None, 'success') for item in runs):
-        return
-    api('/actions/workflows/release.yml/dispatches', 'POST',
-        dict(ref='main', inputs=dict(tag=tag, only_aur=False)))
+        api('/git/refs', 'POST', dict(ref='refs/tags/' + tag, sha=applied))
+    request_release(tag)
+
+
+def release_version(tag):
+    match = re.fullmatch(r'v?(\d+\.\d+\.\d+\.\d+)-(\d+)', tag or '')
+    return (*version(match[1]), int(match[2])) if match else ()
+
+
+def release_policy(tag):
+    target = release_version(tag)
+    if not target:
+        raise ValueError('invalid adapter release tag')
+    newer = any(not row['draft'] and not row['prerelease'] and
+                release_version(row['tag_name']) > target for row in pages('/releases'))
+    print(json.dumps(dict(make_latest='false' if newer else 'legacy', newer_release_exists=newer)))
+
+
+def verify_release_directory(directory, tag):
+    """Validate every distributed architecture, then write one checksum manifest."""
+    root = Path(directory).resolve()
+    names = release_files(tag) - {'SHA256SUMS'}
+    files = {}
+    for parent in (root, *(root / name for name in ('arch', 'debian', 'ubuntu20', 'fedora'))):
+        for path in parent.glob('fcitx5-wetypex*'):
+            if path.is_file() and path.suffix in ('.zst', '.gz', '.deb', '.rpm'):
+                if (path.name not in names or path.name in files or path.is_symlink() or
+                        root not in path.resolve().parents or not path.stat().st_size):
+                    raise ValueError('unexpected, duplicate or empty release artifact: ' + str(path))
+                files[path.name] = path
+    if files.keys() != names:
+        raise ValueError('missing release artifacts: ' + ', '.join(sorted(names - files.keys())))
+    expected = tag.removeprefix('v') if sys.version_info >= (3, 9) else tag[1:]
+    for name, path in files.items():
+        if name.endswith('.deb'):
+            arch = 'arm64' if name.endswith('_arm64.deb') else 'amd64'
+            actual = [subprocess.check_output(['dpkg-deb', '-f', str(path), field], text=True).strip()
+                      for field in ('Version', 'Architecture')]
+            if actual != [expected, arch]:
+                raise ValueError('Debian package metadata mismatch: ' + name)
+        elif name.endswith('.rpm'):
+            arch = 'aarch64' if name.endswith('.aarch64.rpm') else 'x86_64'
+            actual = subprocess.check_output(['docker', 'run', '--rm', '-v', str(root) + ':/out:ro',
+                'wetypex-build-fedora', 'rpm', '-qp', '--queryformat', '%{VERSION}-%{RELEASE}\n%{ARCH}',
+                '/out/' + str(path.relative_to(root))], text=True).strip().splitlines()
+            if actual != [expected, arch]:
+                raise ValueError('RPM package metadata mismatch: ' + name)
+        elif name.endswith('.pkg.tar.zst'):
+            content = subprocess.check_output(['tar', '--zstd', '-xOf', str(path), '.PKGINFO'], text=True)
+            arch = 'aarch64' if name.endswith('-aarch64.pkg.tar.zst') else 'x86_64'
+            if ('pkgver = ' + expected) not in content.splitlines() or ('arch = ' + arch) not in content.splitlines():
+                raise ValueError('Arch package metadata mismatch: ' + name)
+        elif name.endswith('.tar.zst'):
+            binary = subprocess.check_output(['tar', '--zstd', '-xOf', str(path),
+                                               './usr/lib/fcitx5-wetypex/wetypex-engine-host'])
+            machine = 183 if name.endswith('-aarch64.tar.zst') else 62
+            if binary[:6] != b'\x7fELF\x02\x01' or int.from_bytes(binary[18:20], 'little') != machine:
+                raise ValueError('portable archive architecture mismatch: ' + name)
+    manifest = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '  ' + name + '\n'
+                       for name, path in sorted(files.items()))
+    temporary = root / '.SHA256SUMS.tmp'
+    temporary.write_text(manifest)
+    temporary.replace(root / 'SHA256SUMS')
+    print(json.dumps(dict(tag=tag, verified_artifacts=sorted(files))))
 
 
 def main():
@@ -253,10 +605,41 @@ def main():
     parser.add_argument('--archive', type=Path, help='Reuse a downloaded official ZIP')
     parser.add_argument('--write', action='store_true', help='Write only the generated local files')
     parser.add_argument('--complete-run', type=int)
+    parser.add_argument('--reconcile', action='store_true', help='Maintain canonical bot PRs and resume interrupted publication')
+    parser.add_argument('--dry-run', action='store_true', help='Read-only discovery/reconciliation')
+    parser.add_argument('--base-ref', help='Inspect an immutable base commit with --reconcile --dry-run')
+    parser.add_argument('--release-complete', metavar='TAG', help='Exit zero only for a complete published release')
+    parser.add_argument('--release-policy', metavar='TAG', help='Choose latest-release policy without downgrading a newer release')
+    parser.add_argument('--verify-release-dir', type=Path, help='Validate all built packages and generate SHA256SUMS')
+    parser.add_argument('--tag', help='Adapter release tag for --verify-release-dir')
     parser.add_argument('--publish', action='store_true', help='Merge/tag only after the complete gate succeeds')
     args = parser.parse_args()
+    actions = (args.complete_run, args.reconcile, args.release_complete,
+               args.release_policy, args.verify_release_dir)
+    if sum(bool(value) for value in actions) > 1:
+        parser.error('choose one automation operation')
+    if args.publish and (not args.complete_run or args.archive):
+        parser.error('--publish requires --complete-run and a fresh official download')
+    if args.dry_run and not args.reconcile:
+        parser.error('--dry-run requires --reconcile')
+    if args.base_ref and (not args.reconcile or not args.dry_run or
+                          not re.fullmatch(r'[0-9a-f]{40}', args.base_ref)):
+        parser.error('--base-ref requires --reconcile --dry-run and a full commit SHA')
     if args.complete_run:
-        complete(args.complete_run, args.publish)
+        complete(args.complete_run, args.publish, args.archive)
+        return
+    if args.reconcile:
+        reconcile(args.dry_run, args.archive, args.base_ref)
+        return
+    if args.release_complete:
+        raise SystemExit(0 if release_complete(args.release_complete) else 1)
+    if args.release_policy:
+        release_policy(args.release_policy)
+        return
+    if args.verify_release_dir:
+        if not args.tag:
+            parser.error('--verify-release-dir requires --tag')
+        verify_release_directory(args.verify_release_dir, args.tag)
         return
     if args.publish:
         parser.error('--publish requires --complete-run')

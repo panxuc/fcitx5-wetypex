@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: upstream-verification-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   packages:
     uses: ./.github/workflows/build.yml
@@ -31,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 2
           persist-credentials: false
       - name: 核对被验证的提交
         env:
@@ -39,6 +44,8 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           test "$EXPECTED_HEAD" != "$EXPECTED_BASE"
+          test "$(git rev-parse HEAD^1)" = "$EXPECTED_BASE"
+          test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 2
       - name: 安装编译和真实运行依赖
         run: |
           sudo apt-get update -qq
@@ -58,23 +65,40 @@ jobs:
           echo "XDG_DATA_HOME=$RUNNER_TEMP/wetypex-data" >> "$GITHUB_ENV"
           echo "XDG_CACHE_HOME=$RUNNER_TEMP/wetypex-cache" >> "$GITHUB_ENV"
           echo "XDG_CONFIG_HOME=$RUNNER_TEMP/wetypex-config" >> "$GITHUB_ENV"
+          echo "WETYPE_KEEP_ARCHIVES=1" >> "$GITHUB_ENV"
       - name: 真实核心、词典、选词及传输检查
+        shell: bash
         run: |
-          fcitx5-wetypex-setup --download --accept-upstream-license
-          fcitx5-wetypex-setup --check --transport
-          fcitx5-wetypex-setup --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
+          # Match the root-owned isolated fixtures used by the package/Nix
+          # checks; do not depend on unprivileged user namespaces on the host.
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$RUNNER_TEMP/wetypex" \
+            XDG_DATA_HOME="$XDG_DATA_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+            XDG_CONFIG_HOME="$XDG_CONFIG_HOME" WETYPE_KEEP_ARCHIVES=1 bash -euc '
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --download --accept-upstream-license
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --check --transport
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-setup" --verify-upgrade-from 2.2.3.657 --download --accept-upstream-license
+            '
       - name: 原版匿名配对和语音网络请求
         shell: bash
         run: |
-          fcitx5-wetypex-account pairing-code > "$RUNNER_TEMP/pairing.json"
-          python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["ok"]' "$RUNNER_TEMP/pairing.json"
-          espeak-ng -v en-us -s 135 -w "$RUNNER_TEMP/speech.wav" 'Hello, this is a voice input compatibility check. One two three.'
-          fcitx5-wetypex-voice transcribe "$RUNNER_TEMP/speech.wav" --realtime > "$RUNNER_TEMP/voice.json"
-          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["ok"] and v["text"].strip()' "$RUNNER_TEMP/voice.json"
-          fcitx5-wetypex-voice status > "$RUNNER_TEMP/voice-status.json"
-          python3 -c 'import json,sys; v=json.load(open(sys.argv[1])); assert v["native_ready"] and v["vad"]' "$RUNNER_TEMP/voice-status.json"
+          sudo env PATH="$PATH" WETYPEX_PREFIX="$RUNNER_TEMP/wetypex" \
+            XDG_DATA_HOME="$XDG_DATA_HOME" XDG_CACHE_HOME="$XDG_CACHE_HOME" \
+            XDG_CONFIG_HOME="$XDG_CONFIG_HOME" bash -euc '
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-account" pairing-code > "$XDG_CACHE_HOME/pairing.json"
+              python3 -c '\''import json,os; assert json.load(open(os.environ["XDG_CACHE_HOME"]+"/pairing.json"))["ok"]'\''
+              espeak-ng -v en-us -s 135 -w "$XDG_CACHE_HOME/speech.wav" "Hello, this is a voice input compatibility check. One two three."
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime > "$XDG_CACHE_HOME/voice.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice.json")); assert v["ok"] and v["text"].strip()'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" status > "$XDG_CACHE_HOME/voice-status.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice-status.json")); assert v["native_ready"] and v["vad"]'\''
+            '
       - name: 清理独立匿名身份
         if: always()
         run: |
-          fcitx5-wetypex-voice shutdown || true
-          python3 -c 'import os,shutil; from pathlib import Path; p=Path(os.environ["XDG_DATA_HOME"]); shutil.rmtree(p,ignore_errors=True)'
+          if [[ -x "$RUNNER_TEMP/wetypex/bin/fcitx5-wetypex-voice" ]]; then
+            sudo env XDG_DATA_HOME="$RUNNER_TEMP/wetypex-data" \
+              XDG_CACHE_HOME="$RUNNER_TEMP/wetypex-cache" \
+              XDG_CONFIG_HOME="$RUNNER_TEMP/wetypex-config" \
+              "$RUNNER_TEMP/wetypex/bin/fcitx5-wetypex-voice" shutdown || true
+          fi
+          sudo rm -rf "$RUNNER_TEMP/wetypex-data" "$RUNNER_TEMP/wetypex-cache" "$RUNNER_TEMP/wetypex-config"
