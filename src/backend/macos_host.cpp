@@ -155,21 +155,27 @@ extern "C" auto shim_signal(int number, void (*handler)(int)) -> void (*)(int) {
   return previous.sa_handler;
 }
 
-static bool original_cpu_supported() {
+static bool original_cpu_supported(bool voice = false) {
 #if defined(__aarch64__)
+  (void)voice;
   // The macOS ARM64 image targets Apple Silicon. Older Linux ARM64 CPUs
   // execute that same ARM64 image through qemu-user, without ABI substitution.
-  constexpr unsigned long required = HWCAP_ASIMD | HWCAP_AES | HWCAP_PMULL |
-      HWCAP_SHA1 | HWCAP_SHA2 | HWCAP_CRC32 | HWCAP_ATOMICS | HWCAP_FPHP |
-      HWCAP_ASIMDHP | HWCAP_LRCPC | HWCAP_ASIMDDP;
+  constexpr unsigned long required =
+      HWCAP_ASIMD | HWCAP_AES | HWCAP_PMULL | HWCAP_SHA1 | HWCAP_SHA2 |
+      HWCAP_CRC32 | HWCAP_ATOMICS | HWCAP_FPHP | HWCAP_ASIMDHP | HWCAP_LRCPC |
+      HWCAP_ASIMDDP;
   return (getauxval(AT_HWCAP) & required) == required;
 #elif defined(__x86_64__)
   // Both supported x86 images use AVX2 in their software AES table setup.
   // An AVX-capable CPU with AES-NI takes the hardware path instead; do not
   // force those older processors into emulation merely for lacking AVX2.
   __builtin_cpu_init();
-  return __builtin_cpu_supports("avx") &&
-         (__builtin_cpu_supports("aes") || __builtin_cpu_supports("avx2"));
+  if (!__builtin_cpu_supports("avx"))
+    return false;
+  if (voice)
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") &&
+           __builtin_cpu_supports("f16c");
+  return __builtin_cpu_supports("aes") || __builtin_cpu_supports("avx2");
 #else
   return false;
 #endif
@@ -213,7 +219,7 @@ static bool compatibility_ready(const std::string &executable) {
     }
     const char *arguments[] = {
         executable.c_str(), "-cpu",      "max",  host_executable.c_str(),
-        "unused",           "cpu-check", nullptr};
+        "voice",           "cpu-check", nullptr};
     execv(executable.c_str(), const_cast<char *const *>(arguments));
     _exit(126);
   }
@@ -231,8 +237,12 @@ static bool select_execution_provider(int argc, char **argv) {
     fputs("invalid original-engine execution provider\n", stderr);
     return false;
   }
+  const bool voice =
+      !strcmp(argv[2], "voice-service") ||
+      (!strcmp(argv[2], "business-service") &&
+       (getenv("WETYPE_VOICE_STREAM") || getenv("WETYPE_VOICE_FILE")));
   if (getenv("WETYPE_QEMU_WRAPPED")) {
-    if (!original_cpu_supported() && strcmp(argv[2], "network-info")) {
+    if (!original_cpu_supported(voice) && strcmp(argv[2], "network-info")) {
       fputs("the compatibility provider lacks required CPU instructions; "
             "update qemu-user\n",
             stderr);
@@ -241,7 +251,7 @@ static bool select_execution_provider(int argc, char **argv) {
     return true;
   }
   if (provider == "native" ||
-      (provider == "auto" && original_cpu_supported()) ||
+      (provider == "auto" && original_cpu_supported(voice)) ||
       !strcmp(argv[2], "network-info"))
     return true;
   auto executable = compatibility_executable();
@@ -258,7 +268,7 @@ static bool select_execution_provider(int argc, char **argv) {
   }
   setenv("WETYPE_QEMU_WRAPPED", "1", 1);
   std::vector<char *> arguments{executable.data(), const_cast<char *>("-cpu"),
-      const_cast<char *>("max")};
+                                const_cast<char *>("max")};
   for (int i = 0; i < argc; ++i)
     arguments.push_back(argv[i]);
   arguments.push_back(nullptr);
@@ -3585,7 +3595,7 @@ int main(int argc, char **argv) {
       host_executable.assign(path, length);
   }
   if (!strcmp(argv[2], "cpu-check"))
-    return original_cpu_supported() ? 0 : 78;
+    return original_cpu_supported(!strcmp(argv[1], "voice")) ? 0 : 78;
   const bool mappingOnly = !strcmp(argv[2], "version") ||
                            !strcmp(argv[2], "module-map");
   if (!select_execution_provider(argc, argv))
@@ -3665,17 +3675,31 @@ int main(int argc, char **argv) {
     wire::boolean(report.get(), "ws", flags & 1);
     wire::boolean(report.get(), "wss", flags & 2);
     wire::boolean(report.get(), "ipv6", flags & 4);
-    wire::boolean(report.get(), "native_cpu_supported", original_cpu_supported());
+    const bool nativeInput = original_cpu_supported();
+    const bool nativeVoice = original_cpu_supported(true);
+    wire::boolean(report.get(), "native_cpu_supported", nativeInput);
+    wire::boolean(report.get(), "native_voice_cpu_supported", nativeVoice);
     const char *configuredProvider = getenv("WETYPE_ENGINE_PROVIDER");
-    const bool qemuProvider = getenv("WETYPE_QEMU_WRAPPED") ||
-        (configuredProvider && !strcmp(configuredProvider, "qemu")) ||
-        ((!configuredProvider || !strcmp(configuredProvider, "auto")) && !original_cpu_supported());
-    wire::put(report.get(), "execution_provider", std::string(qemuProvider ? "qemu" : "native"));
+    const std::string selection =
+        configuredProvider && *configuredProvider ? configuredProvider : "auto";
+    const bool wrapped = getenv("WETYPE_QEMU_WRAPPED");
+    const bool forceQemu = wrapped || selection == "qemu";
+    const bool qemuInput = forceQemu || (selection == "auto" && !nativeInput);
+    const bool qemuVoice = forceQemu || (selection == "auto" && !nativeVoice);
+    const bool emulatorReady =
+        wrapped ? nativeInput && nativeVoice
+                : ((qemuInput || qemuVoice) &&
+                   compatibility_ready(compatibility_executable()));
+    wire::put(report.get(), "execution_provider",
+              std::string(qemuInput ? "qemu" : "native"));
+    wire::put(report.get(), "voice_execution_provider",
+              std::string(qemuVoice ? "qemu" : "native"));
     wire::put(report.get(), "architecture",
               std::string(execution_architecture));
-    const bool executionReady =
-        !qemuProvider || compatibility_ready(compatibility_executable());
-    wire::boolean(report.get(), "execution_ready", executionReady);
+    wire::boolean(report.get(), "execution_ready",
+                  qemuInput ? emulatorReady : nativeInput);
+    wire::boolean(report.get(), "voice_execution_ready",
+                  qemuVoice ? emulatorReady : nativeVoice);
     wire::put(report.get(), "address_policy",
               std::string("happy-eyeballs-200ms-with-ipv4-retry"));
     puts(wire::dump(report.get()).c_str());
@@ -3691,7 +3715,8 @@ int main(int argc, char **argv) {
     const auto version = wire::str(document.get(), "version");
     const auto build = version.rfind('.');
     if (metadata.size() > 16384 || version.empty() || version.size() > 64 ||
-        build == std::string::npos || build == 0 || build + 1 == version.size() ||
+        build == std::string::npos || build == 0 ||
+        build + 1 == version.size() ||
         std::count(version.begin(), version.end(), '.') != 3 ||
         version.find("..") != std::string::npos || version.front() == '.' ||
         !std::all_of(version.begin(), version.end(), [](char c) {
@@ -3700,8 +3725,8 @@ int main(int argc, char **argv) {
       fputs("invalid upstream runtime version metadata\n", stderr);
       return 2;
     }
-    upstream_app_version = version.substr(0, build) + "(" +
-                           version.substr(build + 1) + ")";
+    upstream_app_version =
+        version.substr(0, build) + "(" + version.substr(build + 1) + ")";
   }
   std::vector<std::string> binds, unwinds;
   std::vector<std::pair<uintptr_t, std::string>> ctors;
@@ -3741,7 +3766,10 @@ int main(int argc, char **argv) {
     const size_t page = size_t(sysconf(_SC_PAGESIZE));
     bool copiedImage = false;
     if (page > 4096) {
-      struct Segment { uintptr_t address, size, offset, length; int protection; };
+      struct Segment {
+        uintptr_t address, size, offset, length;
+        int protection;
+      };
       std::vector<Segment> segments;
       std::string row;
       uintptr_t first = UINTPTR_MAX, last = 0;
@@ -3798,7 +3826,8 @@ int main(int argc, char **argv) {
             protections[(address - first) / page] |= flags;
         }
         for (size_t start = 0, end; start < protections.size(); start = end) {
-          for (end = start + 1; end < protections.size() && protections[end] == protections[start]; ++end) {}
+          for (end = start + 1; end < protections.size() && protections[end] == protections[start]; ++end) {
+          }
           if (mprotect(reinterpret_cast<void *>(first + start * page), (end - start) * page,
                        protections[start])) {
             close(module);

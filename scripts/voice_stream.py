@@ -265,6 +265,19 @@ class Backend:
         binary = SUPPORT / 'wetypex-engine-host'
         if not binary.is_file() or not (RUNTIME / 'manifest.txt').is_file():
             raise RuntimeError('请先安装并准备原版运行时')
+        try:
+            capabilities = subprocess.run(
+                [str(binary), str(SUPPORT), 'network-info'],
+                env=dict(os.environ, WETYPE_SUPPORT_DIR=str(SUPPORT)),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            report = json.loads(capabilities.stdout)
+            if capabilities.returncode or not isinstance(report, dict):
+                raise RuntimeError('无法检查原版语音的处理器兼容性')
+            if not report.get('voice_execution_ready', report.get('execution_ready', True)):
+                raise RuntimeError('此 CPU 的原版语音需要兼容组件，请安装或更新 qemu-user；Nix 请启用 enableCompatibilityProvider')
+        except (OSError, ValueError, subprocess.TimeoutExpired, RuntimeError) as error:
+            self.runtime_lease.close()
+            raise RuntimeError(str(error)) from error
         # This process outlives the recording thread that creates it.
         # --die-with-parent also triggers when that *thread* exits; stdin EOF
         # already shuts down the voice service when the controller exits.

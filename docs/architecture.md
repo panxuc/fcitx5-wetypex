@@ -52,9 +52,9 @@ WeTypeX 把微信输入法 macOS 版的原版 C/C++ 输入核心接入 Fcitx5。
 
 ## CPU 指令集与兼容执行
 
-x86-64 原版核心的硬件 AES 路径需要 AVX 和 AES-NI；缺少 AES-NI 时，原版的软件 AES 表初始化使用 AVX2。宿主会检查实际 CPU 和操作系统是否提供 AVX，并确认 AES-NI 或 AVX2 至少有一项可用。有 AES-NI 的老处理器可以继续原生执行；能力不足时使用 `qemu-x86_64` 执行同一份原版核心。ARM64 的指令集要求见 [ARM64 支持](arm64.md)。
+x86-64 原版核心的硬件 AES 路径需要 AVX 和 AES-NI；缺少 AES-NI 时，原版的软件 AES 表初始化使用 AVX2。宿主会检查实际 CPU 和操作系统是否提供 AVX，并确认 AES-NI 或 AVX2 至少有一项可用。有 AES-NI 的老处理器可以继续原生执行；能力不足时使用 `qemu-x86_64` 执行同一份原版核心。语音 VAD 和编码路径还要求 AVX2、FMA 与 F16C，宿主按服务分别选择执行方式，因此语音使用 QEMU 时，普通输入仍可原生运行。ARM64 的指令集要求见 [ARM64 支持](arm64.md)。
 
-默认执行方式为 `auto`。`WETYPE_ENGINE_PROVIDER=native` 强制原生运行，仅用于定位故障；`qemu` 强制兼容执行。`fcitx5-wetypex-account network-info` 中的 `native_cpu_supported` 表示原生能力，`execution_provider` 表示所选方式，`execution_ready` 表示该方式实际可用。
+默认执行方式为 `auto`。`WETYPE_ENGINE_PROVIDER=native` 强制原生运行，仅用于定位故障；`qemu` 强制兼容执行。`fcitx5-wetypex-account network-info` 中的 `native_cpu_supported` 表示原生能力，`execution_provider` 表示所选方式，`execution_ready` 表示该方式实际可用；语音对应 `native_voice_cpu_supported`、`voice_execution_provider` 和 `voice_execution_ready`。
 
 兼容执行前会让 QEMU 运行宿主自身的 CPU 检查，不加载原版核心。只有文件存在还不够：例如 Ubuntu 22.04 仓库中的 QEMU 6.2 无法提供这里需要的 x86 指令集，检查会提示升级组件。普通发行版通过 `qemu-user` 提供模拟器；Nix 用户设置 `enableCompatibilityProvider = true`，只构建当前架构的用户态模拟器。
 
