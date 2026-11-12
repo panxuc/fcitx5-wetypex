@@ -247,6 +247,7 @@ struct State : InputContextProperty {
   bool initialPanelShown = false;
   uint64_t cloudPollUntil = 0, lastCloudPoll = 0;
   int candidatePage = 0, candidateCursor = 0;
+  wire::Json candidates, cloudFlags;
   std::string preedit;
   std::string englishWord;
   int englishCandidateCursor = 0;
@@ -304,6 +305,8 @@ struct State : InputContextProperty {
   State(uint64_t n, InputContext &context) : id(n), ic(context.watch()) {}
 };
 static void clearDisplayState(State *state) {
+  state->candidates.reset();
+  state->cloudFlags.reset();
   state->displayPreedit.clear();
   state->displayCursor = 0;
   state->editableBegin = 0;
@@ -818,6 +821,52 @@ class WeType : public InputMethodEngineV2 {
        symbolAutoChange_ = true, clipboardEnabled_ = false,
        networkEnabled_ = true;
   wetype_config::WeTypeConfig config_;
+  wire::Json engineSettings_;
+  using IdentityStamp =
+      std::tuple<dev_t, ino_t, off_t, time_t, long, time_t, long>;
+  std::optional<IdentityStamp> backendIdentity_;
+  std::optional<IdentityStamp> identityStamp() const {
+    const char *directory = getenv("WETYPE_ACCOUNT_STATE_DIR");
+    const auto path = (directory ? std::filesystem::path(directory)
+                                 : runtimeRoot() / "account") / "identity.json";
+    struct stat info{};
+    if (stat(path.c_str(), &info) == 0)
+      return IdentityStamp{info.st_dev, info.st_ino, info.st_size,
+                           info.st_mtim.tv_sec, info.st_mtim.tv_nsec,
+                           info.st_ctim.tv_sec, info.st_ctim.tv_nsec};
+    if (errno == ENOENT)
+      return IdentityStamp{};
+    return std::nullopt;
+  }
+  bool presentationOnly(const wetype_config::WeTypeConfig &before) const {
+    if (before == config_ || child_ <= 0 || failed_ ||
+        runtimePhase_ != RuntimePhase::Idle || !backendIdentity_ ||
+        backendIdentity_ != identityStamp())
+      return false;
+    auto comparable = config_;
+    auto *appearance = comparable.appearance.mutableValue();
+    appearance->pageSize.setValue(*before.appearance->pageSize);
+    appearance->vertical.setValue(*before.appearance->vertical);
+    appearance->preeditPosition.setValue(*before.appearance->preeditPosition);
+    appearance->labelStyle.setValue(*before.appearance->labelStyle);
+    appearance->candidateSize.setValue(*before.appearance->candidateSize);
+    appearance->theme.setValue(*before.appearance->theme);
+    return comparable == before;
+  }
+  void refreshPresentation() {
+    for (const auto &[id, ref] : contexts_)
+      if (auto *ic = ref.get()) {
+        auto *s = ic->propertyFor(&factory_);
+        if (!s->active || ic->capabilityFlags().test(CapabilityFlag::Password))
+          continue;
+        s->candidatePage = s->candidateCursor / pageSize_;
+        if (s->vMenu != VMenu::None)
+          updateVMenu(ic, s);
+        else
+          updateCandidates(ic, s);
+        panel(ic, s);
+      }
+  }
   std::optional<wetype::EnglishDictionary> englishDictionary_;
   std::filesystem::path stateDirectory() const {
     const char *state = getenv("WETYPE_STATE_DIR"),
@@ -1478,6 +1527,12 @@ class WeType : public InputMethodEngineV2 {
     loadKeys(shortcuts->thirdCandidateKeys, "third_candidate_keys");
     config_.update.mutableValue()->autoUpdate.setValue(
         boolSetting("auto_update", true));
+    for (const char *key : {"page_size", "vertical", "preedit_position",
+                            "candidate_label_style", "candidate_size",
+                            "theme_mode"})
+      if (j && json_object_is_type(j.get(), json_type_object))
+        json_object_object_del(j.get(), key);
+    engineSettings_ = std::move(j);
   }
   void saveNativeConfig() {
     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
@@ -1985,12 +2040,17 @@ class WeType : public InputMethodEngineV2 {
     ++s->vMenuGeneration;
     s->vMenuTitle = std::move(title);
     s->vMenuEntries = std::move(entries);
+    s->candidatePage = s->candidateCursor = 0;
+    updateVMenu(ic, s);
+    panel(ic, s);
+  }
+  void updateVMenu(InputContext *ic, State *s) {
     auto list = std::make_unique<CommonCandidateList>();
     list->setPageSize(pageSize_);
     list->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
     const bool nativeLabels = *config_.appearance->labelStyle ==
                               wetype_config::CandidateLabelStyle::Fcitx;
-    list->setSelectionKey(nativeLabels && kind != VMenu::Main
+    list->setSelectionKey(nativeLabels && s->vMenu != VMenu::Main
                               ? Key::keyListFromString("1 2 3 4 5 6 7 8 9")
                               : KeyList{});
     list->setLayoutHint(vertical_ ? CandidateLayoutHint::Vertical
@@ -2007,18 +2067,18 @@ class WeType : public InputMethodEngineV2 {
       std::replace(display.begin(), display.end(), '\r', ' ');
       if (end < text.size())
         display += "…";
-      if (!nativeLabels && kind != VMenu::Main)
+      if (!nativeLabels && s->vMenu != VMenu::Main)
         display = std::to_string(i % pageSize_ + 1) + display;
       list->append<VMenuWord>(this, std::move(display), i, s->vMenuGeneration,
                               s->epoch, s->id);
     }
-    s->candidatePage = s->candidateCursor = 0;
     if (list->totalSize()) {
-      list->setPage(0);
-      list->setGlobalCursorIndex(0);
+      s->candidateCursor = std::clamp(s->candidateCursor, 0, list->totalSize() - 1);
+      s->candidatePage = s->candidateCursor / pageSize_;
+      list->setPage(s->candidatePage);
+      list->setGlobalCursorIndex(s->candidateCursor);
     }
     ic->inputPanel().setCandidateList(std::move(list));
-    panel(ic, s);
   }
   void mainVMenu(InputContext *ic) {
     nativeVMenu(ic, VMenu::Main, "快捷工具（数字计算，空格选择）",
@@ -2907,6 +2967,7 @@ class WeType : public InputMethodEngineV2 {
     const char *override = getenv("WETYPE_BACKEND_LAUNCHER");
     std::string launcher = override ? override : WETYPE_LAUNCHER;
     char *argv[] = {launcher.data(), nullptr};
+    const auto identity = identityStamp();
     int result = posix_spawn(&child_, launcher.c_str(), &actions, nullptr, argv,
                              environ);
     posix_spawn_file_actions_destroy(&actions);
@@ -2918,6 +2979,7 @@ class WeType : public InputMethodEngineV2 {
       child_ = -1;
       return false;
     }
+    backendIdentity_ = identity;
     write_ = to[1];
     read_ = from[0];
     fcntl(write_, F_SETFL, fcntl(write_, F_GETFL) | O_NONBLOCK);
@@ -3222,6 +3284,16 @@ class WeType : public InputMethodEngineV2 {
         }
       }
     s->revision = wire::number(j.get(), "revision");
+    s->candidates.reset(json_object_get(wire::get(j.get(), "candidates")));
+    s->cloudFlags.reset(json_object_get(wire::get(j.get(), "cloud")));
+    updateCandidates(ic, s);
+    panel(ic, s);
+    auto deferred = std::move(s->deferredKeys);
+    s->deferredKeys.clear();
+    replayDeferredKeys(ic, std::move(deferred));
+  }
+
+  void updateCandidates(InputContext *ic, State *s) {
     auto list = std::make_unique<CommonCandidateList>();
     list->setPageSize(pageSize_);
     list->setCursorPositionAfterPaging(CursorPositionAfterPaging::ResetToFirst);
@@ -3231,8 +3303,9 @@ class WeType : public InputMethodEngineV2 {
         nativeLabels ? Key::keyListFromString("1 2 3 4 5 6 7 8 9") : KeyList{});
     list->setLayoutHint(vertical_ ? CandidateLayoutHint::Vertical
                                   : CandidateLayoutHint::Horizontal);
-    auto *candidates = wire::get(j.get(), "candidates");
-    auto *cloudFlags = wire::get(j.get(), "cloud");
+    auto *candidates = s->candidates.get();
+    auto *cloudFlags = s->cloudFlags.get();
+    const bool wechat = wetype::WeChatEmoticons::isWeChat(ic->program());
     if ((!s->preedit.empty() || s->vMode) && candidates &&
         json_object_is_type(candidates, json_type_array))
       for (size_t i = 0;
@@ -3255,10 +3328,7 @@ class WeType : public InputMethodEngineV2 {
             display += "☁";
           auto text = std::string_view(json_object_get_string(v),
                                        json_object_get_string_len(v));
-          const auto *emoticon =
-              wetype::WeChatEmoticons::isWeChat(ic->program())
-                  ? wechatEmoticons_.find(text)
-                  : nullptr;
+          const auto *emoticon = wechat ? wechatEmoticons_.find(text) : nullptr;
           if (emoticon && wechatFont_)
             display += utf8::UCS4ToUTF8(emoticon->codepoint) + " ";
           display += text;
@@ -3277,10 +3347,6 @@ class WeType : public InputMethodEngineV2 {
       ic->inputPanel().setCandidateList(std::move(list));
     } else
       ic->inputPanel().setCandidateList(nullptr);
-    panel(ic, s);
-    auto deferred = std::move(s->deferredKeys);
-    s->deferredKeys.clear();
-    replayDeferredKeys(ic, std::move(deferred));
   }
 
 public:
@@ -3506,6 +3572,7 @@ public:
     return &config_;
   }
   void setConfig(const RawConfig &raw) override {
+    const auto before = config_;
     const auto oldTheme = *config_.appearance->theme;
     const auto oldSize = *config_.appearance->candidateSize;
     config_.load(raw, true);
@@ -3513,6 +3580,10 @@ public:
     const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
     saveNativeConfig();
     applyAppearance(themeChanged, sizeChanged);
+    if (presentationOnly(before)) {
+      refreshPresentation();
+      return;
+    }
     if (runtimePhase_ != RuntimePhase::Idle) {
       runtimeConfigApply_ = true;
       return;
@@ -3535,9 +3606,16 @@ public:
     setConfig(raw);
   }
   void reloadConfig() override {
+    const auto before = config_;
+    auto oldEngineSettings = std::move(engineSettings_);
+    reloadSettings();
+    if (presentationOnly(before) && oldEngineSettings && engineSettings_ &&
+        json_object_equal(oldEngineSettings.get(), engineSettings_.get())) {
+      refreshPresentation();
+      return;
+    }
     cancelVoice();
     englishDictionary_.reset();
-    reloadSettings();
     if (networkEnabled_)
       startSync();
     else

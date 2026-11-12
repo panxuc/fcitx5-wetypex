@@ -33,6 +33,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QUrl>
@@ -94,6 +95,11 @@ static bool writeFile(const QString &name, const QByteArray &bytes) {
 }
 static bool writeSetting(const QString &key, const QJsonValue &value) {
   auto settings = readSettings();
+  if ((key == "page_size" || key == "vertical" ||
+       key == "candidate_label_style" || key == "preedit_position" ||
+       key == "candidate_size" || key == "theme_mode") &&
+      settings.value(key) == value)
+    return true;
   settings[key] = value;
   if (!writeFile(configDir() + "/wetypex.json",
                  QJsonDocument(settings).toJson()))
@@ -1244,16 +1250,32 @@ int main(int argc, char **argv) {
   visual.body->addWidget(
       rowsCard({row("候选序号样式", "微信风格：1输入；Fcitx 默认：1. 输入",
                     labelStyle, 64)}));
+  auto *pageSize = new QSpinBox;
+  pageSize->setRange(3, 9);
+  pageSize->setValue(settings.value("page_size").toInt(5));
+  visual.body->addWidget(rowsCard(
+      {row("每页候选数", "默认 5 项，可设置为 3–9 项", pageSize, 64)}));
   auto updatePreview = [=] {
-    preview->setText(
-        labelStyle->currentIndex() == 1
-            ? "<span style='background:#13b77a;color:white;padding:5px'>1. "
-              "输入</span>　2. 输入法　3. 诗心　4. 为新　5. 唯心"
-            : "<span "
-              "style='background:#13b77a;color:white;padding:5px'>1输入</"
-              "span>　2输入法　3诗心　4为新　5唯心");
+    const QStringList words{"输入", "输入法", "诗心", "为新", "唯心",
+                            "维新", "威信", "微新", "惟心"};
+    QStringList candidates;
+    for (int i = 0; i < pageSize->value(); ++i) {
+      auto text = QString::number(i + 1) +
+                  (labelStyle->currentIndex() == 1 ? ". " : "") + words[i];
+      if (!i)
+        text = "<span style='background:#13b77a;color:white;padding:5px'>" +
+               text + "</span>";
+      candidates.append(text);
+    }
+    preview->setText(candidates.join(QStringLiteral("　")));
   };
+  preview->setWordWrap(true);
   updatePreview();
+  QObject::connect(pageSize, qOverload<int>(&QSpinBox::valueChanged),
+                   [=](int value) {
+                     writeSetting("page_size", value);
+                     updatePreview();
+                   });
   QObject::connect(labelStyle, qOverload<int>(&QComboBox::currentIndexChanged),
                    [=](int index) {
                      writeSetting("candidate_label_style",

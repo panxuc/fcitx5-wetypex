@@ -137,11 +137,14 @@ static void configure_cloud_session(unsigned char *config) {
 static void read_service_candidates(void *iterator,
                                     std::vector<ServiceCandidate> &output,
                                     bool wechat, bool calendarFirst) {
+  // A service process keeps one original runtime for its entire lifetime.
+  // Resolve this hot C API once rather than looking up its symbol per rank.
+  static const auto next =
+      reinterpret_cast<bool (*)(void *, void *)>(syms.at("_wxime_candidate_next"));
   output.clear();
   for (unsigned rank = 0; iterator && rank < 50 && output.size() < 50; rank++) {
     alignas(16) unsigned char c[512]{};
-    if (!((bool (*)(void *, void *))syms.at("_wxime_candidate_next"))(iterator,
-                                                                      c))
+    if (!next(iterator, c))
       break;
     const char *text;
     const unsigned char *id;
@@ -157,7 +160,9 @@ static void read_service_candidates(void *iterator,
     if (service_emoticons().hidden(candidate.text, wechat))
       continue;
     candidate.engineText = candidate.text;
-    candidate.text = service_emoticons().commit(candidate.text, wechat);
+    if (wechat)
+      if (const auto *entry = service_emoticons().find(candidate.text))
+        candidate.text = entry->commit;
     memcpy(&candidate.cover, c + 0x64, 4);
     // Cloud candidates carry a fixed marker pair in the engine's candidate
     // struct; local candidates leave both fields zero.
@@ -458,6 +463,27 @@ static void service_snapshot(ServiceSession &s, json_object *response) {
   s.commits.clear();
 }
 static void service_loop() {
+  // The resident backend starts before typing. Prime the original pinyin
+  // path and QEMU's translation cache here instead of on the first real key.
+  // This temporary session has cloud/emoji/V-mode disabled and never selects
+  // or commits a word; real sessions keep their original settings and order.
+  if (getenv("WETYPE_QEMU_WRAPPED")) {
+    ServiceSession warm;
+    alignas(16) unsigned char config[2048]{};
+    config[1] = 1;
+    for (unsigned offset : {0x8u, 0x9u, 0xau, 0xbu, 0xcu})
+      config[offset] = 1;
+    warm.engine = ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
+    if (warm.engine) {
+      ((void (*)(uint64_t, decltype(&service_listener), void *))syms.at(
+          "_wxime_add_session_listener"))(warm.engine, service_listener, &warm);
+      const char key = 'a';
+      ((void (*)(uint64_t, const char *, uint32_t, const void *, uint32_t))syms.at(
+          "_wxime_process_input"))(warm.engine, &key, 1, nullptr, 0);
+      ((void (*)(uint64_t))syms.at("_wxime_reset_session"))(warm.engine);
+      ((void (*)(uint64_t))syms.at("_wxime_destroy_session"))(warm.engine);
+    }
+  }
   ServiceTransport transport;
   std::map<uint64_t, std::unique_ptr<ServiceSession>> sessions;
   printf("{\"event\":\"ready\",\"protocol\":1,\"backend\":\"original-wetype-"
