@@ -302,7 +302,7 @@
  WORKER_STATUS = None
  WORKER_FD = None
  
-@@ -32,13 +36,26 @@
+@@ -24,13 +28,26 @@
      with zipfile.ZipFile(archive) as z:
          assets={}
          system_theme_root=next((path for path in (
@@ -333,7 +333,7 @@
          for name, original in {'input':'icon_setup_sidebar_keyboard.svg',
                                 'voice':'icon_setup_sidebar_microphone.svg',
                                 'phrases':'icon_setup_sidebar_changyongyu.svg',
-@@ -95,6 +112,8 @@
+@@ -87,6 +104,8 @@
          candidate=prefix+'candidate/icons/'
          for theme,variant in (('wetypex-light','light'),
                                ('wetypex-dark','dark')):
@@ -342,7 +342,7 @@
              assets['fcitx5/themes/'+theme+'/next.svg']=(
                  candidate+'bubble_normal_arrow_lower_'+variant+'.svg')
              assets['fcitx5/themes/'+theme+'/prev.svg']=(
-@@ -277,7 +296,7 @@
+@@ -269,7 +288,7 @@
          fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
          with os.fdopen(fd,'wb') as stream:stream.write(result.stderr[-262144:])
          return False,f'{label} failed (exit {result.returncode}); see {path}'
@@ -351,7 +351,7 @@
      host=support/'wetypex-engine-host'
      locale=support/'locale.so'
      if not locale.exists():locale=support/'wetypex-locale.so'
-@@ -300,12 +319,13 @@
+@@ -294,12 +313,13 @@
          return False,'unable to check UTF-8 JSON compatibility'
      with tempfile.TemporaryDirectory(prefix='.wetypex-check-') as work:
          command=[bwrap,'--unshare-net','--unshare-pid','--die-with-parent',
@@ -466,8 +466,8 @@
 +static std::string active_libcxx_path = "@NIX_LIBCXX@";
  static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
  static bool service_mode = false;
- static bool original_cpu_supported() {
-@@ -1675,7 +1675,7 @@
+ 
+@@ -1782,7 +1782,7 @@
    if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
      h = RTLD_DEFAULT;
    if (!strcmp(n, "__cxa_throw")) {
@@ -476,7 +476,7 @@
      return dlsym(abi, n);
    }
    return dlsym(h, n);
-@@ -3388,7 +3388,7 @@
+@@ -3538,7 +3538,7 @@
    }
  #endif
    if (!dlopen(active_libcxx_path.c_str(), RTLD_NOW | RTLD_GLOBAL) ||
@@ -499,7 +499,7 @@
    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -935,7 +935,10 @@
+@@ -957,7 +957,10 @@
    auto *microphone = new QComboBox;
    microphone->addItem("自动检测");
    QProcess pipewire;
@@ -511,7 +511,7 @@
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1525,7 +1528,7 @@
+@@ -1570,7 +1573,7 @@
          QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
    });
    about.body->addWidget(rowsCard(
