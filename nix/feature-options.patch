@@ -280,7 +280,7 @@ index 9cc292cf..dfa55766 100644
    BusinessIdentity identity = load_business_identity(identity_path);
    if (identity.model.empty()) {
 diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
-index 24f7b35e..d6e666c5 100644
+index 84998ad5..fa31fc62 100644
 --- a/src/backend/macos_host.cpp
 +++ b/src/backend/macos_host.cpp
 @@ -2,6 +2,12 @@
@@ -296,7 +296,7 @@ index 24f7b35e..d6e666c5 100644
  #include <algorithm>
  #include <arpa/inet.h>
  #include <array>
-@@ -3617,6 +3623,19 @@ int main(int argc, char **argv) {
+@@ -3597,6 +3603,19 @@ int main(int argc, char **argv) {
    }
    if (!strcmp(argv[2], "cpu-check"))
      return original_cpu_supported(!strcmp(argv[1], "voice")) ? 0 : 78;
@@ -317,7 +317,7 @@ index 24f7b35e..d6e666c5 100644
      std::error_code error;
      const auto path = std::filesystem::canonical(workspace, error);
 diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
-index c4fbea05..1fa79a18 100644
+index 28a6f054..14cef97c 100644
 --- a/src/plugin/config.hpp
 +++ b/src/plugin/config.hpp
 @@ -5,6 +5,13 @@
@@ -334,7 +334,7 @@ index c4fbea05..1fa79a18 100644
  namespace wetype_config {
  using namespace fcitx;
  
-@@ -149,8 +156,9 @@ FCITX_CONFIGURATION(
+@@ -151,8 +158,9 @@ FCITX_CONFIGURATION(
          {Key("Shift_L")},
          KeyListConstrain({KeyConstrainFlag::AllowModifierLess,
                            KeyConstrainFlag::AllowModifierOnly})};
@@ -346,7 +346,7 @@ index c4fbea05..1fa79a18 100644
          this,
          "AiAssistantKeys",
          "AI 助手按键",
-@@ -234,7 +242,8 @@ FCITX_CONFIGURATION(UpdateConfig,
+@@ -236,7 +244,8 @@ FCITX_CONFIGURATION(UpdateConfig,
  
  FCITX_CONFIGURATION(
      WeTypeConfig, Option<InputConfig> input{this, "Input", "输入"};
@@ -357,7 +357,7 @@ index c4fbea05..1fa79a18 100644
                                            "常用语和剪贴板"};
      Option<AppearanceConfig> appearance{this, "Appearance", "外观"};
 diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
-index f07bc448..c707aa8e 100644
+index 142a2beb..9cc686aa 100644
 --- a/src/plugin/wetype.cpp
 +++ b/src/plugin/wetype.cpp
 @@ -16,6 +16,7 @@
@@ -380,7 +380,7 @@ index f07bc448..c707aa8e 100644
  template <typename Context, typename Flag, typename = void>
  struct HasCursorCommit : std::false_type {};
  template <typename Context, typename Flag>
-@@ -1317,12 +1323,49 @@ class WeType : public InputMethodEngineV2 {
+@@ -1321,6 +1327,39 @@ class WeType : public InputMethodEngineV2 {
        s->symbolAutoState = 0;
      return true;
    }
@@ -417,31 +417,40 @@ index f07bc448..c707aa8e 100644
 +      voice->smartPolish.setValue(false);
 +    }
 +  }
-   void reloadSettings() {
+   static std::filesystem::path configPath() {
      const char *config = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-     std::string path =
-         config ? config : std::string(home ? home : "") + "/.config";
-     const auto newPath = path + "/fcitx5/wetypex.json";
-     std::ifstream f(newPath);
-+    if (!f && preferencesMissing(newPath)) {
+     return (config && *config ? std::filesystem::path(config)
+@@ -1369,7 +1408,10 @@ class WeType : public InputMethodEngineV2 {
+   }
+   bool rememberPunctuation(bool chinese) {
+     // Patch only this preference; settings edited by another UI stay intact.
+-    std::ifstream file(configPath());
++    const auto readPath = preferencesMissing(configPath())
++                              ? std::filesystem::path(WETYPE_DEFAULT_SETTINGS)
++                              : configPath();
++    std::ifstream file(readPath);
+     std::string bytes(16385, '\0');
+     file.read(bytes.data(), bytes.size());
+     bytes.resize(file.gcount());
+@@ -1386,6 +1428,10 @@ class WeType : public InputMethodEngineV2 {
+   }
+   void reloadSettings() {
+     std::ifstream f(configPath());
++    if (!f && preferencesMissing(configPath())) {
 +      f.clear();
 +      f.open(WETYPE_DEFAULT_SETTINGS);
 +    }
      std::string bytes(16385, '\0');
      f.read(bytes.data(), bytes.size());
      bytes.resize(f.gcount());
-@@ -1532,6 +1575,7 @@ class WeType : public InputMethodEngineV2 {
+@@ -1594,10 +1640,14 @@ class WeType : public InputMethodEngineV2 {
        if (j && json_object_is_type(j.get(), json_type_object))
          json_object_object_del(j.get(), key);
      engineSettings_ = std::move(j);
 +    enforceBuildFeatures();
    }
    void saveNativeConfig() {
-     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-@@ -1544,7 +1588,10 @@ class WeType : public InputMethodEngineV2 {
-     if (error)
-       return;
-     auto path = directory / "wetypex.json";
+     const auto path = configPath();
 -    std::ifstream oldFile(path);
 +    const auto readPath = preferencesMissing(path)
 +                              ? std::filesystem::path(WETYPE_DEFAULT_SETTINGS)
@@ -450,7 +459,7 @@ index f07bc448..c707aa8e 100644
      std::string oldBytes((std::istreambuf_iterator<char>(oldFile)), {});
      auto json = wire::parse(oldBytes);
      if (!json || !json_object_is_type(json.get(), json_type_object))
-@@ -1628,6 +1675,7 @@ class WeType : public InputMethodEngineV2 {
+@@ -1682,6 +1732,7 @@ class WeType : public InputMethodEngineV2 {
      wire::put(json.get(), "device_dictionary_sync",
                bool(*devices.dictionarySync));
      wire::put(json.get(), "device_phrase_sync", bool(*devices.phraseSync));
@@ -458,7 +467,7 @@ index f07bc448..c707aa8e 100644
      const auto &voice = *config_.voice;
      wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
      wire::put(json.get(), "voice_hold_shortcut", bool(*voice.holdShortcut));
-@@ -1648,10 +1696,13 @@ class WeType : public InputMethodEngineV2 {
+@@ -1702,10 +1753,13 @@ class WeType : public InputMethodEngineV2 {
              ? "空格替换标点"
              : "智能标点";
      wire::put(json.get(), "voice_punctuation", std::string(punctuation));
@@ -472,7 +481,7 @@ index f07bc448..c707aa8e 100644
      wire::put(json.get(), "v_mode", bool(*shortcuts.vMode));
      wire::put(json.get(), "half_full_switch", bool(*shortcuts.halfFull));
      wire::put(json.get(), "punctuation_switch",
-@@ -1670,7 +1721,9 @@ class WeType : public InputMethodEngineV2 {
+@@ -1724,7 +1778,9 @@ class WeType : public InputMethodEngineV2 {
        wire::put(json.get(), name, Key::keyListToString(*option));
      };
      saveKeys("language_switch_keys", shortcuts.languageSwitchKeys);
@@ -482,22 +491,7 @@ index f07bc448..c707aa8e 100644
      saveKeys("v_mode_keys", shortcuts.vModeKeys);
      saveKeys("half_full_keys", shortcuts.halfFullKeys);
      saveKeys("punctuation_switch_keys", shortcuts.punctuationSwitchKeys);
-@@ -1680,10 +1733,13 @@ class WeType : public InputMethodEngineV2 {
-     saveKeys("second_candidate_keys", shortcuts.secondCandidateKeys);
-     saveKeys("third_candidate_keys", shortcuts.thirdCandidateKeys);
-     wire::put(json.get(), "auto_update", bool(*config_.update->autoUpdate));
-+    const auto serialized = wire::dump(json.get()) + '\n';
-+    if (serialized.size() > 16384)
-+      return;
-     auto temporary = path;
-     temporary += ".tmp";
-     std::ofstream output(temporary, std::ios::trunc);
--    output << wire::dump(json.get()) << '\n';
-+    output << serialized;
-     output.close();
-     chmod(temporary.c_str(), 0600);
-     std::filesystem::rename(temporary, path, error);
-@@ -1803,6 +1859,8 @@ class WeType : public InputMethodEngineV2 {
+@@ -1851,6 +1907,8 @@ class WeType : public InputMethodEngineV2 {
      }
    }
    bool voiceControl(const char *operation, bool traditional = false) {
@@ -506,7 +500,7 @@ index f07bc448..c707aa8e 100644
      std::ifstream input(stateDirectory() / "voice/control.json");
      std::string bytes(1025, '\0');
      input.read(bytes.data(), bytes.size());
-@@ -1855,6 +1913,8 @@ class WeType : public InputMethodEngineV2 {
+@@ -1903,6 +1961,8 @@ class WeType : public InputMethodEngineV2 {
      return delivered;
    }
    void primeVoice() {
@@ -515,7 +509,7 @@ index f07bc448..c707aa8e 100644
      voiceWarmTick_ = now(CLOCK_MONOTONIC);
      if (networkEnabled_ &&
          (*config_.voice->launchShortcut || *config_.voice->holdShortcut) &&
-@@ -1883,6 +1943,8 @@ class WeType : public InputMethodEngineV2 {
+@@ -1931,6 +1991,8 @@ class WeType : public InputMethodEngineV2 {
      return false;
    }
    void startVoice(InputContext *ic, bool hold) {
@@ -524,7 +518,7 @@ index f07bc448..c707aa8e 100644
      if (voicePending_ || ic->capabilityFlags().test(CapabilityFlag::Password))
        return;
      auto *s = state(ic);
-@@ -1945,6 +2007,8 @@ class WeType : public InputMethodEngineV2 {
+@@ -1993,6 +2055,8 @@ class WeType : public InputMethodEngineV2 {
          panel(ic, ic->propertyFor(&factory_));
    }
    void receiveVoice() {
@@ -533,7 +527,7 @@ index f07bc448..c707aa8e 100644
      if (voicePending_ && voiceDaemonPid_ > 1 &&
          kill(voiceDaemonPid_, 0) < 0 && errno == ESRCH) {
        cancelVoice(false);
-@@ -3356,6 +3420,7 @@ public:
+@@ -3401,6 +3465,7 @@ public:
        : instance_(instance), factory_([this](InputContext &ic) {
            return new State(++nextId_, ic);
          }) {
@@ -541,7 +535,7 @@ index f07bc448..c707aa8e 100644
      reloadSettings();
      instance_->inputContextManager().registerProperty("wetypexState",
                                                        &factory_);
-@@ -3532,11 +3597,11 @@ public:
+@@ -3577,11 +3642,11 @@ public:
              if (!start())
                scheduleRestart();
            }
@@ -555,7 +549,7 @@ index f07bc448..c707aa8e 100644
              primeVoice();
            pollVModeWindow();
            if (*config_.update->autoUpdate &&
-@@ -3578,6 +3643,7 @@ public:
+@@ -3623,6 +3688,7 @@ public:
      const auto oldTheme = *config_.appearance->theme;
      const auto oldSize = *config_.appearance->candidateSize;
      config_.load(raw, true);
@@ -563,7 +557,7 @@ index f07bc448..c707aa8e 100644
      const bool themeChanged = *config_.appearance->theme != oldTheme;
      const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
      saveNativeConfig();
-@@ -4331,8 +4397,8 @@ public:
+@@ -4380,8 +4446,8 @@ public:
        return;
      if (ic->capabilityFlags().test(CapabilityFlag::Password))
        return;
@@ -575,7 +569,7 @@ index f07bc448..c707aa8e 100644
        const auto &surrounding = ic->surroundingText();
        if (surrounding.isValid() && surrounding.cursor()) {
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp
-index e9227d24..223eb10d 100644
+index 808c46cc..7b1905b0 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
 @@ -52,7 +52,9 @@ static QString configDir() {
@@ -638,7 +632,7 @@ index e9227d24..223eb10d 100644
    deviceNotice->raise();
    root->addWidget(sidebar);
    auto *right = new QWidget;
-@@ -934,7 +953,9 @@ int main(int argc, char **argv) {
+@@ -937,7 +956,9 @@ int main(int argc, char **argv) {
                    true, "standalone"))}));
    pages->addWidget(input.widget);
  
@@ -648,7 +642,7 @@ index e9227d24..223eb10d 100644
    auto *voiceHero = card();
    auto *voiceHeroLayout = new QVBoxLayout(voiceHero);
    voiceHeroLayout->setContentsMargins(16, 18, 16, 18);
-@@ -1071,6 +1092,13 @@ int main(int argc, char **argv) {
+@@ -1074,6 +1095,13 @@ int main(int argc, char **argv) {
                             true, "voice_smart_polish"),
                      52)}));
    pages->addWidget(voice.widget);
@@ -662,7 +656,7 @@ index e9227d24..223eb10d 100644
  
    auto phrases = page("", false);
    phrases.widget->layout()->setContentsMargins(20, 0, 22, 0);
-@@ -1334,18 +1362,23 @@ int main(int argc, char **argv) {
+@@ -1337,18 +1365,23 @@ int main(int argc, char **argv) {
    }
    if (vModeTriggers.isEmpty())
      vModeTriggers << QStringLiteral("未绑定");
@@ -698,7 +692,7 @@ index e9227d24..223eb10d 100644
        {row("语音输入", {}, nullptr, 44),
         shortcutRow(
             "启动语音输入",
-@@ -1357,7 +1390,10 @@ int main(int argc, char **argv) {
+@@ -1360,7 +1393,10 @@ int main(int argc, char **argv) {
             "按住说话",
             wetype::settingBool(settings.value("voice_hold_shortcut"), true),
             {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
@@ -710,7 +704,7 @@ index e9227d24..223eb10d 100644
    shortcuts.body->addWidget(rowsCard(
        {row("输入状态切换", {}, nullptr, 44),
         shortcutRow(
-@@ -1718,11 +1754,16 @@ int main(int argc, char **argv) {
+@@ -1721,11 +1757,16 @@ int main(int argc, char **argv) {
    pages->addWidget(about.widget);
  
    QObject::connect(navigation, &QListWidget::currentRowChanged, pages,

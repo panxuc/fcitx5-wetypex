@@ -899,9 +899,12 @@ int main(int argc, char **argv) {
                      {"eng/ong", "fuzzy_eng_ong", false}});
   });
   input.body->addWidget(rowsCard(
-      {row("中文模式默认使用中文标点", "关闭后默认使用 , . ! ? 等英文标点；Ctrl + . 可临时切换，独立于全半角",
+      {row("中文模式默认使用中文标点", "关闭后默认使用 , . ! ? 等英文标点，独立于全半角",
            toggle(wetype::settingBool(settings.value("chinese_punctuation"), true),
                   true, "chinese_punctuation")),
+       row("记住中英文标点切换", "开启后，Ctrl + . 的选择成为默认偏好，切换输入框或重启后仍保留",
+           toggle(wetype::settingBool(settings.value("remember_punctuation"), false),
+                  true, "remember_punctuation")),
        row("输入中文时，将「/?」按键替换为 、", {},
            toggle(
                wetype::settingBool(settings.value("slash_punctuation"), true),

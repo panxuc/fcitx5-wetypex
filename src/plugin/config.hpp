@@ -60,6 +60,8 @@ FCITX_CONFIGURATION(
     Option<bool> largeEmoji{this, "LargeEmoji", "大表情推荐", true};
     Option<bool> symbolEmoji{this, "SymbolEmoji", "符号表情推荐", true};
     Option<bool> chinesePunctuation{this, "ChinesePunctuation", "中文模式默认使用中文标点", true};
+    Option<bool> rememberPunctuation{this, "RememberPunctuation",
+                                      "记住中英文标点切换", false};
     Option<bool> slashPunctuation{this, "SlashPunctuation",
                                   "输入中文时将 /? 替换为 、", true};
     Option<bool> symbolAutoChange{this, "SymbolAutoChange", "符号自动转换",

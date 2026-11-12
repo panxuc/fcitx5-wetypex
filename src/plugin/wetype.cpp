@@ -838,7 +838,7 @@ class WeType : public InputMethodEngineV2 {
       return IdentityStamp{};
     return std::nullopt;
   }
-  bool presentationOnly(const wetype_config::WeTypeConfig &before) const {
+  bool frontendOnly(const wetype_config::WeTypeConfig &before) const {
     if (before == config_ || child_ <= 0 || failed_ ||
         runtimePhase_ != RuntimePhase::Idle || !backendIdentity_ ||
         backendIdentity_ != identityStamp())
@@ -851,6 +851,9 @@ class WeType : public InputMethodEngineV2 {
     appearance->labelStyle.setValue(*before.appearance->labelStyle);
     appearance->candidateSize.setValue(*before.appearance->candidateSize);
     appearance->theme.setValue(*before.appearance->theme);
+    auto *input = comparable.input.mutableValue();
+    input->chinesePunctuation.setValue(*before.input->chinesePunctuation);
+    input->rememberPunctuation.setValue(*before.input->rememberPunctuation);
     return comparable == before;
   }
   void refreshPresentation() {
@@ -865,6 +868,7 @@ class WeType : public InputMethodEngineV2 {
         else
           updateCandidates(ic, s);
         panel(ic, s);
+        ic->updateUserInterface(UserInterfaceComponent::StatusArea);
       }
   }
   std::optional<wetype::EnglishDictionary> englishDictionary_;
@@ -1317,12 +1321,71 @@ class WeType : public InputMethodEngineV2 {
       s->symbolAutoState = 0;
     return true;
   }
-  void reloadSettings() {
+  static std::filesystem::path configPath() {
     const char *config = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-    std::string path =
-        config ? config : std::string(home ? home : "") + "/.config";
-    const auto newPath = path + "/fcitx5/wetypex.json";
-    std::ifstream f(newPath);
+    return (config && *config ? std::filesystem::path(config)
+                             : std::filesystem::path(home ? home : "") / ".config") /
+           "fcitx5/wetypex.json";
+  }
+  static bool storeSettings(json_object *settings) {
+    const auto path = configPath();
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error)
+      return false;
+    const auto bytes = wire::dump(settings) + '\n';
+    if (bytes.size() > 16384)
+      return false;
+    auto temporary = path.string() + ".XXXXXX";
+    const int fd = mkostemp(temporary.data(), O_CLOEXEC);
+    if (fd < 0)
+      return false;
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+      const auto count = ::write(fd, bytes.data() + offset, bytes.size() - offset);
+      if (count > 0)
+        offset += size_t(count);
+      else if (count < 0 && errno == EINTR)
+        continue;
+      else
+        break;
+    }
+    const bool closed = close(fd) == 0;
+    if (offset == bytes.size() && closed &&
+        ::rename(temporary.c_str(), path.c_str()) == 0)
+      return true;
+    unlink(temporary.c_str());
+    return false;
+  }
+  void resetPunctuationOverrides() {
+    for (const auto &[id, ref] : contexts_)
+      if (auto *ic = ref.get()) {
+        auto *s = ic->propertyFor(&factory_);
+        s->englishPunctuation.reset();
+        s->symbolAutoState = 0;
+        clearNumericCorrection(s);
+        ic->updateUserInterface(UserInterfaceComponent::StatusArea);
+      }
+  }
+  bool rememberPunctuation(bool chinese) {
+    // Patch only this preference; settings edited by another UI stay intact.
+    std::ifstream file(configPath());
+    std::string bytes(16385, '\0');
+    file.read(bytes.data(), bytes.size());
+    bytes.resize(file.gcount());
+    auto settings = bytes.size() > 16384 ? wire::Json{} : wire::parse(bytes);
+    if (!settings || !json_object_is_type(settings.get(), json_type_object))
+      return false;
+    wire::put(settings.get(), "chinese_punctuation", chinese);
+    if (!storeSettings(settings.get()))
+      return false;
+    chinesePunctuation_ = chinese;
+    config_.input.mutableValue()->chinesePunctuation.setValue(chinese);
+    resetPunctuationOverrides();
+    return true;
+  }
+  void reloadSettings() {
+    std::ifstream f(configPath());
     std::string bytes(16385, '\0');
     f.read(bytes.data(), bytes.size());
     bytes.resize(f.gcount());
@@ -1334,16 +1397,12 @@ class WeType : public InputMethodEngineV2 {
     pageSize_ = std::clamp(int(wire::number(j.get(), "page_size", 5)), 3, 9);
     vertical_ = json_object_get_boolean(wire::get(j.get(), "vertical"));
     const bool previousPunctuation = chinesePunctuation_;
+    const bool remember = boolSetting("remember_punctuation", false);
     auto *punctuation = wire::get(j.get(), "chinese_punctuation");
     chinesePunctuation_ = !punctuation || json_object_get_boolean(punctuation);
-    if (previousPunctuation != chinesePunctuation_)
-      for (const auto &[id, ref] : contexts_)
-        if (auto *ic = ref.get()) {
-          auto *state = ic->propertyFor(&factory_);
-          state->englishPunctuation.reset();
-          state->symbolAutoState = 0;
-          clearNumericCorrection(state);
-        }
+    if (previousPunctuation != chinesePunctuation_ ||
+        remember != *config_.input->rememberPunctuation)
+      resetPunctuationOverrides();
     auto *slash = wire::get(j.get(), "slash_punctuation");
     slashPunctuation_ = !slash || json_object_get_boolean(slash);
     auto *symbolChange = wire::get(j.get(), "symbol_auto_change");
@@ -1391,6 +1450,7 @@ class WeType : public InputMethodEngineV2 {
         json_object_get_boolean(wire::get(j.get(), "symbol_auto_pair")));
     input->standalone.setValue(!networkEnabled_);
     input->chinesePunctuation.setValue(chinesePunctuation_);
+    input->rememberPunctuation.setValue(remember);
     input->defaultLanguage.setValue(
         wire::str(j.get(), "default_language") == "english"
             ? wetype_config::DefaultLanguage::English
@@ -1529,22 +1589,14 @@ class WeType : public InputMethodEngineV2 {
         boolSetting("auto_update", true));
     for (const char *key : {"page_size", "vertical", "preedit_position",
                             "candidate_label_style", "candidate_size",
-                            "theme_mode"})
+                            "theme_mode", "chinese_punctuation",
+                            "remember_punctuation"})
       if (j && json_object_is_type(j.get(), json_type_object))
         json_object_object_del(j.get(), key);
     engineSettings_ = std::move(j);
   }
   void saveNativeConfig() {
-    const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
-    std::filesystem::path directory =
-        configHome ? configHome
-                   : std::filesystem::path(home ? home : "") / ".config";
-    directory /= "fcitx5";
-    std::error_code error;
-    std::filesystem::create_directories(directory, error);
-    if (error)
-      return;
-    auto path = directory / "wetypex.json";
+    const auto path = configPath();
     std::ifstream oldFile(path);
     std::string oldBytes((std::istreambuf_iterator<char>(oldFile)), {});
     auto json = wire::parse(oldBytes);
@@ -1574,6 +1626,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "large_emoji", bool(*input.largeEmoji));
     wire::put(json.get(), "symbol_emoji", bool(*input.symbolEmoji));
     wire::put(json.get(), "chinese_punctuation", bool(*input.chinesePunctuation));
+    wire::put(json.get(), "remember_punctuation", bool(*input.rememberPunctuation));
     wire::put(json.get(), "slash_punctuation", bool(*input.slashPunctuation));
     wire::put(json.get(), "symbol_auto_change", bool(*input.symbolAutoChange));
     wire::put(json.get(), "symbol_auto_pair", bool(*input.symbolAutoPair));
@@ -1681,13 +1734,7 @@ class WeType : public InputMethodEngineV2 {
     saveKeys("second_candidate_keys", shortcuts.secondCandidateKeys);
     saveKeys("third_candidate_keys", shortcuts.thirdCandidateKeys);
     wire::put(json.get(), "auto_update", bool(*config_.update->autoUpdate));
-    auto temporary = path;
-    temporary += ".tmp";
-    std::ofstream output(temporary, std::ios::trunc);
-    output << wire::dump(json.get()) << '\n';
-    output.close();
-    chmod(temporary.c_str(), 0600);
-    std::filesystem::rename(temporary, path, error);
+    storeSettings(json.get());
     reloadSettings();
   }
   void applyAppearance(bool themeChanged, bool sizeChanged) {
@@ -3580,7 +3627,7 @@ public:
     const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
     saveNativeConfig();
     applyAppearance(themeChanged, sizeChanged);
-    if (presentationOnly(before)) {
+    if (frontendOnly(before)) {
       refreshPresentation();
       return;
     }
@@ -3609,7 +3656,7 @@ public:
     const auto before = config_;
     auto oldEngineSettings = std::move(engineSettings_);
     reloadSettings();
-    if (presentationOnly(before) && oldEngineSettings && engineSettings_ &&
+    if (frontendOnly(before) && oldEngineSettings && engineSettings_ &&
         json_object_equal(oldEngineSettings.get(), engineSettings_.get())) {
       refreshPresentation();
       return;
@@ -4271,7 +4318,11 @@ public:
       s->englishPunctuation = !englishPunctuation(s);
       s->symbolAutoState = 0;
       clearNumericCorrection(s);
-      modeChanged(ic, s);
+      const bool saved = !*config_.input->rememberPunctuation ||
+                         rememberPunctuation(!*s->englishPunctuation);
+      modeChanged(ic, s, saved);
+      if (!saved)
+        showModeInfo(instance_, ic, modeDescription(s) + "（未能保存标点偏好）");
       e.filterAndAccept();
       return;
     }

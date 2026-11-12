@@ -1,16 +1,16 @@
 pkgname=fcitx5-wetypex
 pkgver=3.0.1.684
-pkgrel=4
+pkgrel=5
 pkgdesc='WeTypeX native Linux input method for Fcitx5'
 url='https://github.com/panxuc/fcitx5-wetypex'
 arch=('x86_64' 'aarch64')
 license=('MIT' 'ISC' 'BSD-2-Clause' 'curl' 'Apache-2.0 WITH LLVM-exception')
 options=('!debug')
 depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'curl' 'libssl.so' 'libcrypto.so' 'bubblewrap' 'util-linux' 'python' 'python-fonttools' 'python-pillow' 'fontconfig' 'wayland' 'qt6-base' 'qt6-svg' 'qt6-webengine' 'layer-shell-qt' 'wl-clipboard' 'pipewire' 'ffmpeg' 'libnotify' 'polkit')
-optdepends=('qemu-user: original-engine compatibility for CPUs missing required instructions')
 
 makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
-optdepends=('fcitx5-configtool: manage input methods')
+optdepends=('fcitx5-configtool: manage input methods'
+            'qemu-user: original-engine compatibility for CPUs missing required instructions')
 install=fcitx5-wetypex.install
 source=("fcitx5-wetypex-${pkgver}.tar.gz"
         'https://curl.se/download/curl-8.22.0.tar.xz'

@@ -484,7 +484,7 @@ index 7e2dd5ad..f393b0b3 100644
        h, "_ZNSt3__115__get_classnameEPKcb");
    return darwin_mask(fn(s, ignorecase));
 diff --git a/src/backend/macos_host.cpp b/src/backend/macos_host.cpp
-index 5fbb14ac..24f7b35e 100644
+index 182432bc..84998ad5 100644
 --- a/src/backend/macos_host.cpp
 +++ b/src/backend/macos_host.cpp
 @@ -67,7 +67,7 @@ struct DarwinTLSImage {
@@ -496,7 +496,7 @@ index 5fbb14ac..24f7b35e 100644
  static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
  static bool service_mode = false;
  static std::string workspace_root = "/work";
-@@ -1887,7 +1887,7 @@ extern "C" void *shim_dlsym(void *h, const char *n) {
+@@ -1867,7 +1867,7 @@ extern "C" void *shim_dlsym(void *h, const char *n) {
    if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
      h = RTLD_DEFAULT;
    if (!strcmp(n, "__cxa_throw")) {
@@ -505,7 +505,7 @@ index 5fbb14ac..24f7b35e 100644
      return dlsym(abi, n);
    }
    return dlsym(h, n);
-@@ -3663,7 +3663,7 @@ int main(int argc, char **argv) {
+@@ -3643,7 +3643,7 @@ int main(int argc, char **argv) {
    }
  #endif
    if (!dlopen(active_libcxx_path.c_str(), RTLD_NOW | RTLD_GLOBAL) ||
@@ -529,10 +529,10 @@ index 3a797c5e..0e69beef 100644
    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp
-index fbf79569..e9227d24 100644
+index 7d8aa115..808c46cc 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -973,7 +973,10 @@ int main(int argc, char **argv) {
+@@ -976,7 +976,10 @@ int main(int argc, char **argv) {
    auto *microphone = new QComboBox;
    microphone->addItem("自动检测");
    QProcess pipewire;
@@ -544,7 +544,7 @@ index fbf79569..e9227d24 100644
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1602,7 +1605,7 @@ int main(int argc, char **argv) {
+@@ -1605,7 +1608,7 @@ int main(int argc, char **argv) {
          QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
    });
    about.body->addWidget(rowsCard(

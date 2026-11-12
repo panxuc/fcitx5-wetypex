@@ -2,7 +2,7 @@
 
 pkgname=fcitx5-wetypex
 pkgver=3.0.1.684
-pkgrel=4
+pkgrel=5
 pkgdesc="Native Linux compatibility layer for WeType on Fcitx5"
 arch=('x86_64' 'aarch64')
 url="https://github.com/panxuc/fcitx5-wetypex"
@@ -34,10 +34,10 @@ depends=(
     'libnotify'
     'polkit'
 )
-optdepends_aarch64=('qemu-user: compatibility provider for older ARM64 CPUs')
 
 makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
-optdepends=('fcitx5-configtool: manage input methods')
+optdepends=('fcitx5-configtool: manage input methods'
+            'qemu-user: original-engine compatibility for CPUs missing required instructions')
 source=(
     "${pkgname}-${pkgver}.tar.gz::${url}/releases/download/v${pkgver}-${pkgrel}/${pkgname}-${pkgver}.tar.gz"
     'https://curl.se/download/curl-8.22.0.tar.xz'
