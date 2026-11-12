@@ -463,11 +463,11 @@ static void service_snapshot(ServiceSession &s, json_object *response) {
   s.commits.clear();
 }
 static void service_loop() {
-  // The resident backend starts before typing. Prime the original pinyin
-  // path and QEMU's translation cache here instead of on the first real key.
-  // This temporary session has cloud/emoji/V-mode disabled and never selects
-  // or commits a word; real sessions keep their original settings and order.
-  if (getenv("WETYPE_QEMU_WRAPPED")) {
+  // Prime the original engine and QEMU's translation cache while the backend
+  // starts. Use the original warm-up API in an isolated, offline session;
+  // real sessions keep their original input, settings and candidate order.
+  const auto warmup = syms.find("_wxime_warm_up_session");
+  if (getenv("WETYPE_QEMU_WRAPPED") && warmup != syms.end()) {
     ServiceSession warm;
     alignas(16) unsigned char config[2048]{};
     config[1] = 1;
@@ -477,9 +477,7 @@ static void service_loop() {
     if (warm.engine) {
       ((void (*)(uint64_t, decltype(&service_listener), void *))syms.at(
           "_wxime_add_session_listener"))(warm.engine, service_listener, &warm);
-      const char key = 'a';
-      ((void (*)(uint64_t, const char *, uint32_t, const void *, uint32_t))syms.at(
-          "_wxime_process_input"))(warm.engine, &key, 1, nullptr, 0);
+      ((int (*)(uint64_t))warmup->second)(warm.engine);
       ((void (*)(uint64_t))syms.at("_wxime_reset_session"))(warm.engine);
       ((void (*)(uint64_t))syms.at("_wxime_destroy_session"))(warm.engine);
     }
