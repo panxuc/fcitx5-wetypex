@@ -642,3 +642,68 @@
    window.show();
    QTimer::singleShot(0, close, [close] {
      close->raise();
+--- a/scripts/init_settings.py
++++ b/scripts/init_settings.py
+@@ -0,0 +1,62 @@
++#!@NIX_PYTHON@
++"""Create first-run WeTypeX preferences without replacing user settings."""
++import argparse
++import json
++import os
++from pathlib import Path
++import pwd
++import tempfile
++
++MAXIMUM_SETTINGS_BYTES = 16384
++
++
++def config_home():
++    value = os.environ.get("XDG_CONFIG_HOME")
++    if value and os.path.isabs(value):
++        return Path(value)
++    home = os.environ.get("HOME")
++    if not home or not os.path.isabs(home):
++        home = pwd.getpwuid(os.getuid()).pw_dir
++    return Path(home) / ".config"
++
++
++def initialize_settings(defaults_path, config_path):
++    config_path = Path(config_path)
++    if os.path.lexists(config_path):
++        return False
++    with Path(defaults_path).open("rb") as source:
++        payload = source.read(MAXIMUM_SETTINGS_BYTES + 1)
++    if len(payload) > MAXIMUM_SETTINGS_BYTES:
++        raise ValueError("WeTypeX defaults exceed the 16 KiB preference limit")
++    defaults = json.loads(payload)
++    if not isinstance(defaults, dict):
++        raise ValueError("WeTypeX defaults must be a JSON object")
++    config_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
++    descriptor, temporary = tempfile.mkstemp(prefix=".wetypex-defaults-", dir=config_path.parent)
++    try:
++        with os.fdopen(descriptor, "wb") as output:
++            os.fchmod(output.fileno(), 0o600)
++            output.write(payload)
++            output.flush()
++            os.fsync(output.fileno())
++        try:
++            os.link(temporary, config_path)
++        except FileExistsError:
++            return False
++        return True
++    finally:
++        os.unlink(temporary)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.parse_args()
++    try:
++        initialize_settings("@NIX_DEFAULT_SETTINGS@", config_home() / "fcitx5/wetypex.json")
++    except (OSError, ValueError) as error:
++        parser.exit(1, "Unable to initialize WeTypeX preferences: " + str(error) + "\n")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
