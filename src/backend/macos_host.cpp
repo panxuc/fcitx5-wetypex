@@ -173,8 +173,7 @@ static bool original_cpu_supported(bool voice = false) {
   if (!__builtin_cpu_supports("avx"))
     return false;
   if (voice)
-    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") &&
-           __builtin_cpu_supports("f16c");
+    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
   return __builtin_cpu_supports("aes") || __builtin_cpu_supports("avx2");
 #else
   return false;

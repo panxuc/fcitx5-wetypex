@@ -270,9 +270,12 @@ class Backend:
                 [str(binary), str(SUPPORT), 'network-info'],
                 env=dict(os.environ, WETYPE_SUPPORT_DIR=str(SUPPORT)),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            if capabilities.returncode:
+                detail = capabilities.stderr.decode(errors='replace').strip()[-512:]
+                raise RuntimeError('无法检查原版语音的处理器兼容性：' + detail)
             report = json.loads(capabilities.stdout)
-            if capabilities.returncode or not isinstance(report, dict):
-                raise RuntimeError('无法检查原版语音的处理器兼容性')
+            if not isinstance(report, dict):
+                raise RuntimeError('无法读取原版语音的处理器兼容性信息')
             if not report.get('voice_execution_ready', report.get('execution_ready', True)):
                 raise RuntimeError('此 CPU 的原版语音需要兼容组件，请安装或更新 qemu-user；Nix 请启用 enableCompatibilityProvider')
         except (OSError, ValueError, subprocess.TimeoutExpired, RuntimeError) as error:
