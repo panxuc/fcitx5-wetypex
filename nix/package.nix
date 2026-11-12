@@ -58,7 +58,7 @@ let
   arm64 = stdenv.hostPlatform.isAarch64;
   compatibilityProvider = qemu.override {
     userOnly = true;
-    hostCpuTargets = [ "aarch64-linux-user" ];
+    hostCpuTargets = [ (if arm64 then "aarch64-linux-user" else "x86_64-linux-user") ];
   };
   privateLibcxx = llvmPackages.libcxx.overrideAttrs (old: {
     cmakeFlags = (old.cmakeFlags or [ ]) ++ [
@@ -192,8 +192,9 @@ stdenv.mkDerivation {
   ] ++ lib.optionals arm64 [
     "-DWETYPE_DARWIN_LIBCXX_ROOT=${privateCxxRoot}"
     "-DWETYPE_DARWIN_LIBCXX_LICENSE=${privateLibcxx.src}/libcxx/LICENSE.TXT"
-  ] ++ lib.optionals (arm64 && enableCompatibilityProvider) [
-    "-DWETYPE_QEMU_AARCH64=${compatibilityProvider}/bin/qemu-aarch64"
+  ] ++ lib.optionals enableCompatibilityProvider [
+    (if arm64 then "-DWETYPE_QEMU_AARCH64=${compatibilityProvider}/bin/qemu-aarch64"
+     else "-DWETYPE_QEMU_X86_64=${compatibilityProvider}/bin/qemu-x86_64")
   ];
 
   doCheck = true;
@@ -230,6 +231,11 @@ stdenv.mkDerivation {
     ${python}/bin/python3 -c \
       'import json; d=json.load(open("network-info.json")); assert all(d[k] for k in ("utf8_json", "ws", "wss")), d'
     "$out/bin/fcitx5-wetypex-init-settings" --help >/dev/null
+    ${lib.optionalString enableCompatibilityProvider ''
+      WETYPE_ENGINE_PROVIDER=qemu "$out/bin/fcitx5-wetypex-account" network-info > compatibility-info.json
+      ${python}/bin/python3 -c \
+        'import json; d=json.load(open("compatibility-info.json")); assert d["execution_ready"] and d["execution_provider"] == "qemu", d'
+    ''}
     ${lib.optionalString (!enableAI) ''
       test ! -e "$out/bin/fcitx5-wetypex-ai"
       test ! -e "$out/bin/fcitx5-wetypex-ai-viewer"
