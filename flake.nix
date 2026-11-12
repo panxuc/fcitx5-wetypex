@@ -17,6 +17,7 @@
       });
       checks = forSystems (system: let wetypex = packageFor system; in {
         package = wetypex;
+        compatibility = wetypex.override { enableCompatibilityProvider = true; };
         minimal = wetypex.override {
           enableAI = false;
           enableVoice = false;

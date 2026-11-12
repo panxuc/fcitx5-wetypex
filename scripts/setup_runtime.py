@@ -286,7 +286,7 @@ def validate_runtime(target,user_snapshot=None,report=None,converted_snapshot=No
             return failure('engine host compatibility',network_report)
         capabilities=json.loads(network_report.stdout)
         if not capabilities.get('execution_ready', True):
-            return False,'此 ARM64 CPU 需要兼容执行组件，请通过发行版安装 qemu-user 后重试'
+            return False,'兼容执行组件不可用或不支持所需指令集，请安装或更新 qemu-user；Nix 请启用 enableCompatibilityProvider'
         if not capabilities.get('utf8_json',False):
             return False,'UTF-8 JSON compatibility check failed; upgrade the WeTypeX engine host'
         timeout=90 if capabilities.get('execution_provider')=='qemu' else 25

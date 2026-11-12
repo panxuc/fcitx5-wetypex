@@ -50,6 +50,12 @@ fcitx5-wetypex-setup --check
 | `core_error` 提到需要兼容执行组件 | ARM64 CPU 缺少所需特性，安装 `qemu-user`，见 [ARM64 支持](arm64.md) |
 | 报告 SHA-256 不匹配或没有兼容档案 | 文件不是兼容清单中的官方版本。保持校验开启，改用 `--download` 或官方原始 ZIP |
 
+### 旧 CPU 在配对或联网初始化时出现 SIGILL
+
+先运行 `fcitx5-wetypex-account network-info`，查看 `native_cpu_supported`、`execution_provider` 和 `execution_ready`。部分老 x86-64 CPU 同时缺少 AES-NI 和 AVX2，无法直接执行原版的软件 AES 初始化。默认 `auto` 模式会改用同架构 QEMU；语音另有 AVX2/FMA 要求，诊断结果中的 `voice_execution_ready` 表示语音执行方式是否可用。请安装支持所需指令集的 `qemu-user`，Nix 用户启用 `enableCompatibilityProvider = true`。
+
+若已安装 QEMU 而 `execution_ready` 仍为 `false`，需要更新模拟器。诊断会实际检查其指令集能力；Ubuntu 22.04 自带的 QEMU 6.2 不满足这里的 x86 要求。详见 [CPU 指令集与兼容执行](architecture.md#cpu-指令集与兼容执行)。
+
 ### 更新一直显示“已准备”
 
 - 显示“更新已准备。首次升级请重启 Fcitx5”：当前运行的是旧插件，请[重启 Fcitx5](installation.md#重启-fcitx5)一次。KDE Plasma Wayland 请用虚拟键盘切换或重新登录。

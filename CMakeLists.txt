@@ -126,7 +126,10 @@ endif()
 set(WETYPE_SUPPORT_DIR "${CMAKE_INSTALL_FULL_LIBDIR}/fcitx5-wetypex")
 add_executable(wetypex-engine-host src/backend/macos_host.cpp)
 set(WETYPE_QEMU_AARCH64 "/usr/bin/qemu-aarch64" CACHE FILEPATH "ARM64 userspace compatibility provider")
-target_compile_definitions(wetypex-engine-host PRIVATE WETYPE_QEMU_AARCH64="${WETYPE_QEMU_AARCH64}")
+set(WETYPE_QEMU_X86_64 "/usr/bin/qemu-x86_64" CACHE FILEPATH "x86-64 userspace compatibility provider")
+target_compile_definitions(wetypex-engine-host PRIVATE
+  WETYPE_QEMU_AARCH64="${WETYPE_QEMU_AARCH64}"
+  WETYPE_QEMU_X86_64="${WETYPE_QEMU_X86_64}")
 add_dependencies(wetypex-engine-host kqueue)
 target_link_libraries(wetypex-engine-host PRIVATE PkgConfig::JSONC Threads::Threads ${CMAKE_DL_LIBS})
 target_compile_options(wetypex-engine-host PRIVATE -Wall -Wextra)
