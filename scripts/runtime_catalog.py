@@ -153,8 +153,10 @@ def download_archive(opener, url, output):
                 if full_size is not None and total < full_size:
                     raise http.client.IncompleteRead(b'', full_size - total)
                 return
+        # socket.timeout became an alias of TimeoutError in Python 3.10.
+        # Response reads on Ubuntu 20.04's Python 3.8 raise the older class.
         except (urllib.error.URLError, http.client.HTTPException,
-                ConnectionError, TimeoutError, ssl.SSLError) as error:
+                ConnectionError, TimeoutError, socket.timeout, ssl.SSLError) as error:
             if isinstance(error, ssl.SSLCertVerificationError):
                 raise
             if isinstance(error, urllib.error.HTTPError):
