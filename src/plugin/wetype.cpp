@@ -1,3 +1,4 @@
+#include "../common/appearance.hpp"
 #include "../common/json.hpp"
 #include "config.hpp"
 #include "english_dictionary.hpp"
@@ -7,7 +8,6 @@
 #include <clipboard_public.h>
 #include <csignal>
 #include <cstddef>
-#include <optional>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -35,14 +35,15 @@
 #include <fcitx/userinterfacemanager.h>
 #include <fcntl.h>
 #include <filesystem>
-#include <set>
 #include <fstream>
 #include <iterator>
 #include <libime/pinyin/pinyinencoder.h>
 #include <linux/input-event-codes.h>
 #include <map>
+#include <optional>
 #include <poll.h>
 #include <queue>
+#include <set>
 #include <spawn.h>
 #include <spell_public.h>
 #include <string>
@@ -51,8 +52,8 @@
 #include <sys/stat.h>
 #include <sys/un.h>
 #include <sys/wait.h>
-#include <type_traits>
 #include <tuple>
+#include <type_traits>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -1634,7 +1635,9 @@ class WeType : public InputMethodEngineV2 {
     std::filesystem::rename(temporary, path, error);
     reloadSettings();
   }
-  void applyAppearance() {
+  void applyAppearance(bool themeChanged, bool sizeChanged) {
+    if (!themeChanged && !sizeChanged)
+      return;
     const char *configHome = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
     std::filesystem::path path =
         configHome ? configHome
@@ -1645,40 +1648,39 @@ class WeType : public InputMethodEngineV2 {
     if (error)
       return;
     std::ifstream input(path);
-    std::vector<std::string> lines;
-    std::string line;
-    while (std::getline(input, line))
-      lines.push_back(line);
+    if ((std::filesystem::exists(path, error) && !input) || error)
+      return;
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    if (input.bad())
+      return;
     const auto &appearance = *config_.appearance;
-    std::map<std::string, std::string> values = {
-        {"Theme", *appearance.theme == wetype_config::ThemeMode::Dark
-                      ? "wetypex-dark"
-                      : "wetypex-light"},
-        {"DarkTheme", "wetypex-dark"},
-        {"UseDarkTheme", *appearance.theme == wetype_config::ThemeMode::System
-                             ? "True"
-                             : "False"},
-        {"UseAccentColor", "False"},
-        {"PreferTextIcon", "False"},
-        {"Font",
-         "Noto Sans CJK SC " + std::to_string(*appearance.candidateSize)}};
-    for (auto &[key, value] : values) {
-      bool found = false;
-      for (auto &existing : lines)
-        if (existing.rfind(key + "=", 0) == 0) {
-          existing = key + "=" + value;
-          found = true;
-          break;
-        }
-      if (!found)
-        lines.push_back(key + "=" + value);
+    std::map<std::string, std::string> values;
+    if (themeChanged) {
+      values = {
+          {"Theme", *appearance.theme == wetype_config::ThemeMode::Dark
+                        ? "wetypex-dark"
+                        : "wetypex-light"},
+          {"DarkTheme", "wetypex-dark"},
+          {"UseDarkTheme", *appearance.theme == wetype_config::ThemeMode::System
+                               ? "True"
+                               : "False"},
+          {"UseAccentColor", "False"},
+          {"PreferTextIcon", "False"}};
     }
+    if (sizeChanged)
+      values["Font"] = wetype::candidateFontWithSize(
+          wetype::classicUiValue(text, "Font").value_or(""),
+          *appearance.candidateSize);
+    const auto updated = wetype::updateClassicUi(text, values);
+    if (updated == text)
+      return;
     auto temporary = path;
     temporary += ".tmp";
     std::ofstream output(temporary, std::ios::trunc);
-    for (auto &entry : lines)
-      output << entry << '\n';
+    output << updated;
     output.close();
+    if (!output)
+      return;
     chmod(temporary.c_str(), 0600);
     std::filesystem::rename(temporary, path, error);
     if (!error)
@@ -3504,9 +3506,13 @@ public:
     return &config_;
   }
   void setConfig(const RawConfig &raw) override {
+    const auto oldTheme = *config_.appearance->theme;
+    const auto oldSize = *config_.appearance->candidateSize;
     config_.load(raw, true);
+    const bool themeChanged = *config_.appearance->theme != oldTheme;
+    const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
     saveNativeConfig();
-    applyAppearance();
+    applyAppearance(themeChanged, sizeChanged);
     if (runtimePhase_ != RuntimePhase::Idle) {
       runtimeConfigApply_ = true;
       return;

@@ -1,3 +1,4 @@
+#include "../common/appearance.hpp"
 #include "../common/qt_helpers.hpp"
 #include "original_windows.hpp"
 
@@ -244,7 +245,9 @@ static QMap<QString, QString> readAppearance() {
   if (!file.open(QIODevice::ReadOnly))
     return result;
   for (const auto &line : QString::fromUtf8(file.readAll()).split('\n')) {
-    if (line.startsWith('#'))
+    if (line.trimmed().startsWith('['))
+      break;
+    if (line.trimmed().startsWith('#') || line.trimmed().startsWith(';'))
       continue;
     int equals = line.indexOf('=');
     if (equals <= 0)
@@ -255,14 +258,6 @@ static QMap<QString, QString> readAppearance() {
     result[line.left(equals).trimmed()] = value;
   }
   return result;
-}
-static void setIni(QString &text, const QString &key, const QString &value) {
-  QRegularExpression expression("^" + QRegularExpression::escape(key) + "=.*$",
-                                QRegularExpression::MultilineOption);
-  if (text.contains(expression))
-    text.replace(expression, key + "=" + value);
-  else
-    text += key + "=" + value + "\n";
 }
 static QFrame *rowsCard(const QList<QWidget *> &rows) {
   auto *frame = card();
@@ -557,31 +552,43 @@ static QWidget *shortcutRow(const QString &title, bool checked,
                      [setting](bool value) { writeSetting(setting, value); });
   return container;
 }
-static void applyClassicTheme(int mode, int size, QLabel *status) {
+static bool applyClassicTheme(int mode, std::optional<int> size,
+                              bool themeChanged, QLabel *status) {
   QString path = configDir() + "/conf/classicui.conf";
   QString backup = configDir() + "/wetype-appearance-backup.json";
   QFile file(path);
   QString text;
-  if (file.open(QIODevice::ReadOnly))
+  if (file.open(QIODevice::ReadOnly)) {
     text = QString::fromUtf8(file.readAll());
+  } else if (file.exists()) {
+    status->setText("无法读取外观配置，未更改字体");
+    return false;
+  }
   if (!QFile::exists(backup)) {
     QJsonObject object;
     object["existed"] = QFile::exists(path);
     object["content"] = text;
     if (!writeFile(backup, QJsonDocument(object).toJson())) {
       status->setText("无法备份原主题，未更改配置");
-      return;
+      return false;
     }
   }
-  setIni(text, "Theme", mode == 2 ? "wetypex-dark" : "wetypex-light");
-  setIni(text, "DarkTheme", "wetypex-dark");
-  setIni(text, "UseDarkTheme", mode == 0 ? "True" : "False");
-  setIni(text, "UseAccentColor", "False");
-  setIni(text, "PreferTextIcon", "False");
-  setIni(text, "Font", "Noto Sans CJK SC " + QString::number(size));
+  std::map<std::string, std::string> values;
+  if (themeChanged) {
+    values = {{"Theme", mode == 2 ? "wetypex-dark" : "wetypex-light"},
+              {"DarkTheme", "wetypex-dark"},
+              {"UseDarkTheme", mode == 0 ? "True" : "False"},
+              {"UseAccentColor", "False"},
+              {"PreferTextIcon", "False"}};
+  }
+  if (size)
+    values["Font"] = wetype::candidateFontWithSize(
+        wetype::classicUiValue(text.toStdString(), "Font").value_or(""), *size);
+  text = QString::fromStdString(
+      wetype::updateClassicUi(text.toStdString(), values));
   if (!writeFile(path, text.toUtf8())) {
     status->setText("保存外观失败");
-    return;
+    return false;
   }
   QDBusInterface controller("org.fcitx.Fcitx5", "/controller",
                             "org.fcitx.Fcitx.Controller1");
@@ -589,6 +596,7 @@ static void applyClassicTheme(int mode, int size, QLabel *status) {
   status->setText(reply.type() == QDBusMessage::ErrorMessage
                       ? "配置已保存，Fcitx5 下次启动时生效"
                       : "外观已应用");
+  return true;
 }
 
 using ToggleSpec = std::tuple<QString, QString, bool>;
@@ -1170,7 +1178,19 @@ int main(int argc, char **argv) {
   visual.body->addWidget(preview);
   auto *candidateSize = new QSlider(Qt::Horizontal);
   candidateSize->setRange(10, 18);
-  candidateSize->setValue(settings.value("candidate_size").toInt(13));
+  const auto fontDescription =
+      appearance.value("Font")
+          .section(QRegularExpression(QStringLiteral("[ \t]+[@#]")), 0, 0)
+          .trimmed();
+  const auto fontSizeMatch =
+      QRegularExpression(
+          QStringLiteral("(?:^|[ \t])([0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:px)?$"))
+          .match(fontDescription);
+  bool fontSizeValid = false;
+  const auto fontSize = fontSizeMatch.captured(1).toDouble(&fontSizeValid);
+  candidateSize->setValue(fontSizeValid
+                              ? qRound(std::clamp(fontSize, 10.0, 18.0))
+                              : settings.value("candidate_size").toInt(13));
   auto *sliderBox = new QWidget;
   sliderBox->setFixedHeight(120);
   auto *sliderLayout = new QVBoxLayout(sliderBox);
@@ -1234,15 +1254,26 @@ int main(int argc, char **argv) {
   auto *appearanceStatus = new QLabel;
   appearanceStatus->setObjectName("rowSubtitle");
   visual.body->addWidget(appearanceStatus);
-  auto applyVisual = [=] {
-    writeSetting("candidate_size", candidateSize->value());
-    writeSetting("theme_mode", theme->currentIndex());
-    applyClassicTheme(theme->currentIndex(), candidateSize->value(),
-                      appearanceStatus);
+  auto appliedSize = std::make_shared<int>(candidateSize->value());
+  auto applySize = [=] {
+    if (candidateSize->value() == *appliedSize)
+      return;
+    if (applyClassicTheme(theme->currentIndex(), candidateSize->value(), false,
+                          appearanceStatus)) {
+      *appliedSize = candidateSize->value();
+      writeSetting("candidate_size", candidateSize->value());
+    }
   };
-  QObject::connect(candidateSize, &QSlider::sliderReleased, applyVisual);
-  QObject::connect(theme, qOverload<int>(&QComboBox::currentIndexChanged),
-                   [=](int) { applyVisual(); });
+  QObject::connect(candidateSize, &QSlider::sliderReleased, applySize);
+  QObject::connect(candidateSize, &QSlider::valueChanged, [=](int) {
+    if (!candidateSize->isSliderDown())
+      applySize();
+  });
+  QObject::connect(
+      theme, qOverload<int>(&QComboBox::currentIndexChanged), [=](int index) {
+        if (applyClassicTheme(index, std::nullopt, true, appearanceStatus))
+          writeSetting("theme_mode", index);
+      });
   pages->addWidget(visual.widget);
 
   auto shortcuts = page("快捷键");
