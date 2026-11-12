@@ -97,7 +97,8 @@ static bool writeSetting(const QString &key, const QJsonValue &value) {
   auto settings = readSettings();
   if ((key == "page_size" || key == "vertical" ||
        key == "candidate_label_style" || key == "preedit_position" ||
-       key == "candidate_size" || key == "theme_mode") &&
+       key == "candidate_size" || key == "theme_mode" ||
+       key == "chinese_punctuation" || key == "remember_punctuation") &&
       settings.value(key) == value)
     return true;
   settings[key] = value;
@@ -898,13 +899,29 @@ int main(int argc, char **argv) {
                      {"an/ai", "fuzzy_an_ai", false},
                      {"eng/ong", "fuzzy_eng_ong", false}});
   });
+  auto *chinesePunctuation =
+      toggle(wetype::settingBool(settings.value("chinese_punctuation"), true),
+             true, "chinese_punctuation");
+  auto *rememberPunctuation =
+      toggle(wetype::settingBool(settings.value("remember_punctuation"), false),
+             true, "remember_punctuation");
+  QObject::connect(&app, &QGuiApplication::applicationStateChanged, input.widget,
+                   [=](Qt::ApplicationState state) {
+                     if (state != Qt::ApplicationActive)
+                       return;
+                     const auto latest = readSettings();
+                     const QSignalBlocker chineseBlock(chinesePunctuation);
+                     const QSignalBlocker rememberBlock(rememberPunctuation);
+                     chinesePunctuation->setChecked(wetype::settingBool(
+                         latest.value("chinese_punctuation"), true));
+                     rememberPunctuation->setChecked(wetype::settingBool(
+                         latest.value("remember_punctuation"), false));
+                   });
   input.body->addWidget(rowsCard(
       {row("中文模式默认使用中文标点", "关闭后默认使用 , . ! ? 等英文标点，独立于全半角",
-           toggle(wetype::settingBool(settings.value("chinese_punctuation"), true),
-                  true, "chinese_punctuation")),
+           chinesePunctuation),
        row("记住中英文标点切换", "开启后，Ctrl + . 的选择成为默认偏好，切换输入框或重启后仍保留",
-           toggle(wetype::settingBool(settings.value("remember_punctuation"), false),
-                  true, "remember_punctuation")),
+           rememberPunctuation),
        row("输入中文时，将「/?」按键替换为 、", {},
            toggle(
                wetype::settingBool(settings.value("slash_punctuation"), true),
