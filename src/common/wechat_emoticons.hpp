@@ -1,6 +1,7 @@
 #pragma once
 #include "json.hpp"
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdint>
 #include <filesystem>
@@ -50,9 +51,11 @@ public:
         auto *alias = json_object_array_get_idx(aliases, a);
         if (json_object_is_type(alias, json_type_string)) {
           std::string name = json_object_get_string(alias);
-          if (!name.empty() && name.size() <= 256)
+          if (!name.empty() && name.size() <= 256) {
+            entryInitials_[static_cast<unsigned char>(name.front())] = true;
             entries_.emplace(std::move(name),
                              Entry{commit, uint32_t(codepoint)});
+          }
         }
       }
     }
@@ -62,16 +65,27 @@ public:
            i < std::min<size_t>(256, json_object_array_length(unsupported));
            ++i) {
         auto *value = json_object_array_get_idx(unsupported, i);
-        if (json_object_is_type(value, json_type_string))
-          unsupported_.emplace(json_object_get_string(value));
+        if (json_object_is_type(value, json_type_string)) {
+          const std::string text = json_object_get_string(value);
+          if (!text.empty())
+            unsupportedInitials_[static_cast<unsigned char>(text.front())] = true;
+          unsupported_.emplace(text);
+        }
       }
   }
   bool ready() const { return !entries_.empty(); }
   const Entry *find(std::string_view text) const {
+    if (text.empty() || !entryInitials_[static_cast<unsigned char>(text.front())])
+      return nullptr;
     const auto it = entries_.find(text);
     return it == entries_.end() ? nullptr : &it->second;
   }
   bool hidden(std::string_view text, bool inWeChat) const {
+    if (!text.empty()) {
+      const auto first = static_cast<unsigned char>(text.front());
+      if (!unsupportedInitials_[first] && (inWeChat || !entryInitials_[first]))
+        return false;
+    }
     return unsupported_.find(text) != unsupported_.end() ||
            (!inWeChat && find(text));
   }
@@ -96,6 +110,8 @@ public:
   }
 
 private:
+  std::array<bool, 256> entryInitials_{};
+  std::array<bool, 256> unsupportedInitials_{};
   std::map<std::string, Entry, std::less<>> entries_;
   std::set<std::string, std::less<>> unsupported_;
 };
