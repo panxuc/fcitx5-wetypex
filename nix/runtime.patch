@@ -39,7 +39,7 @@
 @@ -173,16 +176,14 @@
    # database. Wait for the current short operation instead of surfacing an
    # intermittent failure when two callers overlap.
-   env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+   env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
 -      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 \
 -      --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
 +      --ro-bind /nix/store /nix/store --proc /proc --dev /dev --tmpfs /tmp \
@@ -107,7 +107,7 @@
 @@ -38,18 +41,18 @@
    while [ "$attempt" -lt 3 ]; do
      attempt=$((attempt + 1))
-     if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+     if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
 -      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +      --ro-bind /nix/store /nix/store \
        --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
@@ -180,7 +180,7 @@
    fi
    test -n "$model" || model=LINUX
    if [ -n "$uin" ] && [ -n "$device_code" ]; then
-     env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+     env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
 -      --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +      --ro-bind /nix/store /nix/store \
        --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
@@ -199,7 +199,7 @@
 @@ -64,10 +67,11 @@
  # Offline and standalone sessions retain a private network namespace.
  # Clear the launch environment before bwrap: Focal's 0.4 lacks --clearenv.
- env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-net --unshare-pid --die-with-parent \
+ env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-net --unshare-pid --die-with-parent \
 -  --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
 +  --ro-bind /nix/store /nix/store \
    --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
@@ -212,15 +212,17 @@
    /support/wetypex-engine-host /input serve
 --- a/scripts/fcitx5-wetypex-setup.sh.in
 +++ b/scripts/fcitx5-wetypex-setup.sh.in
-@@ -1,3 +1,6 @@
+@@ -1,4 +1,7 @@
 -#!/bin/sh
 -export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+-export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
 -exec "${WETYPE_PYTHON:-python3}" "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" "$@"
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
 +export TZDIR="${TZDIR:-@NIX_TZDIR@}"
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
++export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
 +exec "${WETYPE_PYTHON:-@NIX_PYTHON@}" "@NIX_OUT@/share/fcitx5-wetypex/setup_runtime.py" "$@"
 --- a/scripts/fcitx5-wetypex-sync.sh.in
 +++ b/scripts/fcitx5-wetypex-sync.sh.in
@@ -262,7 +264,7 @@
  state_dir = pathlib.Path(os.environ.get("WETYPE_STATE_DIR", data_home / "fcitx5-wetypex/state"))
 --- a/scripts/fcitx5-wetypex-voice.sh.in
 +++ b/scripts/fcitx5-wetypex-voice.sh.in
-@@ -1,4 +1,7 @@
+@@ -1,5 +1,8 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
@@ -270,8 +272,10 @@
 +export SSL_CERT_FILE="${SSL_CERT_FILE:-@NIX_CA_BUNDLE@}"
  set -eu
 -export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+-export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
 -exec python3 @CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/voice_stream.py "$@"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
++export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
 --- a/scripts/runtime_lease.sh.in
 +++ b/scripts/runtime_lease.sh.in
@@ -302,10 +306,11 @@
  WORKER_STATUS = None
  WORKER_FD = None
  
-@@ -24,13 +28,26 @@
+@@ -32,14 +36,26 @@
      with zipfile.ZipFile(archive) as z:
          assets={}
          system_theme_root=next((path for path in (
+-            pathlib.Path(__file__).resolve().parent.parent/'fcitx5/themes',
 -            pathlib.Path('/usr/share/fcitx5/themes'),
 -            pathlib.Path('/usr/local/share/fcitx5/themes'))
 +            pathlib.Path('@NIX_OUT@/share/fcitx5/themes'),)
@@ -425,8 +430,9 @@
  """Build a local candidate-only colour font from verified original artwork."""
  import argparse
  import io
-@@ -8,6 +8,10 @@
+@@ -8,8 +8,12 @@
  import subprocess
+ import sys
  import tempfile
  import zipfile
 +
@@ -434,8 +440,9 @@
 +os.environ.setdefault("TZDIR", "@NIX_TZDIR@")
 +os.environ.setdefault("SSL_CERT_FILE", "@NIX_CA_BUNDLE@")
  
- FAMILY = 'WeTypeX WeChat Emoticons v1'
- ARCHIVE_PREFIX = ('WeType.app/Contents/MacOS/WeTypeSettings.app/Contents/'
+ vendor = pathlib.Path(__file__).resolve().parent / 'vendor'
+ if vendor.is_dir():
+     sys.path.insert(0, str(vendor))
 --- a/src/backend/darwin_locale.cpp
 +++ b/src/backend/darwin_locale.cpp
 @@ -33,7 +33,7 @@
@@ -458,7 +465,7 @@
    return darwin_mask(fn(s, ignorecase));
 --- a/src/backend/macos_host.cpp
 +++ b/src/backend/macos_host.cpp
-@@ -67,7 +67,7 @@
+@@ -67,8 +67,8 @@
    uintptr_t data = 0, dataBytes = 0, end = 0;
  };
  static std::vector<DarwinTLSImage> tls_images;
@@ -466,8 +473,9 @@
 +static std::string active_libcxx_path = "@NIX_LIBCXX@";
  static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
  static bool service_mode = false;
- 
-@@ -1782,7 +1782,7 @@
+ static std::string workspace_root = "/work";
+ static std::string user_dictionary_path = "/work/userDict";
+@@ -1675,7 +1675,7 @@
    if (h == (void *)-1 || h == (void *)-2 || h == (void *)-3 || h == (void *)-5)
      h = RTLD_DEFAULT;
    if (!strcmp(n, "__cxa_throw")) {

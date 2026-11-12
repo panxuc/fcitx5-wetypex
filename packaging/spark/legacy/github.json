@@ -1,0 +1,16 @@
+{
+  "fcitx5-wetypex": {
+    "repo": "panxuc/fcitx5-wetypex",
+    "file_list": {
+      "amd64": "fcitx5-wetypex-legacy_{version}_amd64.deb",
+      "arm64": "fcitx5-wetypex-legacy_{version}_arm64.deb"
+    },
+    "app.json": {
+      "Name": "WeTypeX",
+      "Author": "Xuc Pan",
+      "Website": "https://github.com/panxuc/fcitx5-wetypex",
+      "More": "通过 Fcitx5 使用微信输入法的兼容项目。首次设置时由用户接受上游许可并从官方准备原版输入核心、词典和资源。",
+      "Tags": "community"
+    }
+  }
+}

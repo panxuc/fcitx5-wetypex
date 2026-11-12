@@ -172,7 +172,7 @@ run_original() {
   # Pairing, settings and background sync share the same original account
   # database. Wait for the current short operation instead of surfacing an
   # intermittent failure when two callers overlap.
-  env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+  env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
       --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 \
       --symlink usr/bin /bin --proc /proc --dev /dev --tmpfs /tmp \
       --dir /etc --ro-bind /etc/resolv.conf /etc/resolv.conf \

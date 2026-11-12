@@ -151,4 +151,22 @@ AUR 发布需要仓库机密 `AUR_SSH_PRIVATE_KEY`，其公钥需登记在 AUR �
 
 星火官方的 [Git Releases 自动更新服务](https://gitee.com/spark-building-service/github) 可以跟随本仓库的 Release 更新。其 `file_list` 使用文件名模板：标准包为 `fcitx5-wetypex_{version}_amd64.deb`（ARM64 为 `_arm64.deb`），legacy 包为 `fcitx5-wetypex-legacy_{version}_amd64.deb`；`{version}` 是去掉 `v` 前缀、包含打包修订号的完整版本。请在目标系统验证后为每个架构选定其中一种包，不要同时配置两套模板。
 
+仓库提供两套可直接交给该服务的配置：
+
+- [`packaging/spark/standard/github.json`](../packaging/spark/standard/github.json)：标准 deb，包含 amd64 和 arm64。
+- [`packaging/spark/legacy/github.json`](../packaging/spark/legacy/github.json)：legacy deb，包含 amd64 和 arm64。
+
+它们使用相同的包名和 `{version}` 模板，后续 Release 中的完整修订号也会保留。根据目标系统的依赖选择一套提交；legacy 包使用 OpenSSL 1.1，不能仅因 glibc 基线较低就把它当成所有新系统的通用包。
+
+使用星火官方 `github-downloader` 验证时，先把所选配置复制到工作目录，避免其写入的 `github-local.json` 混进投递文件：
+
+```bash
+mkdir -p build/spark-submit
+cp packaging/spark/standard/github.json build/spark-submit/
+github-downloader --data build/spark-submit --category tools \
+  --output build/spark-download --dry-run
+```
+
+投递前补齐商店需要的图标与截图，并完成目标系统的安装和输入验证。配置文件和下载地址检查通过不代表商店已收录。
+
 本节提供投递材料与验证清单；商店上架是单独的发布操作。

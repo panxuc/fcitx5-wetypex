@@ -71,9 +71,11 @@ WeTypeX 插件 ────────── 候选、预编辑、快捷键、�
 原版业务服务 ────────── 云候选、配对、同步、语音、AI
 ```
 
-输入宿主和账户命令运行在 Bubblewrap 沙箱中。密码输入框不会进入原版核心、剪贴板记录或 AI。详见[架构说明](docs/architecture.md)。
+输入宿主和账户命令运行在受限子进程中：原生包使用 Bubblewrap，Flatpak 扩展使用 Flatpak 子沙箱。密码输入框不会进入原版核心、剪贴板记录或 AI。详见[架构说明](docs/architecture.md)。
 
 ## 安装
+
+Flatpak 版 Fcitx5 用户可使用 [WeTypeX 扩展](docs/flatpak.md)，目前提供开发构建和 CI 安装包。
 
 从 [GitHub Releases](https://github.com/panxuc/fcitx5-wetypex/releases/latest) 下载与系统和架构匹配的软件包。下列示例使用 x86-64 文件名，ARM64 文件名在注释中给出。
 

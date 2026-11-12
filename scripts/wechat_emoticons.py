@@ -6,8 +6,13 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 import tempfile
 import zipfile
+
+vendor = pathlib.Path(__file__).resolve().parent / 'vendor'
+if vendor.is_dir():
+    sys.path.insert(0, str(vendor))
 
 FAMILY = 'WeTypeX WeChat Emoticons v1'
 ARCHIVE_PREFIX = ('WeType.app/Contents/MacOS/WeTypeSettings.app/Contents/'

@@ -40,7 +40,11 @@ def main():
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
             client.settimeout(10)
-            client.connect(str(state/"control.sock"))
+            directory = os.open(state, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                client.connect(f"/proc/self/fd/{directory}/control.sock")
+            finally:
+                os.close(directory)
             client.sendall(json.dumps(request).encode()+b"\n")
             reply = bytearray()
             while b"\n" not in reply:

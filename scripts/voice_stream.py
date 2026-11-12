@@ -284,7 +284,7 @@ class Backend:
         # This process outlives the recording thread that creates it.
         # --die-with-parent also triggers when that *thread* exits; stdin EOF
         # already shuts down the voice service when the controller exits.
-        wrapper = shutil.which('bwrap')
+        wrapper = shutil.which(os.environ.get('WETYPE_SANDBOX') or 'bwrap')
         if not wrapper:
             raise RuntimeError('请先安装 Bubblewrap')
         command = [wrapper, '--unshare-pid',

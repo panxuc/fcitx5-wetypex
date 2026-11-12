@@ -38,6 +38,8 @@
 #include <QUrl>
 #include <algorithm>
 #include <functional>
+#include <fcntl.h>
+#include <unistd.h>
 #include <tuple>
 
 using namespace original_ui;
@@ -104,10 +106,18 @@ static bool writeSetting(const QString &key, const QJsonValue &value) {
 static QJsonObject engineControl(const QJsonObject &request,
                                  QString *error = nullptr) {
   QLocalSocket socket;
-  socket.connectToServer(
+  const QString stateDirectory =
       QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) +
-      "/fcitx5-wetypex/state/control.sock");
-  if (!socket.waitForConnected(1500)) {
+      "/fcitx5-wetypex/state";
+  const int directory = open(QFile::encodeName(stateDirectory).constData(),
+                             O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  socket.connectToServer(directory >= 0
+      ? QStringLiteral("/proc/self/fd/%1/control.sock").arg(directory)
+      : stateDirectory + QStringLiteral("/control.sock"));
+  const bool connected = socket.waitForConnected(1500);
+  if (directory >= 0)
+    close(directory);
+  if (!connected) {
     // The official settings app can edit common phrases even before its input
     // service is active. Use the same engine protocol in a short-lived process
     // when the resident Fcitx addon has no control socket yet.

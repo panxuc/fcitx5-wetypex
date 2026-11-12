@@ -1,3 +1,4 @@
 #!/bin/sh
 export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
+export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
 exec "${WETYPE_PYTHON:-python3}" "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" "$@"

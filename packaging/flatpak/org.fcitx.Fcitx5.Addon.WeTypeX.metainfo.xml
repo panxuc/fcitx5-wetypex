@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="addon">
+  <id>org.fcitx.Fcitx5.Addon.WeTypeX</id>
+  <extends>org.fcitx.Fcitx5</extends>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>WeTypeX</name>
+  <summary>Use the WeType input engine with Fcitx 5</summary>
+  <description>
+    <p>WeTypeX integrates the original WeType engine with Fcitx 5. It provides
+    Chinese input, optional English completion, voice input, device sync,
+    file transfer and an AI assistant.</p>
+    <p>The original runtime is downloaded from its official source after
+    accepting the upstream license. It is kept in the application's private
+    user data and is not included in this extension.</p>
+  </description>
+  <url type="homepage">https://github.com/panxuc/fcitx5-wetypex</url>
+  <url type="bugtracker">https://github.com/panxuc/fcitx5-wetypex/issues</url>
+  <provides>
+    <id>wetypex</id>
+  </provides>
+  <releases>
+    <release version="3.0.1.684-4" date="2026-11-11"/>
+  </releases>
+</component>
