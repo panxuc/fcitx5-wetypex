@@ -5,9 +5,11 @@
 #include <algorithm>
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <fcntl.h>
 #include <map>
 #include <poll.h>
 #include <string>
@@ -23,6 +25,7 @@ class ServiceTransport {
     uint64_t active = 0;
   };
   int server_ = -1;
+  int directory_ = -1;
   int wake_ = -1;
   bool pendingUpdate_ = false;
   std::map<int, Peer> peers_;
@@ -55,12 +58,16 @@ public:
   ServiceTransport() {
     wake_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
     server_ = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    directory_ = open(workspace_root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     sockaddr_un address{};
     address.sun_family = AF_UNIX;
-    strcpy(address.sun_path, "/work/control.sock");
-    unlink(address.sun_path);
+    // Keep long Flatpak/private-home paths out of sockaddr_un's 108 bytes.
+    const auto path = "/proc/self/fd/" + std::to_string(directory_) + "/control.sock";
+    snprintf(address.sun_path, sizeof(address.sun_path), "%s", path.c_str());
+    if (directory_ >= 0)
+      unlinkat(directory_, "control.sock", 0);
     mode_t mask = umask(0077);
-    bool ok = server_ >= 0 &&
+    bool ok = server_ >= 0 && directory_ >= 0 &&
               bind(server_, (sockaddr *)&address, sizeof(address)) == 0 &&
               listen(server_, 4) == 0;
     umask(mask);
@@ -77,8 +84,10 @@ public:
       close(fd);
     if (server_ >= 0) {
       close(server_);
-      unlink("/work/control.sock");
+      unlinkat(directory_, "control.sock", 0);
     }
+    if (directory_ >= 0)
+      close(directory_);
   }
   bool supportsUpdates() const { return wake_ >= 0; }
   void notify() const {

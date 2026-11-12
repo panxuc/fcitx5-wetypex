@@ -32,7 +32,7 @@ AUR 包在本机编译，链接本机的库：
 paru -S fcitx5-wetypex
 ```
 
-ARM64 软件包把 `qemu-user` 列为可选依赖，用于不满足原版 CPU 特性要求的处理器，见 [ARM64 支持](arm64.md)。
+原生包按需要使用 `qemu-user`，Arch 包将其列为可选依赖；Flatpak 扩展自带当前架构的兼容执行器。输入和语音按各自需要的 CPU 指令集分别选择执行方式，见 [CPU 指令集与兼容执行](architecture.md#cpu-指令集与兼容执行)。
 
 ## Debian 与 Ubuntu
 
@@ -124,7 +124,7 @@ Nix 包支持通过 `.override` 调整以下参数：
 | `enableVoice` | `true` | 设为 `false` 时隐藏语音页面和快捷键、阻断语音调用，并移除语音辅助程序、采集脚本及其工具依赖。 |
 | `enableLayerShell` | `true` | 设为 `false` 时 V 快捷栏改用 Fcitx 原生候选菜单，V 模式功能保留。 |
 | `enableWeTypeTheme` | `true` | 设为 `false` 时隐藏皮肤和字号控件，WeTypeX 不再改写共用的 `classicui.conf`，由桌面主题统一管理。之前写入的皮肤设置需自行恢复。 |
-| `enableCompatibilityProvider` | `false` | 仅对 ARM64 生效。设为 `true` 时把 QEMU 用户态模拟器加入闭包，供不满足原版 CPU 特性要求的处理器使用，见 [ARM64 支持](arm64.md)。 |
+| `enableCompatibilityProvider` | `false` | 设为 `true` 时只把当前架构的 QEMU 用户态模拟器加入闭包，用于缺少原版所需指令的 x86-64 或 ARM64 CPU，见 [CPU 指令集与兼容执行](architecture.md#cpu-指令集与兼容执行)。 |
 | `defaultSettings` | `{ }` | Nix 属性集，键名沿用 `wetypex.json`，仅在偏好文件不存在时写入首次默认值。 |
 
 示例：

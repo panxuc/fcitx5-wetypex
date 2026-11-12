@@ -37,7 +37,7 @@ if [ "$fetch_only" -eq 1 ]; then
   attempt=0
   while [ "$attempt" -lt 3 ]; do
     attempt=$((attempt + 1))
-    if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+    if timeout 50 env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
       --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
       --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
       --ro-bind /etc/resolv.conf /etc/resolv.conf --ro-bind /etc/hosts /etc/hosts \

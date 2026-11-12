@@ -42,7 +42,7 @@ if [ "$standalone" = 0 ] && [ -f "$account/identity.json" ]; then
   fi
   test -n "$model" || model=LINUX
   if [ -n "$uin" ] && [ -n "$device_code" ]; then
-    env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-pid --die-with-parent \
+    env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-pid --die-with-parent \
       --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
       --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
       --ro-bind-try /etc/localtime /etc/localtime \
@@ -63,7 +63,7 @@ fi
 
 # Offline and standalone sessions retain a private network namespace.
 # Clear the launch environment before bwrap: Focal's 0.4 lacks --clearenv.
-env -i PATH="${PATH:-/usr/bin:/bin}" bwrap --unshare-net --unshare-pid --die-with-parent \
+env -i PATH="${PATH:-/usr/bin:/bin}" "${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}" --unshare-net --unshare-pid --die-with-parent \
   --ro-bind /usr /usr --symlink usr/lib /lib --ro-bind-try /lib64 /lib64 --symlink usr/bin /bin \
   --proc /proc --dev /dev --tmpfs /tmp --dir /etc \
   --ro-bind-try /etc/localtime /etc/localtime \

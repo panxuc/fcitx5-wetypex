@@ -313,11 +313,9 @@ index 2190e1d4..09d73925 100644
 +    fprintf(stderr, "%s is disabled in this build.\n", disabled);
 +    return 78;
 +  }
-   const bool mappingOnly = !strcmp(argv[2], "version") ||
-                            !strcmp(argv[2], "module-map");
-   if (!select_execution_provider(argc, argv))
-diff --git a/src/plugin/config.hpp b/src/plugin/config.hpp
-index c4fbea05..1fa79a18 100644
+   if (const char *workspace = getenv("WETYPE_WORKSPACE")) {
+     std::error_code error;
+     const auto path = std::filesystem::canonical(workspace, error);
 --- a/src/plugin/config.hpp
 +++ b/src/plugin/config.hpp
 @@ -5,6 +5,13 @@

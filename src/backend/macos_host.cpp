@@ -70,6 +70,8 @@ static std::vector<DarwinTLSImage> tls_images;
 static std::string active_libcxx_path = "libc++.so.1";
 static uintptr_t stack_guard = 0xa35197bd82e436c1ULL;
 static bool service_mode = false;
+static std::string workspace_root = "/work";
+static std::string user_dictionary_path = "/work/userDict";
 
 // Darwin sigset_t is four bytes. Passing it directly to Linux sigprocmask
 // overwrites the caller's adjacent stack data, including the previous SIGILL
@@ -3341,7 +3343,7 @@ static bool configure_wubi_dictionary(unsigned solution) {
     return true;
   auto &dicts = dictionarySets[solution];
   NativeDictConfig config{dicts.data(), uint32_t(dicts.size()), 0,
-                          "/work/userDict"};
+                          user_dictionary_path.c_str()};
   const bool loaded =
       ((bool (*)(const NativeDictConfig *))syms.at("_wxime_config_dict"))(&config);
   if (loaded)
@@ -3595,6 +3597,16 @@ int main(int argc, char **argv) {
   }
   if (!strcmp(argv[2], "cpu-check"))
     return original_cpu_supported(!strcmp(argv[1], "voice")) ? 0 : 78;
+  if (const char *workspace = getenv("WETYPE_WORKSPACE")) {
+    std::error_code error;
+    const auto path = std::filesystem::canonical(workspace, error);
+    if (error || !path.is_absolute() || chdir(path.c_str())) {
+      fputs("unable to enter the engine workspace\n", stderr);
+      return 2;
+    }
+    workspace_root = path.string();
+    user_dictionary_path = workspace_root + "/userDict";
+  }
   const bool mappingOnly = !strcmp(argv[2], "version") ||
                            !strcmp(argv[2], "module-map");
   if (!select_execution_provider(argc, argv))
@@ -4098,8 +4110,9 @@ int main(int argc, char **argv) {
   // Version-pinned wxime initialization ABI.
   alignas(16) unsigned char config[1024]{};
   const char *work = getenv("WETYPE_WORK_DIR");
+  const std::string default_work = workspace_root + "/user";
   if (!work || !*work)
-    work = "/work/user";
+    work = default_work.c_str();
   memcpy(config + 0x18, &work, 8);
   void *logger = (void *)engine_log;
   memcpy(config, &logger, 8);
@@ -4149,7 +4162,7 @@ int main(int argc, char **argv) {
     s >> id >> version >> name;
     if (name.empty())
       continue;
-    dictionaryPaths.push_back("/input/resources/" + name);
+    dictionaryPaths.push_back(dir + "/resources/" + name);
     static const std::array<std::string, 3> wubiNames{
         "swbd86.bin", "swbd98.bin", "swbdnc.bin"};
     for (unsigned solution = 0; solution < dictionarySets.size(); ++solution) {

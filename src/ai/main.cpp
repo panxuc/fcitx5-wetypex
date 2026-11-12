@@ -42,6 +42,28 @@ QString prepareResponse(QString html, const QString &query) {
   html.replace(QStringLiteral("fade-in_fade-in__L_93a"),
                QStringLiteral("wetypex-visible"));
   html.replace(QStringLiteral("opacity:0"), QStringLiteral("opacity:1"));
+  // QtWebEngine follows the desktop's dark colour scheme. The window uses a
+  // light background, so restore the complete original light palette, including
+  // formula, link and card colours, rather than only the main text colour.
+  QString lightTheme;
+  auto themes = QRegularExpression(
+                    QStringLiteral("\\.wr_dynamicTheme\\s*\\{([^{}]+)\\}"))
+                    .globalMatch(html);
+  const QRegularExpression lightBase(
+      QStringLiteral("--WT_BC0\\s*:\\s*(?:#000(?:000)?|black)\\s*(?:;|$)"),
+      QRegularExpression::CaseInsensitiveOption);
+  while (themes.hasNext()) {
+    QString declarations = themes.next().captured(1);
+    if (!declarations.contains(lightBase))
+      continue;
+    declarations.replace(QStringLiteral("!important"), QString());
+    declarations.replace(QRegularExpression(QStringLiteral("([^;]+)(?=;|$)")),
+                         QStringLiteral("\\1!important"));
+    lightTheme = QStringLiteral("<style>.wr_dynamicTheme{%1}</style>")
+                     .arg(declarations);
+    break;
+  }
+  html.replace(QStringLiteral("</head>"), lightTheme + QStringLiteral("</head>"));
   const QString queryHtml =
       query.isEmpty()
           ? QString()

@@ -1,0 +1,147 @@
+name: Flatpak 扩展
+
+on:
+  pull_request:
+    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/flatpak/**"]
+  push:
+    branches: [main]
+    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/flatpak/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: flatpak (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11@sha256:b0a8a2acb9e420dd0e3e083ff552bea5a817e17e41532f1d2287ff49ef9aae0e
+      options: --privileged
+    defaults:
+      run:
+        shell: bash
+    env:
+      GIT_TERMINAL_PROMPT: "0"
+      GIT_CONFIG_COUNT: "1"
+      GIT_CONFIG_KEY_0: http.version
+      GIT_CONFIG_VALUE_0: HTTP/1.1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: 准备 Fcitx5、SDK 与构建工具
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/flatpak-runtime"
+          chmod 700 "$RUNNER_TEMP/flatpak-runtime"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/flatpak-runtime" >> "$GITHUB_ENV"
+          flatpak remote-add --user --if-not-exists --from flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          for ref in org.fcitx.Fcitx5 org.kde.Sdk//6.11 org.freedesktop.Sdk.Extension.llvm21//25.08; do
+            if ! flatpak info "$ref" > /dev/null 2>&1; then
+              flatpak install --user --noninteractive -y flathub "$ref"
+            fi
+          done
+      - name: 在本机架构构建扩展
+        run: |
+          flatpak-builder --user --disable-rofiles-fuse --jobs=2 \
+            --state-dir=build/flatpak/state --repo=build/flatpak/repo \
+            build/flatpak/app packaging/flatpak/org.fcitx.Fcitx5.Addon.WeTypeX.json
+      - name: 生成单文件安装包
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p build/flatpak/artifacts
+          flatpak build-bundle --runtime \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            build/flatpak/repo \
+            "build/flatpak/artifacts/fcitx5-wetypex-flatpak-$PACKAGE_ARCH.flatpak" \
+            org.fcitx.Fcitx5.Addon.WeTypeX stable
+          cd build/flatpak/artifacts
+          sha256sum ./*.flatpak > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: fcitx5-wetypex-flatpak-${{ matrix.arch }}
+          path: build/flatpak/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  installed-runtime:
+    name: installed Flatpak (${{ matrix.arch }})
+    needs: extension
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # The SDK image builds extensions; a desktop host supplies the session
+      # portal used by flatpak-spawn to launch the isolated engine.
+      - name: 准备宿主 Flatpak 和会话服务
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends flatpak dbus-user-session
+          # GitHub's Ubuntu image restricts unprivileged namespaces without a
+          # desktop Flatpak profile. Allow them on this disposable runner.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          flatpak remote-add --user --if-not-exists --from flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive -y flathub org.fcitx.Fcitx5
+      - uses: actions/download-artifact@v8
+        with:
+          name: fcitx5-wetypex-flatpak-${{ matrix.arch }}
+          path: build/flatpak/artifacts
+      - name: 校验安装包
+        working-directory: build/flatpak/artifacts
+        run: sha256sum -c SHA256SUMS
+      - name: 安装后验证真实核心、TLS 和语音
+        env:
+          PACKAGE_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 --connect-timeout 10 --max-time 90 \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav \
+            -o "$RUNNER_TEMP/wetypex-speech.wav"
+          printf '%s  %s\n' 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e \
+            "$RUNNER_TEMP/wetypex-speech.wav" | sha256sum -c
+          export PACKAGE_FILE="$PWD/build/flatpak/artifacts/fcitx5-wetypex-flatpak-$PACKAGE_ARCH.flatpak"
+          dbus-run-session -- bash -euo pipefail -c '
+            flatpak install --user --noninteractive -y "$PACKAGE_FILE"
+            flatpak info --user --show-ref org.fcitx.Fcitx5.Addon.WeTypeX | grep -Fx "runtime/org.fcitx.Fcitx5.Addon.WeTypeX/$PACKAGE_ARCH/stable"
+            flatpak override --user --filesystem="$RUNNER_TEMP/wetypex-speech.wav:ro" org.fcitx.Fcitx5
+            prefix=/app/addons/WeTypeX/bin
+            flatpak run --command="$prefix/fcitx5-wetypex-setup" org.fcitx.Fcitx5 \
+              --download --accept-upstream-license || {
+                cat "$HOME/.var/app/org.fcitx.Fcitx5/cache/fcitx5-wetypex/last-runtime-check.log"
+                exit 1
+              }
+            flatpak run --command="$prefix/fcitx5-wetypex-setup" org.fcitx.Fcitx5 \
+              --check --transport > "$RUNNER_TEMP/wetypex-runtime.json"
+            python3 -c '\''import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/wetypex-runtime.json")); assert v["core_ready"] and v["ui_installed"] and v["transport_checked"]'\''
+            flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 \
+              transcribe "$RUNNER_TEMP/wetypex-speech.wav" --realtime > "$RUNNER_TEMP/wetypex-voice.json"
+            python3 -c '\''import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/wetypex-voice.json")); assert v["ok"] and v["text"].strip()'\''
+            flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 shutdown
+          '

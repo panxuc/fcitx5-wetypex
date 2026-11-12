@@ -442,8 +442,9 @@ static void business_service() {
   std::string existing_uin =
       starting_uin ? std::to_string(starting_uin) : std::string();
   const char *business_work = getenv("WETYPE_WORK_DIR");
+  const std::string default_business_work = workspace_root + "/business";
   if (!business_work || !*business_work)
-    business_work = "/work/business";
+    business_work = default_business_work.c_str();
   mkdir(business_work, 0700);
   BusinessNetworkConfig network{5,
                                 0,

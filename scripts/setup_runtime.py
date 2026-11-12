@@ -24,6 +24,7 @@ def install_ui_resources(archive, data):
     with zipfile.ZipFile(archive) as z:
         assets={}
         system_theme_root=next((path for path in (
+            pathlib.Path(__file__).resolve().parent.parent/'fcitx5/themes',
             pathlib.Path('/usr/share/fcitx5/themes'),
             pathlib.Path('/usr/local/share/fcitx5/themes'))
             if (path/'wetypex-light/theme.conf').is_file()),None)
@@ -276,7 +277,7 @@ def validate_runtime(target,user_snapshot=None,report=None,converted_snapshot=No
     required=[host,locale,support/'libkqueue.so',support/'wcwss_bridge.so']
     if any(not path.exists() for path in required):
         return False,'WeTypeX engine host is not installed'
-    bwrap=shutil.which('bwrap')
+    bwrap=shutil.which(os.environ.get('WETYPE_SANDBOX') or 'bwrap')
     if not bwrap:
         return False,'bubblewrap is not installed'
     try:

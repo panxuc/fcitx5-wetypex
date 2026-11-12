@@ -1,0 +1,236 @@
+{
+  "app-id": "org.fcitx.Fcitx5.Addon.WeTypeX",
+  "branch": "stable",
+  "runtime": "org.fcitx.Fcitx5",
+  "runtime-version": "stable",
+  "sdk": "org.kde.Sdk//6.11",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.llvm21"
+  ],
+  "build-extension": true,
+  "separate-locales": false,
+  "build-options": {
+    "prefix": "/app/addons/WeTypeX",
+    "prepend-path": "/usr/lib/sdk/llvm21/bin:/app/addons/WeTypeX/bin",
+    "prepend-pkg-config-path": "/app/addons/WeTypeX/lib/pkgconfig",
+    "env": {
+      "CC": "clang",
+      "CXX": "clang++"
+    },
+    "no-debuginfo": true,
+    "strip": true
+  },
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/lib/cmake",
+    "/lib/*.a",
+    "/lib/*.la",
+    "/share/man",
+    "/share/doc",
+    "/lib/fcitx5-wetypex/abi/include",
+    "/lib/fcitx5-wetypex/abi/share",
+    "/lib/fcitx5-wetypex/abi/lib/cmake",
+    "/lib/fcitx5-wetypex/abi/lib/*.a"
+  ],
+  "modules": [
+    {
+      "name": "boost",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://archives.boost.io/release/1.92.0/source/boost_1_92_0.tar.bz2",
+          "sha256": "5c1d40cb8e19adbf740a4ec2da35b3e58f3f5804b1dce44deb53df72193cbc6c"
+        }
+      ],
+      "build-commands": [
+        "./bootstrap.sh --prefix=${FLATPAK_DEST} --with-libraries=iostreams",
+        "./b2 -j${FLATPAK_BUILDER_N_JOBS} install variant=release cxxstd=17 --layout=system"
+      ]
+    },
+    {
+      "name": "libime",
+      "buildsystem": "cmake-ninja",
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/fcitx/libime",
+          "tag": "1.1.17",
+          "commit": "50de277992132ff59a6da64c88318f2a51a08f3d"
+        }
+      ],
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DENABLE_TEST=OFF",
+        "-DENABLE_DATA=OFF",
+        "-DENABLE_TOOLS=OFF"
+      ]
+    },
+    {
+      "name": "json-c",
+      "buildsystem": "cmake-ninja",
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/json-c/json-c/releases/download/json-c-0.19-20260627/json-c-0.19-nodoc.tar.gz",
+          "sha256": "704927172443309a8efeb162060bb215548e1286e5568514007dd2cc35a0a164"
+        }
+      ],
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DBUILD_TESTING=OFF",
+        "-DBUILD_STATIC_LIBS=OFF"
+      ]
+    },
+    {
+      "name": "wetypex-libcxx",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/libcxx-18.1.8.src.tar.xz",
+          "sha256": "bdecf90be0072bc720fd5c9c8ab061cdb197edd0c8ad3e170dc3e6bfaa49f388",
+          "dest": "libcxx"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/libcxxabi-18.1.8.src.tar.xz",
+          "sha256": "256c30d724eeb72713bc08ae1692f53aaf4ebe8a1d662c92bf59e69d6c53dce9",
+          "dest": "libcxxabi"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/cmake-18.1.8.src.tar.xz",
+          "sha256": "59badef592dd34893cd319d42b323aaa990b452d05c7180ff20f23ab1b41e837",
+          "dest": "cmake"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/runtimes-18.1.8.src.tar.xz",
+          "sha256": "9997c2e91e5438e2963306ba5019d85b5384b467535632738d8670ced8f07cb3",
+          "dest": "runtimes"
+        },
+        {
+          "type": "archive",
+          "url": "https://github.com/llvm/llvm-project/releases/download/llvmorg-18.1.8/llvm-18.1.8.src.tar.xz",
+          "sha256": "f68cf90f369bc7d0158ba70d860b0cb34dbc163d6ff0ebc6cfa5e515b9b2e28d",
+          "dest": "llvm"
+        }
+      ],
+      "build-commands": [
+        "abi_flag=; if [ \"${FLATPAK_ARCH:-$(uname -m)}\" = aarch64 ]; then abi_flag=-DLIBCXX_ABI_DEFINES=_LIBCPP_ABI_ALTERNATE_STRING_LAYOUT; fi; cmake -S runtimes -B _build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=${FLATPAK_DEST}/lib/fcitx5-wetypex/abi -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_RPATH='$ORIGIN' \"-DLLVM_ENABLE_RUNTIMES=libcxx;libcxxabi\" -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_DOCS=OFF -DLIBCXX_INCLUDE_TESTS=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF -DLIBCXX_ENABLE_SHARED=ON -DLIBCXX_ENABLE_STATIC=OFF -DLIBCXXABI_ENABLE_SHARED=ON -DLIBCXXABI_ENABLE_STATIC=OFF -DLIBCXXABI_INCLUDE_TESTS=OFF -DLIBCXXABI_USE_LLVM_UNWINDER=OFF -DLIBCXX_ENABLE_WERROR=OFF -DLIBCXXABI_ENABLE_WERROR=OFF $abi_flag",
+        "cmake --build _build --parallel ${FLATPAK_BUILDER_N_JOBS}",
+        "cmake --install _build",
+        "install -Dm644 libcxx/LICENSE.TXT ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/libcxx-LICENSE",
+        "install -Dm644 libcxxabi/LICENSE.TXT ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/libcxxabi-LICENSE"
+      ]
+    },
+    {
+      "name": "pillow",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://files.pythonhosted.org/packages/ce/a4/9cc30690a394a8305e8be4c9036aa16d0dfddadd09079860b582f562496d/pillow-13.0.0.tar.gz",
+          "sha256": "cdcd1ba258178f7356d74170c9a81ba4eab6a5d55748bc402a5a2a6fe6be3510"
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/88/c5/e98d9c51f3d5300d5e40ad9037dd6b3b60736fd02ab68dcc98c96be7592d/pybind11-3.0.2-py3-none-any.whl",
+          "sha256": "f8a6500548919cc33bcd220d5f984688326f574fa97f1107f2f4fdb4c6fb019f"
+        }
+      ],
+      "build-commands": [
+        "python3 -m pip install --no-deps --no-index --no-compile --target=.build-python pybind11-3.0.2-py3-none-any.whl",
+        "PYTHONPATH=$PWD/.build-python python3 -m pip install --no-deps --no-build-isolation --no-index --no-compile --target=${FLATPAK_DEST}/share/fcitx5-wetypex/vendor .",
+        "mkdir -p ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/pybind11 && cp -a .build-python/pybind11-*.dist-info/licenses/. ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/pybind11/"
+      ]
+    },
+    {
+      "name": "fonttools",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/35/74/4ea331ecc65ba05a58b1e4e8ccd604c8a15565f876dfbf93fc2a2ea2e22b/fonttools-4.68.0-py3-none-any.whl",
+          "sha256": "d76f8fdcb6936f5e1045a0c9dd721a4bf11112e60d1e243bfa1d39f06a8b3104"
+        }
+      ],
+      "build-commands": [
+        "python3 -m pip install --no-deps --no-index --no-compile --target=${FLATPAK_DEST}/share/fcitx5-wetypex/vendor fonttools-4.68.0-py3-none-any.whl"
+      ]
+    },
+    {
+      "name": "qemu-user",
+      "buildsystem": "simple",
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://download.qemu.org/qemu-11.1.3.tar.xz",
+          "sha256": "5a8289c7940dc77d3873c81a6c29ba3afe1446fc9d36e77fa1658cdbecb84b22"
+        }
+      ],
+      "build-commands": [
+        "target=\"${FLATPAK_ARCH:-$(uname -m)}\"; ./configure --prefix=${FLATPAK_DEST} --target-list=\"${target}-linux-user\" --disable-system --disable-tools --disable-docs --disable-guest-agent --disable-plugins --disable-rust --disable-werror --disable-download",
+        "target=\"${FLATPAK_ARCH:-$(uname -m)}\"; ninja -C build -j${FLATPAK_BUILDER_N_JOBS} \"qemu-${target}\"",
+        "target=\"${FLATPAK_ARCH:-$(uname -m)}\"; install -Dm755 \"build/qemu-${target}\" \"${FLATPAK_DEST}/bin/qemu-${target}\"",
+        "install -Dm644 COPYING ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/qemu-COPYING"
+      ]
+    },
+    {
+      "name": "fcitx5-wetypex",
+      "buildsystem": "cmake-ninja",
+      "sources": [
+        {
+          "type": "dir",
+          "path": "../..",
+          "skip": [
+            ".git",
+            "build",
+            "dist"
+          ]
+        },
+        {
+          "type": "git",
+          "url": "https://github.com/mheily/libkqueue.git",
+          "commit": "46a3e130f88b0b0742575dcb01d77e336538024b",
+          "dest": "deps/libkqueue"
+        },
+        {
+          "type": "archive",
+          "url": "https://curl.se/download/curl-8.22.0.tar.xz",
+          "sha256": "f7ef3ae8a22e521f289803fe93543eb64c329b58aa73a9e224dfd915a2a5f4f7",
+          "dest": "deps/curl"
+        }
+      ],
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DWETYPE_FLATPAK=ON",
+        "-DWETYPE_QT_VERSION=6",
+        "-DWETYPE_LAYER_SHELL=OFF",
+        "-DWETYPE_CLANGXX=/usr/lib/sdk/llvm21/bin/clang++",
+        "-DWETYPE_DARWIN_LIBCXX_ROOT=/app/addons/WeTypeX/lib/fcitx5-wetypex/abi",
+        "-DWETYPE_CXXABI_LIBRARY=/app/addons/WeTypeX/lib/fcitx5-wetypex/abi/lib/libc++abi.so",
+        "-DWETYPE_DARWIN_LIBCXX_LICENSE=/app/addons/WeTypeX/share/licenses/fcitx5-wetypex/libcxx-LICENSE",
+        "-DFETCHCONTENT_SOURCE_DIR_KQUEUE=/run/build/fcitx5-wetypex/deps/libkqueue",
+        "-DFETCHCONTENT_SOURCE_DIR_WETYPEX_CURL=/run/build/fcitx5-wetypex/deps/curl",
+        "-DFETCHCONTENT_FULLY_DISCONNECTED=ON",
+        "-DWETYPE_QEMU_AARCH64=/app/addons/WeTypeX/bin/qemu-aarch64",
+        "-DWETYPE_QEMU_X86_64=/app/addons/WeTypeX/bin/qemu-x86_64"
+      ],
+      "post-install": [
+        "sed -i 's/PACKAGE_UPDATES = True/PACKAGE_UPDATES = False/' ${FLATPAK_DEST}/bin/fcitx5-wetypex-update",
+        "install -Dm644 packaging/flatpak/org.fcitx.Fcitx5.Addon.WeTypeX.metainfo.xml ${FLATPAK_DEST}/share/metainfo/org.fcitx.Fcitx5.Addon.WeTypeX.metainfo.xml",
+        "sed -i '/^exec /i export TMPDIR=\"${XDG_CACHE_HOME:-$HOME/.cache}\"' ${FLATPAK_DEST}/bin/fcitx5-wetypex-setup",
+        "grep -q '^PACKAGE_UPDATES = False$' ${FLATPAK_DEST}/bin/fcitx5-wetypex-update",
+        "mkdir -p ${FLATPAK_DEST}/libexec",
+        "mv ${FLATPAK_DEST}/bin/fcitx5-wetypex-ai-viewer ${FLATPAK_DEST}/libexec/fcitx5-wetypex-ai-viewer",
+        "install -m755 packaging/flatpak/ai-viewer.sh ${FLATPAK_DEST}/bin/fcitx5-wetypex-ai-viewer"
+      ]
+    }
+  ]
+}

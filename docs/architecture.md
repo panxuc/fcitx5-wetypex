@@ -7,7 +7,7 @@ WeTypeX 把微信输入法 macOS 版的原版 C/C++ 输入核心接入 Fcitx5。
 | | 适配层 | 原版运行时 |
 | --- | --- | --- |
 | 来源 | 本仓库源码，MIT 许可 | 微信输入法官方下载服务，专有 |
-| 安装 | 包管理器或 Nix，位于 `/usr` 或 Nix store | `fcitx5-wetypex-setup`，位于用户数据目录 |
+| 安装 | 包管理器、Nix 或 Fcitx5 Flatpak 扩展 | `fcitx5-wetypex-setup`，位于用户数据目录 |
 | 内容 | 插件、兼容宿主、设置界面、辅助命令、兼容清单 | 输入核心、词典、Flurry/WXP2P 传输模块、界面与语音资源 |
 
 原版程序是 macOS Mach-O 映像。设置工具校验官方 ZIP 与组件散列，为本机架构（x86-64 或 ARM64）提取对应切片和词典，并生成兼容宿主可加载的映像与重定位清单。可接受的版本和组件组合由兼容清单 `runtime-profiles.json` 决定，见[运行时更新、回退与清理](runtime-updates.md)。
@@ -19,7 +19,7 @@ WeTypeX 把微信输入法 macOS 版的原版 C/C++ 输入核心接入 Fcitx5。
 | `wetypex.so` | Fcitx5 输入法引擎：按键状态、候选、预编辑、提交，以及运行时空闲切换 |
 | `wetypex-engine-host` | 加载原版映像，提供所需的 Darwin ABI；按 CPU 指令集选择原生执行或同架构 QEMU |
 | `wcwss_bridge.so` | 把原版网络调用桥接到 Linux 的 curl、TLS 与 WebSocket |
-| `fcitx5-wetypex-backend` | 在 Bubblewrap 中启动持久输入服务 |
+| `fcitx5-wetypex-backend` | 在受限子进程中启动持久输入服务 |
 | `fcitx5-wetypex-account` | 配对、设备组、同步、语音文件和网络诊断等业务命令 |
 | `fcitx5-wetypex-syncd` | 轮询设备组并交换剪贴板内容 |
 | `fcitx5-wetypex-transfer` | 隔空传送窗口：生成官方二维码，驱动原版 Flurry 局域网与 WXP2P 文件通道 |
@@ -49,6 +49,12 @@ WeTypeX 把微信输入法 macOS 版的原版 C/C++ 输入核心接入 Fcitx5。
 兼容宿主只初始化原版的 C/C++ 输入与业务部分，不运行 AppKit、Swift 设置窗口或官方桌面进程。宿主提供原版实际使用的线程、文件、时间、区域设置、CoreFoundation 轻量对象和 libc++ ABI，对未实现的导入符号使用受控陷阱。
 
 固定地址、结构尺寸和字段偏移随兼容档案的 `abi` 标识绑定。设置工具在准备运行时时校验官方 ZIP、核心切片和词典散列，只有兼容清单中列出的组合才会被加载。
+
+## 与 Darling 的关系
+
+[Darling](https://github.com/darlinghq/darling#introduction) 提供 Mach-O 加载、Darwin 系统调用、Mach IPC 和 macOS 框架环境。WeTypeX 当前只运行原版输入与业务的 C/C++ 部分，使用独立的小型兼容宿主。
+
+替换为 Darling 仍需处理原版代码对 CPU 指令的要求，并保留 Fcitx5 的输入上下文和提交接口。它可以作为 ABI 兼容性的研究方向；整体替换需要独立验证候选、持久化、语音、网络传输、进程生命周期和沙箱集成。当前保留兼容宿主，缺失的 CPU 指令通过按需 QEMU 处理。
 
 ## CPU 指令集与兼容执行
 
@@ -98,7 +104,7 @@ AI 以目标应用的 surrounding text 作为问题。原版服务返回服务�
 
 ## 沙箱与文件权限
 
-输入和账户宿主运行在 Bubblewrap 容器中，只读绑定系统库（包括宿主 `/lib64`）、证书、时区和已准备的运行时，可写目录限于各自的状态目录。单机模式额外隔离网络命名空间。账户、AI、语音和剪贴板状态使用 `0700` 目录与 `0600` 文件。启动沙箱前清空环境并显式传入所需变量，兼容 Ubuntu 20.04 的 Bubblewrap 0.4。
+原生包中的输入和账户宿主使用 Bubblewrap，只读绑定系统库（包括宿主 `/lib64`）、证书、时区和已准备的运行时，可写目录限于各自的状态目录。Flatpak 扩展通过原生子沙箱接口完成只读资源和可写状态目录的授权，两种方式在单机模式中均隔离网络命名空间。账户、AI、语音和剪贴板状态使用 `0700` 目录与 `0600` 文件。启动核心前清空环境并显式传入所需变量；原生包继续兼容 Ubuntu 20.04 的 Bubblewrap 0.4。详见 [Flatpak 扩展](flatpak.md)。
 
 ## 数据流向
 
