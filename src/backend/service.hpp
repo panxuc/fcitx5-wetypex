@@ -11,19 +11,22 @@ static const wetype::WeChatEmoticons &service_emoticons() {
       "wechat-emoticons.json");
   return data;
 }
+// macOS 2.2.3.657 / Windows 2.1.3.18: the 40-byte aggregate is passed by
+// value, and is embedded at session config +0xf8 by mac-capi-v1.
+struct GroupSyncInfo {
+  bool unknown, debug;
+  unsigned char padding[6];
+  uint64_t groupId, functions, phraseVersion, dictionaryVersion;
+};
+static_assert(sizeof(GroupSyncInfo) == 40);
+static GroupSyncInfo current_group_sync{true, false, {}, 0, 0, 0, 0};
 static void configure_group_sync(uint64_t groupId, uint64_t functions,
                                  uint64_t phraseVersion,
                                  uint64_t dictionaryVersion) {
-  // macOS 2.2.3.657 / Windows 2.1.3.18: the 40-byte aggregate is passed by
-  // value.
-  struct GroupSyncInfo {
-    bool unknown, debug;
-    unsigned char padding[6];
-    uint64_t groupId, functions, phraseVersion, dictionaryVersion;
-  } info{
+  current_group_sync = {
       false, false, {}, groupId, functions, phraseVersion, dictionaryVersion};
-  static_assert(sizeof(GroupSyncInfo) == 40);
-  ((void (*)(GroupSyncInfo))syms.at("_wxime_group_sync_info_changed"))(info);
+  ((void (*)(GroupSyncInfo))syms.at("_wxime_group_sync_info_changed"))(
+      current_group_sync);
 }
 // Verified against +[WXIMEUtil addHotWord:value:] and removeHotWord:.
 // The 80-byte aggregate is passed BY VALUE, including in the enumerator
@@ -464,8 +467,8 @@ static void service_snapshot(ServiceSession &s, json_object *response) {
 }
 static void service_loop() {
   // Prime the original engine and QEMU's translation cache while the backend
-  // starts. Use the original warm-up API in an isolated, offline session;
-  // real sessions keep their original input, settings and candidate order.
+  // starts. The warm-up session does not enable cloud candidates; real
+  // sessions keep their original input, settings and candidate order.
   const auto warmup = syms.find("_wxime_warm_up_session");
   if (getenv("WETYPE_QEMU_WRAPPED") && warmup != syms.end()) {
     ServiceSession warm;
@@ -473,6 +476,7 @@ static void service_loop() {
     config[1] = 1;
     for (unsigned offset : {0x8u, 0x9u, 0xau, 0xbu, 0xcu})
       config[offset] = 1;
+    memcpy(config + 0xf8, &current_group_sync, sizeof(current_group_sync));
     warm.engine = ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
     if (warm.engine) {
       ((void (*)(uint64_t, decltype(&service_listener), void *))syms.at(
@@ -693,6 +697,8 @@ static void service_loop() {
         *(uint32_t *)(config + 0xb8) =
             wire::number(request.get(), "traditional", 0) ? 1 : 0;
         state->keyboard = keyboard;
+        // 新会话也会触发同步，不能用全零信息覆盖已知设备组。
+        memcpy(config + 0xf8, &current_group_sync, sizeof(current_group_sync));
         state->engine =
             ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
         if (!state->engine)
