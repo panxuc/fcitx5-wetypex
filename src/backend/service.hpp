@@ -2,6 +2,7 @@
 // thread.
 #include "../common/wechat_emoticons.hpp"
 #include "control.hpp"
+#include <cstddef>
 #include <thread>
 static const wetype::WeChatEmoticons &service_emoticons() {
   static const wetype::WeChatEmoticons data(
@@ -20,6 +21,14 @@ struct GroupSyncInfo {
 };
 static_assert(sizeof(GroupSyncInfo) == 40);
 static GroupSyncInfo current_group_sync{true, false, {}, 0, 0, 0, 0};
+static_assert(offsetof(GroupSyncInfo, groupId) == 8);
+static_assert(offsetof(GroupSyncInfo, dictionaryVersion) == 32);
+static uint64_t create_service_session(unsigned char (&config)[2048]) {
+  // A session also updates the core's global sync state. Reuse the latest
+  // notification, including a known group with every switch turned off.
+  memcpy(config + 0xf8, &current_group_sync, sizeof(current_group_sync));
+  return ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
+}
 static void configure_group_sync(uint64_t groupId, uint64_t functions,
                                  uint64_t phraseVersion,
                                  uint64_t dictionaryVersion) {
@@ -476,8 +485,7 @@ static void service_loop() {
     config[1] = 1;
     for (unsigned offset : {0x8u, 0x9u, 0xau, 0xbu, 0xcu})
       config[offset] = 1;
-    memcpy(config + 0xf8, &current_group_sync, sizeof(current_group_sync));
-    warm.engine = ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
+    warm.engine = create_service_session(config);
     if (warm.engine) {
       ((void (*)(uint64_t, decltype(&service_listener), void *))syms.at(
           "_wxime_add_session_listener"))(warm.engine, service_listener, &warm);
@@ -697,10 +705,7 @@ static void service_loop() {
         *(uint32_t *)(config + 0xb8) =
             wire::number(request.get(), "traditional", 0) ? 1 : 0;
         state->keyboard = keyboard;
-        // 新会话也会触发同步，不能用全零信息覆盖已知设备组。
-        memcpy(config + 0xf8, &current_group_sync, sizeof(current_group_sync));
-        state->engine =
-            ((uint64_t (*)(void *))syms.at("_wxime_create_session"))(config);
+        state->engine = create_service_session(config);
         if (!state->engine)
           _exit(91);
         ((void (*)(uint64_t, decltype(&service_listener), void *))syms.at(
