@@ -217,7 +217,8 @@ def update_dialog(body, can_install):
             return True, False
         except OSError:
             continue
-        if result.returncode in (0, 1):
+        # KDialog distinguishes closing the window (2) from choosing No (1).
+        if result.returncode in ((0, 1, 2) if name == "kdialog" else (0, 1)):
             return True, can_install and result.returncode == 0
     return False, False
 
