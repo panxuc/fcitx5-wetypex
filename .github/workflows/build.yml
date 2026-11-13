@@ -93,6 +93,8 @@ jobs:
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
       - name: 构建
         run: cmake --build build --parallel
+      - name: 检查会话设备组同步参数
+        run: ctest --test-dir build --output-on-failure -R '^session-group-sync-'
       - name: 检查脚本
         run: |
           for script in scripts/*.sh.in; do

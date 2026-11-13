@@ -259,3 +259,17 @@ install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/fcitx5-wetypex/
 set(CPACK_PACKAGE_CONTACT "WeTypeX community project")
 set(CPACK_GENERATOR TXZ)
 include(CPack)
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(wetypex-session-group-sync-test tools/test_session_group_sync.cpp)
+  target_link_libraries(wetypex-session-group-sync-test PRIVATE
+    PkgConfig::JSONC Threads::Threads ${CMAKE_DL_LIBS})
+  foreach(scenario unknown configured refreshed)
+    foreach(mode normal warmup)
+      add_test(NAME session-group-sync-${scenario}-${mode}
+        COMMAND wetypex-session-group-sync-test ${scenario} ${mode})
+      set_tests_properties(session-group-sync-${scenario}-${mode}
+        PROPERTIES TIMEOUT 10)
+    endforeach()
+  endforeach()
+endif()
