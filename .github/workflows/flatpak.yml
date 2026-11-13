@@ -91,7 +91,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
@@ -116,9 +116,10 @@ jobs:
       - name: 校验安装包
         working-directory: build/flatpak/artifacts
         run: sha256sum -c SHA256SUMS
-      - name: 安装后验证真实核心、TLS 和语音
+      - name: 安装扩展并准备语音文件
         env:
           PACKAGE_ARCH: ${{ matrix.arch }}
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           curl -fL --retry 3 --connect-timeout 10 --max-time 90 \
@@ -126,22 +127,54 @@ jobs:
             -o "$RUNNER_TEMP/wetypex-speech.wav"
           printf '%s  %s\n' 59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e \
             "$RUNNER_TEMP/wetypex-speech.wav" | sha256sum -c
-          export PACKAGE_FILE="$PWD/build/flatpak/artifacts/fcitx5-wetypex-flatpak-$PACKAGE_ARCH.flatpak"
-          dbus-run-session -- bash -euo pipefail -c '
-            flatpak install --user --noninteractive -y "$PACKAGE_FILE"
-            flatpak info --user --show-ref org.fcitx.Fcitx5.Addon.WeTypeX | grep -Fx "runtime/org.fcitx.Fcitx5.Addon.WeTypeX/$PACKAGE_ARCH/stable"
-            flatpak override --user --filesystem="$RUNNER_TEMP/wetypex-speech.wav:ro" org.fcitx.Fcitx5
+          package="$PWD/build/flatpak/artifacts/fcitx5-wetypex-flatpak-$PACKAGE_ARCH.flatpak"
+          dbus-run-session -- flatpak install --user --noninteractive -y "$package"
+          flatpak info --user --show-ref org.fcitx.Fcitx5.Addon.WeTypeX | grep -Fx "runtime/org.fcitx.Fcitx5.Addon.WeTypeX/$PACKAGE_ARCH/stable"
+          flatpak override --user --filesystem="$RUNNER_TEMP/wetypex-speech.wav:ro" org.fcitx.Fcitx5
+      - name: 下载并校验原版运行时
+        timeout-minutes: 12
+        run: |
+          status=0
+          dbus-run-session -- timeout --kill-after=15s 10m \
+            flatpak run --command=/app/addons/WeTypeX/bin/fcitx5-wetypex-setup \
+            org.fcitx.Fcitx5 --download --accept-upstream-license || status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "Original runtime setup failed or exceeded its download deadline (status $status)."
+            log="$HOME/.var/app/org.fcitx.Fcitx5/cache/fcitx5-wetypex/last-runtime-check.log"
+            if [ -f "$log" ]; then tail -n 80 "$log"; fi
+            exit "$status"
+          fi
+      - name: 验证已安装核心与真实 TLS 传输
+        timeout-minutes: 5
+        run: |
+          dbus-run-session -- timeout --kill-after=15s 4m \
+            flatpak run --command=/app/addons/WeTypeX/bin/fcitx5-wetypex-setup \
+            org.fcitx.Fcitx5 --check --transport > "$RUNNER_TEMP/wetypex-runtime.json"
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'wetypex-runtime.json').read_text())
+          assert result['core_ready'] and result['ui_installed'] and result['transport_checked']
+          PYTHON
+      - name: 验证真实流式语音并关闭服务
+        timeout-minutes: 5
+        run: |
+          dbus-run-session -- timeout --kill-after=15s 4m bash -euo pipefail -c '
             prefix=/app/addons/WeTypeX/bin
-            flatpak run --command="$prefix/fcitx5-wetypex-setup" org.fcitx.Fcitx5 \
-              --download --accept-upstream-license || {
-                cat "$HOME/.var/app/org.fcitx.Fcitx5/cache/fcitx5-wetypex/last-runtime-check.log"
-                exit 1
-              }
-            flatpak run --command="$prefix/fcitx5-wetypex-setup" org.fcitx.Fcitx5 \
-              --check --transport > "$RUNNER_TEMP/wetypex-runtime.json"
-            python3 -c '\''import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/wetypex-runtime.json")); assert v["core_ready"] and v["ui_installed"] and v["transport_checked"]'\''
+            trap '\''status=$?; flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 shutdown >/dev/null 2>&1 || true; exit "$status"'\'' EXIT
             flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 \
               transcribe "$RUNNER_TEMP/wetypex-speech.wav" --realtime > "$RUNNER_TEMP/wetypex-voice.json"
-            python3 -c '\''import json,os; v=json.load(open(os.environ["RUNNER_TEMP"]+"/wetypex-voice.json")); assert v["ok"] and v["text"].strip()'\''
-            flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 shutdown
           '
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'wetypex-voice.json').read_text())
+          assert result['ok'] and result['text'].strip(), {key: result.get(key) for key in ('ok', 'state', 'error')}
+          PYTHON
+      - name: 清理语音服务
+        if: always()
+        timeout-minutes: 1
+        run: |
+          dbus-run-session -- timeout --kill-after=5s 45s \
+            flatpak run --command=/app/addons/WeTypeX/bin/fcitx5-wetypex-voice \
+            org.fcitx.Fcitx5 shutdown >/dev/null 2>&1 || true
