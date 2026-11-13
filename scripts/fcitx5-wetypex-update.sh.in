@@ -204,10 +204,27 @@ def notify_and_offer_install(package, version, family):
     if actions:
         command += ["--action=install=安装更新"]
     command += [f"WeTypeX {version} 已下载", f"已校验软件包：{package}"]
+    result = None
+    selected = ""
     try:
-        selected = subprocess.run(command, capture_output=True, text=True).stdout.strip()
+        result = subprocess.run(command, capture_output=True, text=True)
+        selected = result.stdout.strip()
     except OSError:
-        return
+        pass
+    # notify-send 0.8.8 在部分通知服务上会误判 actions 不支持并以非 0 退出，
+    # 此时用 zenity 兜底，避免更新只能下载不能安装。
+    if (result is None or result.returncode != 0) and shutil.which("zenity"):
+        try:
+            answer = subprocess.run(
+                ["zenity", "--question", "--title=WeTypeX 更新",
+                 f"--text=WeTypeX {version} 已下载，是否现在安装？",
+                 "--ok-label=安装更新", "--cancel-label=稍后"],
+                timeout=120,
+            )
+            if answer.returncode == 0:
+                selected = "install"
+        except (OSError, subprocess.TimeoutExpired):
+            pass
     if selected != "install" or not shutil.which("pkexec"):
         return
     installers = {
