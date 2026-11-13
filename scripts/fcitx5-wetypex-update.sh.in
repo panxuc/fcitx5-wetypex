@@ -3,6 +3,7 @@
 
 import fcntl
 import hashlib
+import html
 import json
 import os
 import pathlib
@@ -23,6 +24,7 @@ RELEASE_API = os.environ.get(
 )
 CHECK_INTERVAL = 24 * 60 * 60
 RETRY_INTERVAL = 60 * 60
+PROMPT_TIMEOUT = 120
 PACKAGE_UPDATES = True
 
 
@@ -185,54 +187,101 @@ def select_release(payload, family):
     return max(candidates, key=lambda item: item[0])[1]
 
 
-def notify_and_offer_install(package, version, family):
-    notify = shutil.which("notify-send")
-    if not notify:
-        return
-    try:
-        help_result = subprocess.run([notify, "--help"], capture_output=True,
-                                     timeout=3)
-        actions = help_result.returncode == 0 and b"--action" in (
-            help_result.stdout + help_result.stderr)
-    except (OSError, subprocess.TimeoutExpired):
-        return
-    command = [
-        notify,
-        "--app-name=WeTypeX",
-        "--icon=fcitx5-wetypex",
-    ]
-    if actions:
-        command += ["--action=install=安装更新"]
-    command += [f"WeTypeX {version} 已下载", f"已校验软件包：{package}"]
-    result = None
-    selected = ""
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-        selected = result.stdout.strip()
-    except OSError:
-        pass
-    # notify-send 0.8.8 在部分通知服务上会误判 actions 不支持并以非 0 退出，
-    # 此时用 zenity 兜底，避免更新只能下载不能安装。
-    if (result is None or result.returncode != 0) and shutil.which("zenity"):
+def update_dialog(body, can_install):
+    """Return (shown, install); dismissal never authorizes installation."""
+    if not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return False, False
+    tools = ["zenity", "kdialog"]
+    if "kde" in os.environ.get("XDG_CURRENT_DESKTOP", "").lower():
+        tools.reverse()
+    for name in tools:
+        tool = shutil.which(name)
+        if not tool:
+            continue
+        if name == "zenity":
+            command = [tool, "--question" if can_install else "--info",
+                       "--title=WeTypeX 更新", "--no-markup", f"--text={body}"]
+            if can_install:
+                command += ["--ok-label=安装更新", "--cancel-label=稍后",
+                            "--default-cancel"]
+        else:
+            text = "<qt>" + html.escape(body).replace("\n", "<br/>") + "</qt>"
+            command = [tool, "--title", "WeTypeX 更新",
+                       "--yesno" if can_install else "--msgbox", text]
+            if can_install:
+                command += ["--yes-label", "安装更新", "--no-label", "稍后"]
         try:
-            answer = subprocess.run(
-                ["zenity", "--question", "--title=WeTypeX 更新",
-                 f"--text=WeTypeX {version} 已下载，是否现在安装？",
-                 "--ok-label=安装更新", "--cancel-label=稍后"],
-                timeout=120,
-            )
-            if answer.returncode == 0:
-                selected = "install"
+            result = subprocess.run(command, stdin=subprocess.DEVNULL,
+                                    capture_output=True, timeout=PROMPT_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return True, False
+        except OSError:
+            continue
+        if result.returncode in (0, 1):
+            return True, can_install and result.returncode == 0
+    return False, False
+
+
+def notify_and_offer_install(package, version, family):
+    package = pathlib.Path(package).absolute()
+    installers = {
+        "arch": ["pacman", "-U", "--noconfirm"],
+        "debian": ["apt-get", "install", "-y"],
+        "fedora": ["dnf", "install", "-y"],
+    }
+    installer = installers.get(family, [])
+    manager = shutil.which(installer[0]) if installer else None
+    pkexec = shutil.which("pkexec")
+    can_install = bool(manager and pkexec)
+    body = f"WeTypeX {version} 已下载。\n已校验软件包：{package}\n"
+    body += "是否现在安装？" if can_install else "请用系统包管理器手动安装。"
+    notify = shutil.which("notify-send")
+    actions = False
+    if notify and can_install:
+        try:
+            result = subprocess.run([notify, "--help"], capture_output=True,
+                                    timeout=3)
+            actions = result.returncode == 0 and b"--action" in (
+                result.stdout + result.stderr)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    if selected != "install" or not shutil.which("pkexec"):
-        return
-    installers = {
-        "arch": ["pacman", "-U", "--noconfirm", str(package)],
-        "debian": ["apt-get", "install", "-y", str(package)],
-        "fedora": ["dnf", "install", "-y", str(package)],
-    }
-    subprocess.Popen(["pkexec", *installers[family]], start_new_session=True)
+    command = [notify, "--app-name=WeTypeX", "--icon=fcitx5-wetypex",
+               f"--expire-time={PROMPT_TIMEOUT * 1000}"] if notify else []
+    message = [f"WeTypeX {version} 已下载", html.escape(body)]
+    shown, selected = False, False
+    if actions:
+        try:
+            result = subprocess.run(
+                command + ["--action=install=安装更新"] + message,
+                capture_output=True, text=True, timeout=PROMPT_TIMEOUT + 5,
+            )
+            shown = result.returncode == 0
+            selected = shown and result.stdout.strip() == "install"
+        except subprocess.TimeoutExpired:
+            # Action notifications wait for a response. Expiry means "later".
+            shown = True
+        except OSError:
+            pass
+    if not shown and can_install:
+        shown, selected = update_dialog(body, can_install)
+    if not shown and notify:
+        try:
+            result = subprocess.run(command + message, capture_output=True,
+                                    timeout=10)
+            shown = result.returncode == 0
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    if not shown and not can_install:
+        shown, selected = update_dialog(body, can_install)
+    if selected:
+        try:
+            subprocess.Popen([pkexec, manager, *installer[1:], str(package)],
+                             stdin=subprocess.DEVNULL, start_new_session=True)
+        except OSError:
+            return False
+    if not shown:
+        print(body, file=sys.stderr)
+    return shown
 
 
 def main():
@@ -377,22 +426,28 @@ def check_update(root):
         # Only remove the package named in our previous verified receipt.
         if pathlib.Path(state.get('package', '')) != package:
             retire_package(root, state, version)
-        atomic_json(
-            state_path,
-            {
-                "checked_at": now,
-                "next_check": now + CHECK_INTERVAL,
-                "latest_version": release.get("tag_name", ""),
-                "package": str(package),
-                "sha256": digest,
-                "notified_sha256": digest,
-            },
-        )
+        receipt = {
+            "checked_at": now,
+            "next_check": now + CHECK_INTERVAL,
+            "latest_version": release.get("tag_name", ""),
+            "package": str(package),
+            "sha256": digest,
+        }
+        if state.get('notified_sha256') == digest:
+            receipt['notified_sha256'] = digest
+        # Keep the verified download even if the desktop cannot show a prompt.
+        atomic_json(state_path, receipt)
         if (os.environ.get("WETYPE_UPDATE_NO_NOTIFY") != "1" and
                 (state.get('notified_sha256') != digest or '--force' in sys.argv)):
-            notify_and_offer_install(
+            shown = notify_and_offer_install(
                 package, release["tag_name"].lstrip("v"), family
             )
+            if shown:
+                receipt['notified_sha256'] = digest
+            else:
+                receipt.pop('notified_sha256', None)
+                receipt['next_check'] = int(time.time()) + RETRY_INTERVAL
+            atomic_json(state_path, receipt)
         return 0
     except (
         OSError,
