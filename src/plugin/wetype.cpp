@@ -5,6 +5,7 @@
 #include "wechat_emoji.hpp"
 #include <algorithm>
 #include <cerrno>
+#include <cctype>
 #include <clipboard_public.h>
 #include <csignal>
 #include <cstddef>
@@ -2481,6 +2482,31 @@ class WeType : public InputMethodEngineV2 {
            ic->capabilityFlags().test(CapabilityFlag::Preedit) &&
            ic->isPreeditEnabled();
   }
+  static bool nativeEnglishField(InputContext *ic) {
+    if (ic->capabilityFlags().test(CapabilityFlag::NoSpellCheck))
+      return true;
+    // Electron's X11 IM bridge does not propagate the editor's spellcheck=false
+    // hint. Keep native key events for VS Code so its own quote pairing and
+    // IntelliSense trigger characters can run.
+    auto program = ic->program();
+    const auto slash = program.find_last_of('/');
+    if (slash != std::string::npos)
+      program.erase(0, slash + 1);
+    std::transform(program.begin(), program.end(), program.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    constexpr std::string_view desktop = ".desktop";
+    if (program.size() > desktop.size() &&
+        program.compare(program.size() - desktop.size(), desktop.size(),
+                        desktop) == 0)
+      program.resize(program.size() - desktop.size());
+    return program == "code" || program == "code-insiders" ||
+           program == "code-oss" || program == "vscode" ||
+           program == "codium" || program == "codium-insiders" ||
+           program == "com.visualstudio.code" ||
+           program == "com.visualstudio.code.insiders" ||
+           program == "com.vscodium.codium" ||
+           program == "com.vscodium.codium-insiders";
+  }
   static bool englishCompletionField(InputContext *ic) {
     constexpr auto blocked =
         uint64_t(CapabilityFlag::Password) | uint64_t(CapabilityFlag::Sensitive) |
@@ -2488,7 +2514,8 @@ class WeType : public InputMethodEngineV2 {
         uint64_t(CapabilityFlag::Email) | uint64_t(CapabilityFlag::Digit) |
         uint64_t(CapabilityFlag::Number) | uint64_t(CapabilityFlag::Dialable) |
         uint64_t(CapabilityFlag::Terminal);
-    return !(ic->capabilityFlags().toInteger() & blocked);
+    return !(ic->capabilityFlags().toInteger() & blocked) &&
+           !nativeEnglishField(ic);
   }
   bool englishCompletionEnabled(InputContext *ic, const State *s) const {
     return *config_.input->englishCompletion && !s->fullWidth &&
@@ -4410,6 +4437,8 @@ public:
       }
     }
     if (s->english) {
+      if (!s->fullWidth && nativeEnglishField(ic))
+        return;
       if (sym >= 0x20 && sym <= 0x7e) {
         const char ascii = char(sym);
         const auto *entry = punctuationEntry(ascii);
