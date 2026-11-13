@@ -233,8 +233,9 @@ def notify_and_offer_install(package, version, family):
     manager = shutil.which(installer[0]) if installer else None
     pkexec = shutil.which("pkexec")
     can_install = bool(manager and pkexec)
-    body = f"WeTypeX {version} 已下载。\n已校验软件包：{package}\n"
-    body += "是否现在安装？" if can_install else "请用系统包管理器手动安装。"
+    details = f"WeTypeX {version} 已下载。\n已校验软件包：{package}\n"
+    manual = details + "请用系统包管理器手动安装。"
+    body = details + "是否现在安装？" if can_install else manual
     notify = shutil.which("notify-send")
     actions = False
     if notify and can_install:
@@ -266,7 +267,8 @@ def notify_and_offer_install(package, version, family):
         shown, selected = update_dialog(body, can_install)
     if not shown and notify:
         try:
-            result = subprocess.run(command + message, capture_output=True,
+            result = subprocess.run(command + [message[0], html.escape(manual)],
+                                    capture_output=True,
                                     timeout=10)
             shown = result.returncode == 0
         except (OSError, subprocess.TimeoutExpired):
@@ -280,7 +282,7 @@ def notify_and_offer_install(package, version, family):
         except OSError:
             return False
     if not shown:
-        print(body, file=sys.stderr)
+        print(manual, file=sys.stderr)
     return shown
 
 
