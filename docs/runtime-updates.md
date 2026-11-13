@@ -105,7 +105,7 @@ fcitx5-wetypex-setup --update --version <版本> --download --accept-upstream-li
 
 更新器读取项目的 GitHub Release 列表，跳过草稿和预发布版本，只考虑同时包含本机软件包和 `SHA256SUMS` 的完整发布，从中选择版本号最高的一个。因此重建历史版本或尚未上传完成的发布不会影响选择。本机软件包按 `/etc/os-release` 的发行版类型（Arch、Debian/Ubuntu、Fedora）和 CPU 架构确定；Debian 系 glibc 低于 2.35 时选择 legacy deb。
 
-下载前，更新器先取得 `SHA256SUMS` 中该软件包的 SHA-256；缓存中已有散列相符的同名软件包时直接复用，否则下载并核对，不符即丢弃。通过核对的软件包保存在 `~/.cache/fcitx5-wetypex/updates/`，同一软件包只通知一次。旧版 `notify-send` 不支持操作按钮时，通知显示软件包的完整路径，请用包管理器手动安装。
+下载前，更新器先取得 `SHA256SUMS` 中该软件包的 SHA-256；缓存中已有散列相符的同名软件包时直接复用，否则下载并核对，不符即丢弃。通过核对的软件包保存在 `~/.cache/fcitx5-wetypex/updates/`，同一软件包只通知一次。旧版 `notify-send` 不支持操作按钮时，通知显示软件包的完整路径，请用包管理器手动安装；如果 `notify-send` 声明支持动作但实际调用失败（例如 libnotify 0.8.8 在 GNOME 50 下），更新器会改用 zenity 询问是否安装，zenity 不可用时仍显示路径。
 
 立即检查一次，不受开关和检查间隔限制，并再次显示通知：
 
