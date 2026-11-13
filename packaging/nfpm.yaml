@@ -18,6 +18,8 @@ contents:
     type: tree
 overrides:
   deb:
+    suggests:
+      - zenity | kdialog
     depends:
       - libc6 (>= 2.35)
       - libstdc++6 (>= 11)
@@ -49,6 +51,8 @@ overrides:
       - libnotify-bin
       - pkexec | policykit-1
   rpm:
+    suggests:
+      - (zenity or kdialog)
     depends:
       - glibc
       - libcxx

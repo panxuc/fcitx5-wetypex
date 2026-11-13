@@ -37,6 +37,8 @@ depends=(
 
 makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
 optdepends=('fcitx5-configtool: manage input methods'
+            'zenity: update installation dialog when notification actions are unavailable'
+            'kdialog: KDE update installation dialog when notification actions are unavailable'
             'qemu-user: original-engine compatibility for CPUs missing required instructions')
 source=(
     "${pkgname}-${pkgver}.tar.gz::${url}/releases/download/v${pkgver}-${pkgrel}/${pkgname}-${pkgver}.tar.gz"

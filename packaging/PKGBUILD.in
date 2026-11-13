@@ -10,6 +10,8 @@ depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'curl' '
 
 makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
 optdepends=('fcitx5-configtool: manage input methods'
+            'zenity: update installation dialog when notification actions are unavailable'
+            'kdialog: KDE update installation dialog when notification actions are unavailable'
             'qemu-user: original-engine compatibility for CPUs missing required instructions')
 install=fcitx5-wetypex.install
 source=("fcitx5-wetypex-${pkgver}.tar.gz"
