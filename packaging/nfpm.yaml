@@ -47,6 +47,7 @@ overrides:
       - libwayland-client0
       - pipewire-bin | pipewire
       - ffmpeg
+      - opencc
       - wl-clipboard
       - libnotify-bin
       - pkexec | policykit-1
@@ -75,6 +76,7 @@ overrides:
       - libwayland-client
       - pipewire-utils
       - /usr/bin/ffmpeg
+      - /usr/bin/opencc
       - wl-clipboard
       - libnotify
       - polkit

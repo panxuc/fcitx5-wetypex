@@ -1,0 +1,17 @@
+{
+  "version": "20260710",
+  "url": "https://download.z.weixin.qq.com/publish_words/v1/ime_asr_decoder_model/20260710220526250_ime_asr_decoder_model.apk",
+  "size": 102920639,
+  "sha256": "b3729fbe928b25740cc9cd781537175b1db4a445bd78bf464267c0c4633e0863",
+  "inner": "ime_asr_decoder_model.zip",
+  "files": {
+    "dict.decoder.utf8.txt": {
+      "size": 129706,
+      "sha256": "08a16004cfcf5b9f1668e055f3100de9b8a44f88541819def2bbd56bfd42f484"
+    },
+    "embed_140m_kld43wh_test_78000_1_merge_4.kv.conv1d.dyQu.onnx.xnet": {
+      "size": 135646496,
+      "sha256": "0674250a848ce3eb91024b3c0a6eda61b91ea45b2c40e4900130995e89cb9033"
+    }
+  }
+}

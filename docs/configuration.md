@@ -27,7 +27,7 @@ Nix 用户可以通过 `defaultSettings` 为新用户预置这些字段，见[�
 | 符号自动转换 | 中文半角输入中，数字间的冒号、逗号和句号在后一个数字输入时转为 ASCII，例如 `3。14` → `3.14`。普通中文句号保持原样。 |
 | 模糊拼音 | 原版 19 组模糊音，可独立开关。 |
 | 自动添加中英文空格 | 默认关闭，字段 `auto_space`；开启后由 `auto_space_english` 与 `auto_space_digit`（两项默认开启）分别控制字母和数字。详见下文。 |
-| 单机模式 | 字段 `standalone`。关闭云候选、设备同步、语音和问 AI 等联网能力；适配层与原版运行时的自动更新由“自动更新”开关单独控制。 |
+| 单机模式 | 字段 `standalone`。关闭云候选、设备同步、在线语音和问 AI 等联网能力；本地离线语音仍可使用。适配层与原版运行时的自动更新由“自动更新”开关单独控制。 |
 
 ### 英文单词补全
 
@@ -64,7 +64,8 @@ VS Code、Code OSS、VSCodium 和应用明确标记为“禁止拼写检查”�
 | --- | --- |
 | 麦克风 | “自动检测”使用当前默认输入源，也可指定 PipeWire 节点或 PulseAudio 音源。 |
 | 标点设置 | 智能标点、添加完整标点、句末不加句号、空格替换标点，字段 `voice_punctuation`。 |
-| 语音智能整理 | 交给原版引擎的 aggressive polish，字段 `voice_smart_polish`。 |
+| 识别方式 | `voice_provider`：`original`（默认，原版在线）或 `local`（本地离线，需下载官方模型）。见[模型管理](voice-input.md#选择识别方式)。 |
+| 语音智能整理 | 仅在线模式交给原版引擎的 aggressive polish，字段 `voice_smart_polish`；本地模式保留偏好并禁用该控件。 |
 | 识别后复制到剪贴板 | 默认开启，字段 `voice_copy_to_clipboard`。仅复制当前聚焦会话确认接收的最终结果，详见[流式语音输入](voice-input.md#提交与剪贴板)。 |
 | 快捷键 | 启动语音 `voice_launch_key`，按住说话 `voice_hold_key`，默认值见下表。 |
 

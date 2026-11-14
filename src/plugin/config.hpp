@@ -31,6 +31,9 @@ enum class CandidateLabelStyle { WeType, Fcitx };
 FCITX_CONFIG_ENUM_NAME(CandidateLabelStyle, "微信风格", "Fcitx 默认")
 enum class PreeditPosition { Client, Candidate };
 FCITX_CONFIG_ENUM_NAME(PreeditPosition, "输入框内", "候选框内")
+enum class VoiceProviderMode { Original, Local };
+FCITX_CONFIG_ENUM_NAME(VoiceProviderMode, "原版在线", "本地离线");
+
 enum class VoicePunctuationMode { Smart, Full, NoPeriod, Spaces };
 FCITX_CONFIG_ENUM_NAME(VoicePunctuationMode, "智能标点", "添加完整标点",
                        "句末不加句号", "空格替换标点")
@@ -92,7 +95,8 @@ FCITX_CONFIGURATION(
     Option<bool> standalone{this, "Standalone", "单机模式", false};)
 
 FCITX_CONFIGURATION(
-    VoiceConfig, Option<bool> launchShortcut{this, "LaunchShortcut",
+    VoiceConfig, Option<VoiceProviderMode> provider{this, "Provider", "识别方式", VoiceProviderMode::Original};
+    Option<bool> launchShortcut{this, "LaunchShortcut",
                                              "启动语音输入快捷键", true};
     KeyListOption launchKey{
         this,

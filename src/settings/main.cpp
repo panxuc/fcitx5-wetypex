@@ -27,6 +27,7 @@
 #include <QPlainTextEdit>
 #include <QProcess>
 #include <QProcessEnvironment>
+#include <QProgressBar>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QRegularExpression>
@@ -721,6 +722,187 @@ static QWidget *voiceShortcutRow(const QString &title, const QString &subtitle,
       });
   return container;
 }
+class OfflineVoiceModelPanel final : public QFrame {
+  QProcess *operation_ = new QProcess(this);
+  QProcess *probe_ = new QProcess(this);
+  QLabel *status_ = new QLabel("正在检查离线模型…", this);
+  QPushButton *download_ = greenButton("下载模型");
+  QPushButton *remove_ = new QPushButton("删除模型", this);
+  QProgressBar *progress_ = new QProgressBar(this);
+  QByteArray pending_;
+  QString error_;
+  bool ready_ = false;
+  bool cancelled_ = false;
+  bool acceptedDownload_ = false;
+  bool resumable_ = false;
+
+  bool message(const QString &title, const QString &text, const QString &action,
+               bool question = true) {
+    QDialog dialog(window(), Qt::Dialog | Qt::FramelessWindowHint);
+    dialog.setWindowTitle(title);
+    dialog.setObjectName("windowSurface");
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(22, 16, 22, 20);
+    layout->setSpacing(16);
+    auto *heading = new QHBoxLayout;
+    auto *label = new QLabel(title);
+    label->setObjectName("pageHeading");
+    heading->addWidget(label, 1);
+    auto *close = new SourceIconButton(asset("icon_windows_close_btn"));
+    close->setFixedSize(26, 26);
+    heading->addWidget(close);
+    QObject::connect(close, &QAbstractButton::clicked, &dialog, &QDialog::reject);
+    layout->addLayout(heading);
+    auto *body = new QLabel(text);
+    body->setWordWrap(true);
+    layout->addWidget(body);
+    auto *buttons = new QHBoxLayout;
+    buttons->addStretch();
+    if (question) {
+      auto *cancel = new QPushButton("取消");
+      cancel->setDefault(true);
+      cancel->setFocus();
+      buttons->addWidget(cancel);
+      QObject::connect(cancel, &QPushButton::clicked, &dialog, &QDialog::reject);
+    }
+    auto *confirm = greenButton(action);
+    confirm->setAutoDefault(true);
+    confirm->setDefault(!question);
+    buttons->addWidget(confirm);
+    QObject::connect(confirm, &QPushButton::clicked, &dialog, &QDialog::accept);
+    layout->addLayout(buttons);
+    const auto *screen = window()->windowHandle() ? window()->windowHandle()->screen() : QGuiApplication::primaryScreen();
+    dialog.setFixedWidth(screen ? qMin(460, qMax(240, screen->availableGeometry().width() - 24)) : 460);
+    dialog.adjustSize();
+    return dialog.exec() == QDialog::Accepted;
+  }
+
+  void refresh() {
+    if (operation_->state() == QProcess::NotRunning && probe_->state() == QProcess::NotRunning)
+      probe_->start(QStringLiteral(WETYPE_VOICE_TOOL), {"model", "status"});
+  }
+  void stop() {
+    cancelled_ = true;
+    operation_->terminate();
+    QTimer::singleShot(2500, operation_, [process = operation_] {
+      if (process->state() != QProcess::NotRunning)
+        process->kill();
+    });
+  }
+  void run(const QString &action) {
+    error_.clear(); pending_.clear(); cancelled_ = false;
+    progress_->setValue(0); progress_->setVisible(action == "install");
+    download_->setText("取消下载"); remove_->setEnabled(false);
+    status_->setText(action == "install" ? "正在连接下载，可取消后继续" : action == "verify" ? "正在校验离线模型…" : "正在删除离线模型…");
+    QStringList args{"model", action};
+    if (action == "install")
+      args << "--accept-upstream-license";
+    operation_->start(QStringLiteral(WETYPE_VOICE_TOOL), args);
+  }
+
+public:
+  OfflineVoiceModelPanel() {
+    setObjectName("card");
+    auto *layout = new QVBoxLayout(this);
+    layout->setContentsMargins(15, 12, 15, 12);
+    auto *title = new QLabel("离线语音模型"); title->setObjectName("rowTitle");
+    layout->addWidget(title);
+    auto *description = new QLabel("使用微信输入法官方离线模型，录音不上传；下载后可在单机模式使用。");
+    description->setObjectName("rowSubtitle"); description->setWordWrap(true);
+    layout->addWidget(description);
+    auto *actions = new QHBoxLayout;
+    status_->setObjectName("rowSubtitle"); status_->setWordWrap(true);
+    actions->addWidget(status_, 1);
+    actions->addWidget(remove_); actions->addWidget(download_);
+    download_->setObjectName("local-voice-model-download");
+    remove_->setObjectName("local-voice-model-remove");
+    remove_->setEnabled(false);
+    download_->setEnabled(false);
+    layout->addLayout(actions);
+    progress_->setTextVisible(false); progress_->setFixedHeight(4);
+    progress_->setStyleSheet("QProgressBar{border:0;background:#eee}QProgressBar::chunk{background:#13b77a}");
+    progress_->setVisible(false); layout->addWidget(progress_);
+    QObject::connect(download_, &QPushButton::clicked, this, [this] {
+      if (operation_->state() != QProcess::NotRunning) { stop(); return; }
+      if (ready_) { run("verify"); return; }
+      if (acceptedDownload_ || resumable_) { run("install"); return; }
+      if (message("下载离线语音模型",
+          "将从腾讯官方服务器下载约 103 MB 原版模型，安装后占用约 130 MB。原版资源适用微信输入法相关协议。", "下载")) {
+        acceptedDownload_ = true; run("install");
+      }
+    });
+    QObject::connect(remove_, &QPushButton::clicked, this, [this] {
+      if (message("删除离线语音模型",
+          "将删除离线模型和未完成的下载缓存，语音设置和原版在线识别会保留。", "删除"))
+        run("remove");
+    });
+    QObject::connect(operation_, &QProcess::readyReadStandardOutput, this, [this] {
+      pending_ += operation_->readAllStandardOutput();
+      while (pending_.contains('\n')) {
+        auto index = pending_.indexOf('\n');
+        const auto value = QJsonDocument::fromJson(pending_.left(index)).object();
+        pending_.remove(0, index + 1);
+        if (value.contains("error")) error_ = value.value("error").toString();
+        if (value.value("state").toString() == "downloading") {
+          const auto total = value.value("total").toDouble();
+          const int percent = total > 0 ? qBound(0, int(100 * value.value("received").toDouble() / total), 100) : 0;
+          progress_->setValue(percent); status_->setText(QString("正在下载 · %1%").arg(percent));
+        } else if (value.value("state").toString() == "verifying") {
+          status_->setText("正在校验并准备模型…");
+        }
+      }
+      if (pending_.size() > 65536) pending_.clear();
+    });
+    QObject::connect(operation_, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+        [this](int code, QProcess::ExitStatus) {
+          progress_->setVisible(false); remove_->setEnabled(false);
+          if (code && !cancelled_)
+            message("离线模型未准备好", error_.isEmpty() ? "操作未完成，请检查网络、可用空间或离线模型使用状态后重试。" : error_, "知道了", false);
+          refresh();
+        });
+    QObject::connect(operation_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart) {
+        progress_->setVisible(false); status_->setText("无法启动语音组件，请重新安装 WeTypeX");
+        download_->setText("重试"); remove_->setEnabled(false);
+      }
+    });
+    QObject::connect(probe_, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+        [this](int code, QProcess::ExitStatus) {
+          if (operation_->state() != QProcess::NotRunning) return;
+          const auto value = QJsonDocument::fromJson(probe_->readAllStandardOutput()).object();
+          ready_ = !code && value.value("ready").toBool();
+          const bool supported = !code && value.value("supported").toBool();
+          resumable_ = value.value("downloaded_bytes").toDouble() > 0;
+          const bool present = value.value("present").toBool();
+          download_->setEnabled(supported); download_->setText(ready_ ? "校验模型" : resumable_ ? "继续下载" : present ? "修复模型" : "下载模型");
+          remove_->setText(present ? "删除模型" : "清除下载");
+          remove_->setEnabled(value.value("removable").toBool());
+          status_->setText(!supported ? "当前安装缺少离线组件，请更新 WeTypeX" :
+                           ready_ ? "已下载 · 约 130 MB" :
+                           value.value("downloaded_bytes").toDouble() > 0 ? "下载未完成，可继续下载" : present ? "模型需要修复，可重新下载" : "未下载 · 约 103 MB");
+        });
+    QObject::connect(probe_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+      if (error == QProcess::FailedToStart) {
+        status_->setText("无法启动语音组件，请重新安装 WeTypeX"); download_->setEnabled(false); remove_->setEnabled(false);
+      }
+    });
+    auto *timer = new QTimer(this); timer->setInterval(3000);
+    QObject::connect(timer, &QTimer::timeout, this, [this] { if (isVisible()) refresh(); });
+    timer->start();
+    QObject::connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+      if (probe_->state() != QProcess::NotRunning) { probe_->kill(); probe_->waitForFinished(300); }
+      if (operation_->state() != QProcess::NotRunning) {
+        stop();
+        if (!operation_->waitForFinished(700)) operation_->kill();
+      }
+    });
+  }
+  void setLocal(bool value) {
+    if (!value && operation_->state() != QProcess::NotRunning) stop();
+    setVisible(value);
+    if (value) refresh();
+  }
+};
 static bool applyClassicTheme(int mode, std::optional<int> size,
                               bool themeChanged, QLabel *status) {
   QString path = configDir() + "/conf/classicui.conf";
@@ -1117,22 +1299,29 @@ int main(int argc, char **argv) {
       {"icon_speech", "语音实时转写到输入框，表达又快又准"},
       {"icon_time", "连续输入不限时长，超长内容轻松记"},
       {"icon_many", "支持中文、英文及多种方言自由混说"}};
+  QList<QLabel *> voiceFeatureLabels;
+  QWidget *voiceLanguageArrow = nullptr;
   for (const auto &[icon, text] : voiceFeatures) {
     auto *feature = new QWidget;
     auto *layout = new QHBoxLayout(feature);
     layout->setContentsMargins(4, 1, 4, 1);
     layout->setSpacing(10);
     layout->addWidget(iconLabel(icon, 18));
-    layout->addWidget(new QLabel(text), 1);
-    if (icon == "icon_many")
-      layout->addWidget(iconLabel("icon_about_arrow", 14));
+    auto *label = new QLabel(text);
+    label->setWordWrap(true);
+    voiceFeatureLabels.append(label);
+    layout->addWidget(label, 1);
+    if (icon == "icon_many") {
+      voiceLanguageArrow = iconLabel("icon_about_arrow", 14);
+      layout->addWidget(voiceLanguageArrow);
+    }
     voiceHeroLayout->addWidget(feature);
   }
   voice.body->addWidget(voiceHero);
   voice.body->addWidget(rowsCard(
       {row("快捷键", "在其他应用的文本框中使用；点击按键可修改", nullptr, 62),
        voiceShortcutRow("启动语音输入",
-                        "按下启动或结束；空格结束，回车上屏，Esc 取消",
+                        "按下启动或结束；\n空格结束，回车上屏，Esc 取消",
                         "voice_launch_shortcut", "voice_launch_key",
                         "Control+Super+Shift_L"),
        voiceShortcutRow("按住说话", "按住可语音输入，松手结束",
@@ -1227,6 +1416,30 @@ int main(int argc, char **argv) {
   QObject::connect(
       punctuationMode, &QComboBox::currentTextChanged,
       [](const QString &value) { writeSetting("voice_punctuation", value); });
+  auto *provider = new QComboBox;
+  provider->setObjectName("voice-provider");
+  provider->addItems({"原版在线", "本地离线"});
+  provider->setCurrentIndex(settings.value("voice_provider").toString() == "local" ? 1 : 0);
+  auto *voiceLocalModel = new OfflineVoiceModelPanel;
+  auto *polishToggle = toggle(wetype::settingBool(settings.value("voice_smart_polish"), true), true, "voice_smart_polish");
+  auto updateProvider = [=](int index) {
+    voiceLocalModel->setLocal(index == 1);
+    polishToggle->setEnabled(index == 0);
+    polishToggle->setToolTip(index == 1 ? "智能整理需要联网，仅在原版在线识别时使用" : "");
+    const QStringList localFeatures{"语音实时转写到输入框，在本机完成识别", "单次最长十分钟，空格结束、回车确认", "支持中文、英文，录音不上传"};
+    for (int i = 0; i < voiceFeatureLabels.size(); ++i)
+      voiceFeatureLabels[i]->setText(index == 1 ? localFeatures[i] : voiceFeatures[i].second);
+    if (voiceLanguageArrow) voiceLanguageArrow->setVisible(index == 0);
+  };
+  updateProvider(provider->currentIndex());
+  QObject::connect(provider, qOverload<int>(&QComboBox::currentIndexChanged), [=](int index) {
+    if (!writeSetting("voice_provider", index == 1 ? "local" : "original")) {
+      QSignalBlocker block(provider); provider->setCurrentIndex(1 - index);
+    }
+    updateProvider(provider->currentIndex());
+  });
+  voice.body->addWidget(rowsCard({row("识别方式", {}, provider, 48)}));
+  voice.body->addWidget(voiceLocalModel);
   voice.body->addWidget(
       rowsCard({row("麦克风", "设置语音输入的默认麦克风", microphone),
                 row("标点设置", {}, punctuationMode),
@@ -1236,11 +1449,9 @@ int main(int argc, char **argv) {
                                settings.value("voice_copy_to_clipboard"), true),
                            true, "voice_copy_to_clipboard"),
                     74),
-                row("语音智能整理", {},
-                    toggle(wetype::settingBool(
-                               settings.value("voice_smart_polish"), true),
-                           true, "voice_smart_polish"),
-                    52)}));
+                row("语音智能整理", "仅原版在线识别可用",
+                    polishToggle,
+                    64)}));
   pages->addWidget(voice.widget);
 
   auto phrases = page("", false);
@@ -1519,7 +1730,7 @@ int main(int argc, char **argv) {
   shortcuts.body->addWidget(rowsCard(
       {row("语音输入", "在其他应用的文本框中使用；点击按键可修改", nullptr, 62),
        voiceShortcutRow("启动语音输入",
-                        "按下启动或结束；空格结束，回车上屏，Esc 取消",
+                        "按下启动或结束；\n空格结束，回车上屏，Esc 取消",
                         "voice_launch_shortcut", "voice_launch_key",
                         "Control+Super+Shift_L"),
        voiceShortcutRow("按住说话", "按住可语音输入，松手结束",

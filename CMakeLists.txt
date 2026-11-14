@@ -93,6 +93,7 @@ target_compile_definitions(fcitx5-wetypex-settings PRIVATE
   WETYPE_BACKEND="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-backend"
   WETYPE_TRANSFER="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-transfer"
   WETYPE_SETUP="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-setup"
+  WETYPE_VOICE_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-voice"
   WETYPE_RUNTIME_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/fcitx5-wetypex/runtime-profiles.json"
   WETYPE_VERSION="${PROJECT_VERSION}-${WETYPE_PACKAGE_RELEASE}")
 add_executable(fcitx5-wetypex-clipboard-set src/clipboard/main.cpp)
@@ -208,6 +209,7 @@ target_compile_definitions(wetypex PRIVATE WETYPE_UPDATE="${CMAKE_INSTALL_FULL_B
 target_compile_definitions(wetypex PRIVATE WETYPE_SETUP="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-setup")
 target_compile_options(wetypex PRIVATE -Wall -Wextra)
 
+include(cmake/VoiceProtocol.cmake)
 configure_file(data/wetypex-addon.conf.in wetypex-addon.conf @ONLY)
 configure_file(scripts/fcitx5-wetypex-backend.sh.in fcitx5-wetypex-backend @ONLY)
 configure_file(scripts/runtime_lease.sh.in runtime-lease.sh @ONLY)
@@ -260,3 +262,5 @@ install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/fcitx5-wetypex/
 set(CPACK_PACKAGE_CONTACT "WeTypeX community project")
 set(CPACK_GENERATOR TXZ)
 include(CPack)
+
+include(cmake/LocalVoice.cmake)

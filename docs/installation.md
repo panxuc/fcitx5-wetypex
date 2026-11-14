@@ -176,7 +176,7 @@ cmake --build build --parallel
 sudo cmake --install build
 ```
 
-构建要求 CMake 3.16+、Clang、C++17 编译器、Python 3.8+ 以及 Fcitx5、LibIME、Qt 5.12+ 或 Qt6、json-c、Boost、OpenSSL、Wayland 客户端库等开发包；Fcitx5 插件在新版 Fcitx SDK 下以 C++20 编译。ARM64 的私有 libc++ 需要 CMake 3.20+ 和 Clang 16+。
+构建要求 CMake 3.16+、Clang、C++17 编译器、Python 3.8+、Rust 1.73+（只用于构建原生离线解码器，无 Cargo 依赖）以及 Fcitx5、LibIME、Qt 5.12+ 或 Qt6、json-c、Boost、OpenSSL、Wayland 客户端库等开发包；Fcitx5 插件在新版 Fcitx SDK 下以 C++20 编译。ARM64 的私有 libc++ 需要 CMake 3.20+ 和 Clang 16+。本地语音繁体输出需安装运行时工具 `opencc`。
 
 常用 CMake 选项：
 
