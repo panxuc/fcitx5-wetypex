@@ -1038,7 +1038,7 @@ def serve():
                         service.clipboard_owner.wait()
 
 
-def connect(legacy_control=False):
+def connect(legacy_control=False, require_namespace=False):
     deadline = time.monotonic() + 10
     launched = None
     while time.monotonic() < deadline:
@@ -1050,17 +1050,24 @@ def connect(legacy_control=False):
             connection.settimeout(55)
             metadata = read_json(VOICE / 'control.json')
             peer_pid = struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[0]
-            if metadata.get('pid') != peer_pid:
+            # Sibling Flatpak instances cannot see each other's PIDs and get
+            # zero from SO_PEERCRED. Status/control can cross that boundary,
+            # while audio jobs need a controller in their own PID namespace so
+            # owner-exit monitoring and sandbox lifetimes remain valid.
+            if peer_pid and metadata.get('pid') != peer_pid:
                 connection.close()
                 time.sleep(.05)
                 continue
-            if not legacy_control and (metadata.get('voice_protocol') != 2 or metadata.get('voice_revision') != REVISION):
+            foreign_namespace = require_namespace and peer_pid == 0
+            if not legacy_control and (foreign_namespace or metadata.get('voice_protocol') != 2 or metadata.get('voice_revision') != REVISION):
                 # Never send audio/start to a pre-local-mode daemon: it would
                 # ignore the provider setting and could start online ASR.
                 connection.sendall(b'{"op":"status"}\n')
                 report = json.loads(connection.makefile('rb').readline(LIMIT))
                 connection.close()
                 if report.get('state') in ('recording', 'recognizing', 'polishing'):
+                    if foreign_namespace:
+                        raise RuntimeError('另一个会话正在使用语音服务，请结束后重试')
                     raise RuntimeError('升级后的语音组件需要重新加载，请结束当前语音输入后重试')
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as old:
                     old.settimeout(3)
@@ -1140,7 +1147,8 @@ def main():
     elif options.args:
         request['token'] = options.args[0]
     try:
-        connection = connect(options.command in ('stop', 'finish', 'cancel', 'shutdown', 'quiesce'))
+        connection = connect(options.command in ('stop', 'finish', 'cancel', 'shutdown', 'quiesce'),
+                             options.command in ('start', 'transcribe'))
     except (OSError, RuntimeError) as error:
         if options.command == 'start' and request['session']:
             atomic_json(STATE / 'voice-inbox.json', dict(request, version=time.monotonic_ns(),
