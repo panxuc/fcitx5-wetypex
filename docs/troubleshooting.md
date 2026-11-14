@@ -78,6 +78,12 @@ fcitx5-wetypex-setup --check
 
 ## 输入与候选
 
+### Nix 安装核心时提示字体目录只读
+
+Home Manager 等声明式配置可能把 `~/.local/share/fonts` 链接到只读的 Nix store。更新器会改用 `~/.local/share/fcitx5-wetypex/fonts`，并通过专属的 `~/.config/fontconfig/conf.d/99-fcitx5-wetypex.conf` 注册原版表情字体，已有的自定义文件不会被覆盖。若字体目录和 Fontconfig 配置均不可写，核心仍可安装，表情候选暂时使用文字标签。字体文件也保留在当前运行时的 `assets/fonts/` 中，不会修改声明式字体目录。
+
+更新适配层后重新运行“下载并更新原版核心”，或执行 `fcitx5-wetypex-setup --update --download --accept-upstream-license`。先前中断的安装会恢复后继续，账户和词库沿用原有数据。
+
 ### 界面正常，但中文没有候选或无法上屏
 
 运行 `fcitx5-wetypex-account network-info`，检查 `json_c_version` 与 `utf8_json`，后者应为 `true`。json-c 0.18 的严格模式会把中文 UTF-8 字节误判为控制字符；WeTypeX 在解析前做兼容转换，同时保留严格语法、UTF-8 和尾随数据校验。`fcitx5-wetypex-setup --check` 也检查这条链路。

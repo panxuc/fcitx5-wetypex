@@ -22,9 +22,10 @@ import zipfile
 
 from runtime_catalog import DOWNLOAD_HOSTS, validate_url, download_archive
 
+FONT_ASSET = 'fonts/fcitx5-wetypex-wechat.ttf'
 ASSETS = ('fcitx5-wetypex/ui', 'fcitx5-wetypex/voice/vad',
           'fcitx5/themes/wetypex-light', 'fcitx5/themes/wetypex-dark',
-          'fonts/fcitx5-wetypex-wechat.ttf')
+          FONT_ASSET)
 MANAGED_GENERATION = r'(?:[0-9]+(?:\.[0-9]+)+-(?:x86_64|arm64)-[0-9a-f]{12}|legacy-[0-9a-f]{32})'
 
 
@@ -861,7 +862,10 @@ class RuntimeManager:
 
     def activate(self, rollback=False):
         if not rollback and not self.pending.exists() and not self.journal.exists():
-            return dict(changed=False, cleanup=self.cleanup(automatic=True), **self.status())
+            font = self.target / 'assets' / FONT_ASSET
+            warnings = self.register_font(font) if font.is_file() else []
+            return dict(changed=False, warnings=warnings,
+                        cleanup=self.cleanup(automatic=True), **self.status())
         try:
             with lock(self.setup_lock, blocking=False), lock(self.use_lock, blocking=False), \
                     lock(self.state / 'backend.lock', blocking=False), \
@@ -882,6 +886,63 @@ class RuntimeManager:
                     raise
         except BlockingIOError:
             return dict(changed=False, deferred=True, **self.status())
+
+    def register_font(self, source):
+        # Declarative desktops may link the XDG fonts directory into a
+        # read-only store. Register our own data directory without changing it.
+        destinations = [self.data / FONT_ASSET,
+                        self.root / 'fonts' / Path(FONT_ASSET).name]
+        errors = []
+        for index, current in enumerate(destinations):
+            try:
+                if index:
+                    self.fontconfig_fallback()
+                if current.is_symlink() and current.resolve() == source.resolve():
+                    return []
+                current.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                point(current, source, self.store / ('asset-' + uuid.uuid4().hex))
+            except OSError as error:
+                errors.append(str(error))
+                continue
+            try:
+                subprocess.run(['fc-cache', '-f', str(current.parent)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               timeout=30, check=False)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+            return []
+        warning = ('Original WeChat emoticon font could not be registered; '
+                   'text labels remain available. Font: ' + str(source) +
+                   '; ' + '; '.join(errors))
+        print(warning, file=sys.stderr)
+        return [warning]
+
+    def fontconfig_fallback(self):
+        config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / \
+            'fontconfig/conf.d/99-fcitx5-wetypex.conf'
+        content = ('<?xml version="1.0"?>\n'
+                   '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n'
+                   '<!-- WeTypeX: user-owned fallback for immutable font directories. -->\n'
+                   '<fontconfig><dir prefix="xdg">fcitx5-wetypex/fonts</dir></fontconfig>\n').encode()
+        if config.exists() or config.is_symlink():
+            if config.read_bytes() != content:
+                raise FileExistsError('preserving existing font configuration: ' + str(config))
+            return
+        config.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary = tempfile.mkstemp(prefix='.wetypex-font-', dir=config.parent)
+        try:
+            with os.fdopen(fd, 'wb') as output:
+                output.write(content)
+                output.flush()
+                os.fsync(output.fileno())
+            # Publish without replacing a concurrently created user file.
+            try:
+                os.link(temporary, config)
+            except FileExistsError:
+                if config.read_bytes() != content:
+                    raise
+        finally:
+            os.unlink(temporary)
 
     def _activate_locked(self,rollback):
         self.check_existing_target()
@@ -1009,6 +1070,8 @@ class RuntimeManager:
             # Both generations contain assets before these links switch.
             if not (target / 'assets' / relative).exists():
                 continue
+            if relative == FONT_ASSET:
+                continue
             current.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             if current.is_symlink() and current.resolve() == source.resolve():
                 continue
@@ -1016,10 +1079,12 @@ class RuntimeManager:
             point(current, source, backup)
         preserved = self.store / ('original-' + uuid.uuid4().hex)
         point(self.target, target, preserved)
+        font = self.target / 'assets' / FONT_ASSET
+        warnings = self.register_font(font) if font.is_file() else []
         atomic_json(self.history, dict(transaction=transaction['id'], current=desired, previous=old,
                     snapshot=snapshot_name, changed_at=int(time.time())))
         self.journal.unlink()
         if self.pending.exists():
             self.pending.unlink()
         sync_directory(self.root)
-        return dict(changed=True, **self.status())
+        return dict(changed=True, warnings=warnings, **self.status())
