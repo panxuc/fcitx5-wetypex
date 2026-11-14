@@ -77,7 +77,7 @@ VS Code、Code OSS、VSCodium 和应用明确标记为“禁止拼写检查”�
 | 中英文切换 | `Shift` |
 | 切换中英文标点 | `Ctrl + .`，仅中文模式 |
 | 简繁切换 | 默认关闭，预设 `Ctrl + Shift + F` |
-| 全半角切换 | 默认关闭，预设 `Shift + Space` |
+| 全半角切换 | 默认关闭，预设 `Shift + Space`；设置页显示当前 `half_full_keys` 配置，显式清空时显示“未绑定” |
 | 候选翻页 | `-` / `=`、`[` / `]` |
 | 问 AI | `=`，仅在没有组合输入时 |
 | 启动语音 | `Ctrl + Win + Shift` |

@@ -571,6 +571,28 @@ static QWidget *shortcutRow(const QString &title, bool checked,
                      [setting](bool value) { writeSetting(setting, value); });
   return container;
 }
+static QStringList configuredKeyCaps(const QString &setting, const char *fallback) {
+  const auto value = readSettings().value(setting).toString(QString::fromLatin1(fallback));
+  QStringList caps;
+  for (const auto &key : fcitx::Key::keyListFromString(value.toStdString())) {
+    if (!caps.isEmpty())
+      caps << "backslash-icon";
+    const auto normalized = key.normalize();
+    if (normalized == fcitx::Key("Shift+space").normalize()) {
+      caps << "Shift" << "空格";
+    } else {
+      const fcitx::KeyList single{normalized};
+      auto text = QString::fromStdString(fcitx::Key::keyListToString(
+          single, fcitx::KeyStringFormat::Localized));
+      if (normalized.sym() == fcitx::Key("space").sym())
+        text.replace("Space", "空格", Qt::CaseInsensitive);
+      caps << text;
+    }
+  }
+  if (caps.isEmpty())
+    caps << "未绑定";
+  return caps;
+}
 static QList<fcitx::Key> voiceShortcutKeys(const QString &setting,
                                          const char *fallback) {
   const auto settings = readSettings();
@@ -1508,7 +1530,7 @@ int main(int argc, char **argv) {
        shortcutRow(
            "全半角输入切换",
            wetype::settingBool(settings.value("half_full_switch"), false),
-           {"shift", "backslash-icon"}, {}, true, "half_full_switch"),
+           configuredKeyCaps("half_full_keys", "Shift+space"), {}, true, "half_full_switch"),
        shortcutRow(
            "中文下中英标点切换",
            wetype::settingBool(settings.value("punctuation_switch"), true),
