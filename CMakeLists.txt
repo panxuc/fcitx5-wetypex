@@ -87,6 +87,7 @@ if(NOT WETYPE_LAYER_SHELL STREQUAL "OFF")
 endif()
 add_executable(fcitx5-wetypex-settings src/settings/main.cpp)
 target_link_libraries(fcitx5-wetypex-settings PRIVATE ${WETYPE_QT_PACKAGE}::Widgets ${WETYPE_QT_PACKAGE}::DBus ${WETYPE_QT_PACKAGE}::Network ${WETYPE_QT_PACKAGE}::Svg)
+target_link_libraries(fcitx5-wetypex-settings PRIVATE Fcitx5Qt${WETYPE_UI_QT_MAJOR}::WidgetsAddons Fcitx5::Utils)
 target_compile_definitions(fcitx5-wetypex-settings PRIVATE
   WETYPE_ACCOUNT_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-account"
   WETYPE_BACKEND="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-backend"
@@ -189,7 +190,7 @@ add_library(wetypex MODULE src/plugin/wetype.cpp)
 set_target_properties(wetypex PROPERTIES PREFIX "")
 if(Fcitx5Core_VERSION VERSION_GREATER_EQUAL "5.1")
   # Recent Fcitx headers use span/ranges; older stable SDKs work with C++17.
-  set_target_properties(wetypex PROPERTIES CXX_STANDARD 20)
+  set_target_properties(wetypex fcitx5-wetypex-settings PROPERTIES CXX_STANDARD 20)
 endif()
 target_link_libraries(wetypex PRIVATE Fcitx5::Core Fcitx5::Config Fcitx5::Utils
   Fcitx5::Module::Clipboard Fcitx5::Module::Spell LibIME::Pinyin PkgConfig::JSONC)

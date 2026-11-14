@@ -1,6 +1,7 @@
 #include "../common/appearance.hpp"
 #include "../common/qt_helpers.hpp"
 #include "original_windows.hpp"
+#include <fcitxqtkeysequencewidget.h>
 
 #include <QApplication>
 #include <QButtonGroup>
@@ -570,6 +571,134 @@ static QWidget *shortcutRow(const QString &title, bool checked,
                      [setting](bool value) { writeSetting(setting, value); });
   return container;
 }
+static QList<fcitx::Key> voiceShortcutKeys(const QString &setting,
+                                         const char *fallback) {
+  const auto settings = readSettings();
+  const auto value = settings.contains(setting) ? settings.value(setting).toString()
+                                                 : QString::fromLatin1(fallback);
+  QList<fcitx::Key> keys;
+  for (const auto &key : fcitx::Key::keyListFromString(value.toStdString()))
+    keys.append(key.normalize());
+  return keys;
+}
+class VoiceShortcutLayout final : public QWidget {
+  QBoxLayout *layout_;
+  QWidget *bindings_;
+  bool narrow_ = false;
+
+public:
+  VoiceShortcutLayout(const QString &title, const QString &subtitle,
+                      QAbstractButton *check, QWidget *bindings)
+      : bindings_(bindings) {
+    layout_ = new QBoxLayout(QBoxLayout::LeftToRight, this);
+    layout_->setContentsMargins(15, 6, 15, 6);
+    layout_->setSpacing(8);
+    auto *labels = new QWidget;
+    auto *left = new QHBoxLayout(labels);
+    left->setContentsMargins(0, 0, 0, 0);
+    left->setSpacing(8);
+    left->addWidget(check);
+    auto *text = new QVBoxLayout;
+    text->setContentsMargins(0, 0, 0, 0);
+    text->setSpacing(2);
+    text->addStretch();
+    auto *heading = new QLabel(title);
+    heading->setObjectName("rowTitle");
+    text->addWidget(heading);
+    auto *detail = new QLabel(subtitle);
+    detail->setObjectName("rowSubtitle");
+    detail->setWordWrap(true);
+    text->addWidget(detail);
+    text->addStretch();
+    left->addLayout(text, 1);
+    layout_->addWidget(labels, 1);
+    layout_->addWidget(bindings, 0, Qt::AlignVCenter);
+    setMinimumHeight(74);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Minimum);
+  }
+
+protected:
+  void resizeEvent(QResizeEvent *event) override {
+    QWidget::resizeEvent(event);
+    const bool narrow = width() < (narrow_ ? 636 : 620);
+    if (narrow != narrow_) {
+      narrow_ = narrow;
+      layout_->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+      layout_->setAlignment(bindings_, narrow ? Qt::AlignRight : Qt::AlignVCenter);
+      setMinimumHeight(narrow ? 112 : 74);
+    }
+  }
+};
+static QWidget *voiceShortcutRow(const QString &title, const QString &subtitle,
+                                 const QString &enabledSetting,
+                                 const QString &keySetting,
+                                 const char *fallback) {
+  auto *editor = new fcitx::FcitxQtKeySequenceWidget;
+  editor->setObjectName("voice-key-" + keySetting);
+  editor->setModifierOnlyAllowed(true);
+  editor->setModifierlessAllowed(true);
+  editor->setMultiKeyShortcutsAllowed(false);
+  editor->setClearButtonShown(true);
+  editor->setMinimumWidth(160);
+  editor->setMaximumWidth(320);
+  editor->setToolTip("点击录入快捷键，支持右 Alt 等单独修饰键；Esc 取消录入");
+  editor->setKeySequence(voiceShortcutKeys(keySetting, fallback));
+  for (auto *clear : editor->findChildren<QToolButton *>()) {
+    clear->setIcon(QIcon());
+    clear->setText("清空");
+    clear->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    clear->setFixedWidth(44);
+    clear->setStyleSheet("QToolButton{background:#f1f1f1;color:#606266;border:1px solid #d9d9d9;"
+                        "border-radius:4px;min-height:26px;font-size:12px;padding:0 4px;}");
+  }
+  auto *defaults = new QPushButton("默认");
+  defaults->setMinimumWidth(60);
+  defaults->setToolTip("恢复原版默认快捷键");
+  auto *bindings = new QWidget;
+  auto *bindingLayout = new QHBoxLayout(bindings);
+  bindingLayout->setContentsMargins(0, 0, 0, 0);
+  bindingLayout->setSpacing(4);
+  bindingLayout->addWidget(editor);
+  bindingLayout->addWidget(defaults);
+  auto *check = new Check;
+  auto *container = new VoiceShortcutLayout(title, subtitle, check, bindings);
+  check->setObjectName("voice-toggle-" + enabledSetting);
+  check->setChecked(wetype::settingBool(readSettings().value(enabledSetting), true));
+  QObject::connect(check, &QAbstractButton::toggled, check,
+      [check, enabledSetting](bool enabled) {
+        const bool saved = writeSetting(enabledSetting, enabled);
+        for (auto *other : check->window()->findChildren<QAbstractButton *>(check->objectName())) {
+          QSignalBlocker block(other);
+          other->setChecked(saved ? enabled : !enabled);
+        }
+        if (!saved)
+          QMessageBox::warning(check->window(), "无法保存快捷键", "请检查输入法配置文件的写入权限。");
+      });
+  QObject::connect(defaults, &QPushButton::clicked, editor, [editor, fallback] {
+    QList<fcitx::Key> keys;
+    for (const auto &key : fcitx::Key::keyListFromString(fallback))
+      keys.append(key.normalize());
+    editor->setKeySequence(keys);
+  });
+  QObject::connect(editor, &fcitx::FcitxQtKeySequenceWidget::keySequenceChanged,
+      editor, [editor, keySetting, fallback](const QList<fcitx::Key> &keys) {
+        fcitx::KeyList normalized;
+        for (const auto &key : keys)
+          normalized.push_back(key.normalize());
+        const auto previous = voiceShortcutKeys(keySetting, fallback);
+        const bool saved = writeSetting(keySetting, QString::fromStdString(
+            fcitx::Key::keyListToString(normalized)));
+        for (auto *other : editor->window()->findChildren<fcitx::FcitxQtKeySequenceWidget *>(editor->objectName())) {
+          if (saved && other == editor)
+            continue;
+          QSignalBlocker block(other);
+          other->setKeySequence(saved ? keys : previous);
+        }
+        if (!saved)
+          QMessageBox::warning(editor->window(), "无法保存快捷键", "请检查输入法配置文件的写入权限。");
+      });
+  return container;
+}
 static bool applyClassicTheme(int mode, std::optional<int> size,
                               bool themeChanged, QLabel *status) {
   QString path = configDir() + "/conf/classicui.conf";
@@ -979,18 +1108,14 @@ int main(int argc, char **argv) {
   }
   voice.body->addWidget(voiceHero);
   voice.body->addWidget(rowsCard(
-      {row("快捷键", {}, nullptr, 44),
-       shortcutRow(
-           "启动语音输入",
-           wetype::settingBool(settings.value("voice_launch_shortcut"), true),
-           {"Ctrl", "Win", "Shift", "×"},
-           "按下启动或结束；空格结束，回车上屏，Esc 取消", true,
-           "voice_launch_shortcut"),
-       shortcutRow(
-           "按住说话",
-           wetype::settingBool(settings.value("voice_hold_shortcut"), true),
-           {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
-           "voice_hold_shortcut")}));
+      {row("快捷键", "在其他应用的文本框中使用；点击按键可修改", nullptr, 62),
+       voiceShortcutRow("启动语音输入",
+                        "按下启动或结束；空格结束，回车上屏，Esc 取消",
+                        "voice_launch_shortcut", "voice_launch_key",
+                        "Control+Super+Shift_L"),
+       voiceShortcutRow("按住说话", "按住可语音输入，松手结束",
+                        "voice_hold_shortcut", "voice_hold_key",
+                        "Control+Super_L")}));
   auto *microphone = new QComboBox;
   microphone->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
   microphone->setMinimumContentsLength(12);
@@ -1370,18 +1495,14 @@ int main(int argc, char **argv) {
                              : "使用已配置的按键直接打开，仅在中文全拼中生效",
                    true, "v_mode")}));
   shortcuts.body->addWidget(rowsCard(
-      {row("语音输入", {}, nullptr, 44),
-       shortcutRow(
-           "启动语音输入",
-           wetype::settingBool(settings.value("voice_launch_shortcut"), true),
-           {"Ctrl", "Win", "Shift", "×"},
-           "按下启动或结束；空格结束，回车上屏，Esc 取消", true,
-           "voice_launch_shortcut"),
-       shortcutRow(
-           "按住说话",
-           wetype::settingBool(settings.value("voice_hold_shortcut"), true),
-           {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
-           "voice_hold_shortcut")}));
+      {row("语音输入", "在其他应用的文本框中使用；点击按键可修改", nullptr, 62),
+       voiceShortcutRow("启动语音输入",
+                        "按下启动或结束；空格结束，回车上屏，Esc 取消",
+                        "voice_launch_shortcut", "voice_launch_key",
+                        "Control+Super+Shift_L"),
+       voiceShortcutRow("按住说话", "按住可语音输入，松手结束",
+                        "voice_hold_shortcut", "voice_hold_key",
+                        "Control+Super_L")}));
   shortcuts.body->addWidget(rowsCard(
       {row("输入状态切换", {}, nullptr, 44),
        shortcutRow(

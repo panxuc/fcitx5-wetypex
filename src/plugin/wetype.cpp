@@ -1532,10 +1532,16 @@ class WeType : public InputMethodEngineV2 {
       auto value = wire::str(j.get(), name);
       return value.empty() ? std::string(fallback) : value;
     };
-    voice->launchKey.setValue(Key::keyListFromString(
-        stringSetting("voice_launch_key", "Control+Super+Shift_L")));
-    voice->holdKey.setValue(Key::keyListFromString(
-        stringSetting("voice_hold_key", "Control+Super_L")));
+    auto voiceKeys = [&](const char *name, const char *fallback) {
+      auto keys = Key::keyListFromString(wire::get(j.get(), name)
+                                           ? wire::str(j.get(), name)
+                                           : std::string(fallback));
+      for (auto &key : keys)
+        key = key.normalize();
+      return keys;
+    };
+    voice->launchKey.setValue(voiceKeys("voice_launch_key", "Control+Super+Shift_L"));
+    voice->holdKey.setValue(voiceKeys("voice_hold_key", "Control+Super_L"));
     voice->microphone.setValue(stringSetting("voice_microphone", "自动检测"));
     const auto voicePunctuation =
         stringSetting("voice_punctuation", "智能标点");
@@ -1906,7 +1912,8 @@ class WeType : public InputMethodEngineV2 {
   void primeVoice() {
     voiceWarmTick_ = now(CLOCK_MONOTONIC);
     if (networkEnabled_ &&
-        (*config_.voice->launchShortcut || *config_.voice->holdShortcut) &&
+        ((*config_.voice->launchShortcut && !config_.voice->launchKey->empty()) ||
+         (*config_.voice->holdShortcut && !config_.voice->holdKey->empty())) &&
         !voiceControl("status"))
       startProcess({WETYPE_VOICE, "status"});
   }
@@ -1959,10 +1966,18 @@ class WeType : public InputMethodEngineV2 {
     voiceStatusUntil_ = 0;
     voiceDaemonPid_ = 0;
     lastVoiceVersion_ = 0;
-    if (!voiceControl("start", s->traditional))
-      startProcess({WETYPE_VOICE, "start", std::to_string(voiceSession_),
-                    std::to_string(voiceEpoch_), voiceToken_,
-                    s->traditional ? "1" : "0"});
+    if (!voiceControl("start", s->traditional)) {
+      if (access(WETYPE_VOICE, X_OK) != 0) {
+        cancelVoice(false);
+        voiceSession_ = s->id;
+        voiceError_ = "语音组件不可用，请重启输入法以加载当前安装版本";
+        voiceStatusUntil_ = now(CLOCK_MONOTONIC) + 6000000;
+      } else {
+        startProcess({WETYPE_VOICE, "start", std::to_string(voiceSession_),
+                      std::to_string(voiceEpoch_), voiceToken_,
+                      s->traditional ? "1" : "0"});
+      }
+    }
     panel(ic, s);
   }
   void stopVoice(bool immediate = false) {
@@ -2738,7 +2753,7 @@ class WeType : public InputMethodEngineV2 {
     }
     Text aux;
     if (voice)
-      aux = Text("语音输入 " + std::string(voiceLevel_ / 12, '|'));
+      aux = Text("🎙 语音输入 " + std::string(voiceLevel_ / 12, '|'));
     else if (s->vMenu != VMenu::None)
       aux = Text(s->vMenuTitle);
     else if (s->vCalculator)
@@ -4277,6 +4292,13 @@ public:
       }
       if (releasedModifier)
         s->modifierCandidate = Key();
+      return;
+    }
+    if (!networkEnabled_ &&
+        ((*config_.voice->launchShortcut && key.checkKeyList(*config_.voice->launchKey)) ||
+         (*config_.voice->holdShortcut && key.checkKeyList(*config_.voice->holdKey)))) {
+      showModeInfo(instance_, ic, "单机模式已开启，语音输入需要联网；请先关闭单机模式");
+      e.filterAndAccept();
       return;
     }
     if (networkEnabled_ && *config_.voice->launchShortcut &&
