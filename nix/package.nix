@@ -6,6 +6,7 @@
   symlinkJoin,
   cmake,
   ninja,
+  rustc,
   pkg-config,
   kdePackages,
   fcitx5,
@@ -25,6 +26,7 @@
   tzdata,
   pipewire,
   pulseaudio,
+  opencc,
   ffmpeg,
   qemu,
   wl-clipboard,
@@ -90,6 +92,7 @@ let
     ++ lib.optionals enableVoice [
       pipewire
       pulseaudio
+      opencc
       ffmpeg
     ]
   );
@@ -130,7 +133,7 @@ stdenv.mkDerivation {
     kdePackages.extra-cmake-modules
     kdePackages.wrapQtAppsHook
     python
-  ];
+  ] ++ lib.optional enableVoice rustc;
 
   buildInputs = [
     fcitx5

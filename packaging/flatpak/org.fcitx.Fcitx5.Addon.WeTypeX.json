@@ -5,13 +5,14 @@
   "runtime-version": "stable",
   "sdk": "org.kde.Sdk//6.11",
   "sdk-extensions": [
-    "org.freedesktop.Sdk.Extension.llvm21"
+    "org.freedesktop.Sdk.Extension.llvm21",
+    "org.freedesktop.Sdk.Extension.rust-stable"
   ],
   "build-extension": true,
   "separate-locales": false,
   "build-options": {
     "prefix": "/app/addons/WeTypeX",
-    "prepend-path": "/usr/lib/sdk/llvm21/bin:/app/addons/WeTypeX/bin",
+    "prepend-path": "/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm21/bin:/app/addons/WeTypeX/bin",
     "prepend-pkg-config-path": "/app/addons/WeTypeX/lib/pkgconfig",
     "env": {
       "CC": "clang",
@@ -34,6 +35,30 @@
     "/lib/fcitx5-wetypex/abi/lib/*.a"
   ],
   "modules": [
+    {
+      "name": "opencc",
+      "buildsystem": "cmake-ninja",
+      "config-opts": [
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DENABLE_DARTS=OFF",
+        "-DENABLE_GTEST=OFF",
+        "-DBUILD_DOCUMENTATION=OFF",
+        "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/BYVoid/OpenCC/archive/refs/tags/ver.1.1.9.tar.gz",
+          "sha256": "ad4bcd8d87219a240a236d4a55c9decd2132a9436697d2882ead85c8939b0a99"
+        }
+      ],
+      "post-install": [
+        "install -Dm644 LICENSE ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/OpenCC-LICENSE",
+        "install -Dm644 deps/marisa-0.2.6/COPYING.md ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/OpenCC-marisa-COPYING.md",
+        "install -Dm644 deps/rapidjson-1.1.0/rapidjson/rapidjson.h ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/OpenCC-rapidjson.h",
+        "install -Dm644 deps/tclap-1.2.5/tclap/CmdLine.h ${FLATPAK_DEST}/share/licenses/fcitx5-wetypex/OpenCC-tclap.h"
+      ]
+    },
     {
       "name": "boost",
       "buildsystem": "simple",

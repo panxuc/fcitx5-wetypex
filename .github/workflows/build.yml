@@ -67,6 +67,12 @@ jobs:
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime > "$XDG_CACHE_HOME/voice.json"
               python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/voice.json")); assert v["ok"] and v["text"].strip()'\''
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" shutdown
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" model install --accept-upstream-license
+              mkdir -p "$XDG_CONFIG_HOME/fcitx5"
+              python3 -c '\''import json,os; from pathlib import Path; p=Path(os.environ["XDG_CONFIG_HOME"])/"fcitx5/wetypex.json"; p.write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_smart_polish":True,"voice_copy_to_clipboard":False}))'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime --traditional > "$XDG_CACHE_HOME/local-voice.json"
+              python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" shutdown
             '
       - name: 清理独立运行数据
         if: always()
@@ -85,7 +91,7 @@ jobs:
     steps:
       - name: 安装构建依赖
         run: >-
-          pacman -Syu --noconfirm git cmake clang boost fcitx5 fcitx5-qt libime libc++
+          pacman -Syu --noconfirm git cmake clang rust boost fcitx5 fcitx5-qt libime libc++
           json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig qt6-base qt6-svg
           qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit
       - uses: actions/checkout@v7
@@ -99,7 +105,7 @@ jobs:
             case "$script" in *-syncd.sh.in|*-update.sh.in|*-sync.sh.in) continue;; esac
             sh -n "$script"
           done
-          python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py tools/*.py \
+          python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py scripts/local_voice.py tools/*.py \
             build/fcitx5-wetypex-syncd build/fcitx5-wetypex-update build/fcitx5-wetypex-sync
       - name: 构建 Arch 软件包（启用 LTO）
         run: |
@@ -162,12 +168,19 @@ jobs:
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             -v "$PWD/dist:/out:ro" wetypex-build-jammy bash -euc '
               apt-get -o Acquire::Retries=3 update -qq
-              apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig espeak-ng ffmpeg opencc
               dpkg --unpack /out/debian/*.deb
               fcitx5-wetypex-setup --download --accept-upstream-license
               fcitx5-wetypex-setup --check --transport || {
                 cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
               }
+              fcitx5-wetypex-voice model install --accept-upstream-license
+              mkdir -p /root/.config/fcitx5
+              python3 -c '\''import json; from pathlib import Path; Path("/root/.config/fcitx5/wetypex.json").write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_copy_to_clipboard":False}))'\''
+              espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is an offline voice input check. One two three."
+              WETYPE_LOCAL_VOICE_CPU=scalar fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/local-voice.json
+              python3 -c '\''import json; v=json.load(open("/tmp/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
+              fcitx5-wetypex-voice shutdown
             '
       - name: 保存兼容旧系统的 deb
         uses: actions/upload-artifact@v7
@@ -251,12 +264,19 @@ jobs:
             --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
             -v "$PWD/dist:/out:ro" wetypex-build-focal bash -euc '
               apt-get -o Acquire::Retries=3 update -qq
-              apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig
+              apt-get -o Acquire::Retries=3 install -y --no-install-recommends bubblewrap util-linux python3 python3-fonttools python3-pil fontconfig espeak-ng ffmpeg opencc
               dpkg --unpack /out/ubuntu20/*.deb
               fcitx5-wetypex-setup --download --accept-upstream-license
               fcitx5-wetypex-setup --check --transport || {
                 cat /root/.cache/fcitx5-wetypex/last-runtime-check.log; exit 1;
               }
+              fcitx5-wetypex-voice model install --accept-upstream-license
+              mkdir -p /root/.config/fcitx5
+              python3 -c '\''import json; from pathlib import Path; Path("/root/.config/fcitx5/wetypex.json").write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_copy_to_clipboard":False}))'\''
+              espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is an offline voice input check. One two three."
+              WETYPE_LOCAL_VOICE_CPU=scalar fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/local-voice.json
+              python3 -c '\''import json; v=json.load(open("/tmp/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
+              fcitx5-wetypex-voice shutdown
             '
       - uses: actions/upload-artifact@v7
         with:

@@ -18,6 +18,8 @@ ARM64 适配层把 Darwin 的调用约定、线程局部存储、回调和 C++ A
 
 QEMU 模拟器从 `/usr/bin/qemu-aarch64` 或 `/usr/bin/qemu-aarch64-static` 查找。请通过发行版安装 `qemu-user` 软件包；Arch Linux ARM 软件包已将它列为可选依赖。NixOS 用户在构建参数中设置 `enableCompatibilityProvider = true`，见[安装指南](installation.md#构建参数)，默认关闭以免具备特性的设备把 QEMU 拉入闭包。
 
+本地离线语音使用独立的原生 ARM64 解码器，仅要求基础 NEON，不依赖上述 Apple 指令集或 QEMU；在线语音仍沿用原版宿主的兼容执行方式。交叉编译时需准备目标 Rust 标准库，并向 CMake 传入 `-DWETYPE_RUST_TARGET=aarch64-unknown-linux-gnu` 和对应 C++ 交叉链接器。
+
 ## 检查执行方式
 
 ```bash

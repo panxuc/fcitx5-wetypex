@@ -6,6 +6,8 @@ WeTypeX 是独立的非官方兼容项目，与腾讯没有隶属、授权或背
 
 libkqueue 由其上游作者提供并使用上游许可证。打包时会将许可证安装到 `/usr/share/licenses/fcitx5-wetypex/`。
 
+离线语音解码器改编自 Gloridust/WowType 的 wtlocal（原始实现来自 J3n5en/voicekey），采用 WowType 声明的 MIT 许可选项。来源、提交与改动说明安装为 `local-voice-NOTICE.md`，许可安装为 `local-voice-MIT`。离线模型仍属于腾讯资源，不随包分发。本地繁体转换使用 OpenCC；Flatpak 扩展包含 OpenCC 及其许可证，其他发行包依赖系统 OpenCC。
+
 默认网络桥接静态包含 curl 项目提供的 libcurl，适用 curl 上游许可证，许可证安装为 `/usr/share/licenses/fcitx5-wetypex/curl-COPYING`。TLS 使用发行版的 OpenSSL 与系统证书存储；系统 OpenSSL 低于 3 时，桥接私有静态包含固定版本 OpenSSL 3，其 Apache-2.0 许可证安装为 `openssl-LICENSE.txt`，继续使用系统证书存储。
 
 ARM64 兼容宿主包含使用不同字符串布局的私有 LLVM libc++，适用 Apache-2.0 WITH LLVM-exception，许可证安装为 `libcxx-LICENSE`。它与发行版供其他程序使用的 libc++ 分开安装。

@@ -855,6 +855,7 @@ class WeType : public InputMethodEngineV2 {
     auto *input = comparable.input.mutableValue();
     input->chinesePunctuation.setValue(*before.input->chinesePunctuation);
     input->rememberPunctuation.setValue(*before.input->rememberPunctuation);
+    comparable.voice.mutableValue()->provider.setValue(*before.voice->provider);
     return comparable == before;
   }
   void refreshPresentation() {
@@ -1542,6 +1543,7 @@ class WeType : public InputMethodEngineV2 {
     };
     voice->launchKey.setValue(voiceKeys("voice_launch_key", "Control+Super+Shift_L"));
     voice->holdKey.setValue(voiceKeys("voice_hold_key", "Control+Super_L"));
+    voice->provider.setValue(wire::str(j.get(), "voice_provider") == "local" ? wetype_config::VoiceProviderMode::Local : wetype_config::VoiceProviderMode::Original);
     voice->microphone.setValue(stringSetting("voice_microphone", "自动检测"));
     const auto voicePunctuation =
         stringSetting("voice_punctuation", "智能标点");
@@ -1597,7 +1599,7 @@ class WeType : public InputMethodEngineV2 {
     for (const char *key : {"page_size", "vertical", "preedit_position",
                             "candidate_label_style", "candidate_size",
                             "theme_mode", "chinese_punctuation",
-                            "remember_punctuation"})
+                            "remember_punctuation", "voice_provider"})
       if (j && json_object_is_type(j.get(), json_type_object))
         json_object_object_del(j.get(), key);
     engineSettings_ = std::move(j);
@@ -1690,6 +1692,7 @@ class WeType : public InputMethodEngineV2 {
               bool(*devices.dictionarySync));
     wire::put(json.get(), "device_phrase_sync", bool(*devices.phraseSync));
     const auto &voice = *config_.voice;
+    wire::put(json.get(), "voice_provider", std::string(*voice.provider == wetype_config::VoiceProviderMode::Local ? "local" : "original"));
     wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
     wire::put(json.get(), "voice_hold_shortcut", bool(*voice.holdShortcut));
     wire::put(json.get(), "voice_smart_polish", bool(*voice.smartPolish));
@@ -1867,6 +1870,9 @@ class WeType : public InputMethodEngineV2 {
     auto control = wire::parse(bytes);
     if (wire::number(control.get(), "version") != 1)
       return false;
+    if (std::string_view(operation) == "start" &&
+        (wire::number(control.get(), "voice_protocol") != 2 || wire::str(control.get(), "voice_revision") != WETYPE_VOICE_REVISION))
+      return false;
     const auto address = wire::str(control.get(), "address");
     const auto prefix = "wetypex-voice-" + std::to_string(getuid()) + "-";
     sockaddr_un socketAddress{};
@@ -1883,7 +1889,7 @@ class WeType : public InputMethodEngineV2 {
     if (::connect(fd, reinterpret_cast<sockaddr *>(&socketAddress),
                 offsetof(sockaddr_un, sun_path) + 1 + address.size()) ||
         getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &peer, &peerSize) ||
-        peer.uid != getuid()) {
+        peer.uid != getuid() || peer.pid != wire::number(control.get(), "pid")) {
       close(fd);
       return false;
     }
@@ -1894,6 +1900,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(message.get(), "epoch", int64_t(voiceEpoch_));
     wire::put(message.get(), "pid", int64_t(getpid()));
     wire::put(message.get(), "traditional", traditional);
+    wire::put(message.get(), "provider", std::string(*config_.voice->provider == wetype_config::VoiceProviderMode::Local ? "local" : "original"));
     const auto payload = wire::dump(message.get()) + '\n';
     bool delivered = ::send(fd, payload.data(), payload.size(),
                            MSG_NOSIGNAL | MSG_DONTWAIT) == ssize_t(payload.size());
@@ -1909,9 +1916,12 @@ class WeType : public InputMethodEngineV2 {
       voiceDaemonPid_ = peer.pid;
     return delivered;
   }
+  bool voiceAvailable() const {
+    return networkEnabled_ || *config_.voice->provider == wetype_config::VoiceProviderMode::Local;
+  }
   void primeVoice() {
     voiceWarmTick_ = now(CLOCK_MONOTONIC);
-    if (networkEnabled_ &&
+    if (voiceAvailable() &&
         ((*config_.voice->launchShortcut && !config_.voice->launchKey->empty()) ||
          (*config_.voice->holdShortcut && !config_.voice->holdKey->empty())) &&
         !voiceControl("status"))
@@ -3623,7 +3633,7 @@ public:
             syncTick_ = time;
             receiveVoice();
           }
-          if (focused && networkEnabled_ && !runtimePending_ && time >= voiceWarmTick_ + 60000000)
+          if (focused && voiceAvailable() && !runtimePending_ && time >= voiceWarmTick_ + 60000000)
             primeVoice();
           pollVModeWindow();
           if (*config_.update->autoUpdate &&
@@ -3669,6 +3679,8 @@ public:
     const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
     saveNativeConfig();
     applyAppearance(themeChanged, sizeChanged);
+    if (*before.voice->provider != *config_.voice->provider)
+      cancelVoice();
     if (frontendOnly(before)) {
       refreshPresentation();
       return;
@@ -3698,6 +3710,8 @@ public:
     const auto before = config_;
     auto oldEngineSettings = std::move(engineSettings_);
     reloadSettings();
+    if (*before.voice->provider != *config_.voice->provider)
+      cancelVoice();
     if (frontendOnly(before) && oldEngineSettings && engineSettings_ &&
         json_object_equal(oldEngineSettings.get(), engineSettings_.get())) {
       refreshPresentation();
@@ -4100,9 +4114,9 @@ public:
             (*config_.shortcuts->vMode && !s->english &&
              *config_.input->mode == wetype_config::InputMode::Pinyin &&
              key.checkKeyList(*config_.shortcuts->vModeKeys)) ||
-            (networkEnabled_ &&
-             ((*config_.shortcuts->aiAssistant && key.checkKeyList(*config_.shortcuts->aiAssistantKeys)) ||
-              (*config_.voice->launchShortcut && key.checkKeyList(*config_.voice->launchKey)) ||
+            (networkEnabled_ && *config_.shortcuts->aiAssistant && key.checkKeyList(*config_.shortcuts->aiAssistantKeys)) ||
+            (voiceAvailable() &&
+             ((*config_.voice->launchShortcut && key.checkKeyList(*config_.voice->launchKey)) ||
               (*config_.voice->holdShortcut && key.checkKeyList(*config_.voice->holdKey))));
         // Application commands run against the text already committed. Keep
         // their position in the IME event stream too, so a Ctrl+S between a
@@ -4219,7 +4233,7 @@ public:
       if (commands || (!numeric && !continuation))
         clearNumericCorrection(s);
     }
-    if (networkEnabled_ && e.rawKey().states().test(KeyState::Repeat) &&
+    if (voiceAvailable() && e.rawKey().states().test(KeyState::Repeat) &&
         ((*config_.voice->launchShortcut &&
           key.checkKeyList(*config_.voice->launchKey)) ||
          (*config_.voice->holdShortcut &&
@@ -4294,14 +4308,14 @@ public:
         s->modifierCandidate = Key();
       return;
     }
-    if (!networkEnabled_ &&
+    if (!voiceAvailable() &&
         ((*config_.voice->launchShortcut && key.checkKeyList(*config_.voice->launchKey)) ||
          (*config_.voice->holdShortcut && key.checkKeyList(*config_.voice->holdKey)))) {
-      showModeInfo(instance_, ic, "单机模式已开启，语音输入需要联网；请先关闭单机模式");
+      showModeInfo(instance_, ic, "单机模式已开启；请在语音设置中选择本地离线识别，或关闭单机模式");
       e.filterAndAccept();
       return;
     }
-    if (networkEnabled_ && *config_.voice->launchShortcut &&
+    if (voiceAvailable() && *config_.voice->launchShortcut &&
         key.checkKeyList(*config_.voice->launchKey)) {
       s->modifierCandidate = Key();
       if (voiceRecording_ && voiceHold_)
@@ -4313,7 +4327,7 @@ public:
       e.filterAndAccept();
       return;
     }
-    if (networkEnabled_ && *config_.voice->holdShortcut &&
+    if (voiceAvailable() && *config_.voice->holdShortcut &&
         key.checkKeyList(*config_.voice->holdKey)) {
       s->modifierCandidate = Key();
       if (!voicePending_ && !flushBeforeVoice(ic, e))

@@ -274,10 +274,9 @@ index 296022bd..f9ada372 100644
  state_dir = pathlib.Path(os.environ.get("WETYPE_STATE_DIR", data_home / "fcitx5-wetypex/state"))
  account_tool = os.environ.get("WETYPE_ACCOUNT_TOOL", "@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-account")
 diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.sh.in
-index cae8dd9f..a1b41b1e 100644
 --- a/scripts/fcitx5-wetypex-voice.sh.in
 +++ b/scripts/fcitx5-wetypex-voice.sh.in
-@@ -1,5 +1,8 @@
+@@ -1,6 +1,9 @@
 -#!/bin/sh
 +#!@NIX_BASH@
 +export PATH="@NIX_RUNTIME_PATH@${PATH:+:$PATH}"
@@ -287,6 +286,7 @@ index cae8dd9f..a1b41b1e 100644
 -export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 +export WETYPE_SUPPORT_DIR="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
  export WETYPE_SANDBOX="${WETYPE_SANDBOX:-@WETYPE_SANDBOX@}"
+ export WETYPE_VOICE_REVISION="@WETYPE_VOICE_REVISION@"
 -exec python3 @CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/voice_stream.py "$@"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
 diff --git a/scripts/runtime_lease.sh.in b/scripts/runtime_lease.sh.in
@@ -390,7 +390,6 @@ index 78db7df6..fcfee46c 100644
                   '--setenv', 'WETYPE_ENGINE_PROVIDER', os.environ.get('WETYPE_ENGINE_PROVIDER', 'auto'),
                   '/support/wetypex-engine-host','/input','validate']
 diff --git a/scripts/voice_stream.py b/scripts/voice_stream.py
-index e7ba1c00..23817b74 100644
 --- a/scripts/voice_stream.py
 +++ b/scripts/voice_stream.py
 @@ -1,4 +1,4 @@
@@ -399,7 +398,7 @@ index e7ba1c00..23817b74 100644
  """PipeWire/PulseAudio capture and session control for the original native voice engine."""
  import argparse
  import array
-@@ -22,12 +22,16 @@ import tempfile
+@@ -22,12 +22,16 @@
  import time
  import uuid
  
@@ -417,7 +416,7 @@ index e7ba1c00..23817b74 100644
  CONFIG = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
  ADDRESS = '\0wetypex-voice-{}-{}'.format(os.getuid(), hashlib.sha256(str(STATE.resolve()).encode()).hexdigest()[:20])
  LIMIT = 131072
-@@ -288,16 +292,16 @@ class Backend:
+@@ -313,16 +317,16 @@
          if not wrapper:
              raise RuntimeError('请先安装 Bubblewrap')
          command = [wrapper, '--unshare-pid',
@@ -529,10 +528,11 @@ index 3a797c5e..0e69beef 100644
    curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 2L);
    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 8000L);
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp
-index 7d8aa115..808c46cc 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -976,5 +976,8 @@ int main(int argc, char **argv) {
+@@ -1311,7 +1311,10 @@
+   microphone->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+   microphone->addItem("自动检测");
    QProcess pipewire;
 -  pipewire.start(QStringLiteral("pw-dump"), QStringList{});
 +  pipewire.start(QStandardPaths::findExecutable(
@@ -542,7 +542,7 @@ index 7d8aa115..808c46cc 100644
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1605,7 +1608,7 @@ int main(int argc, char **argv) {
+@@ -1961,7 +1964,7 @@
          QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
    });
    about.body->addWidget(rowsCard(

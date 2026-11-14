@@ -91,7 +91,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 50
+    timeout-minutes: 65
     defaults:
       run:
         shell: bash
@@ -172,6 +172,23 @@ jobs:
           from pathlib import Path
           result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'wetypex-voice.json').read_text())
           assert result['ok'] and result['text'].strip(), {key: result.get(key) for key in ('ok', 'state', 'error')}
+          PYTHON
+      - name: 验证单机模式下的离线流式语音
+        timeout-minutes: 15
+        run: |
+          dbus-run-session -- timeout --kill-after=15s 14m bash -euo pipefail -c '
+            prefix=/app/addons/WeTypeX/bin
+            trap '\''flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 shutdown >/dev/null 2>&1 || true'\'' EXIT
+            flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 model install --accept-upstream-license
+            flatpak run --command=python3 org.fcitx.Fcitx5 -c '\''import json,os; from pathlib import Path; p=Path(os.environ["XDG_CONFIG_HOME"])/"fcitx5/wetypex.json"; p.parent.mkdir(parents=True,exist_ok=True); s=json.loads(p.read_text()) if p.exists() else {}; s.update(voice_provider="local",standalone=True,voice_copy_to_clipboard=False); p.write_text(json.dumps(s))'\''
+            flatpak run --command="$prefix/fcitx5-wetypex-voice" org.fcitx.Fcitx5 \
+              transcribe "$RUNNER_TEMP/wetypex-speech.wav" --realtime --traditional > "$RUNNER_TEMP/wetypex-local-voice.json"
+          '
+          python3 - <<'PYTHON'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'wetypex-local-voice.json').read_text())
+          assert result['ok'] and result['text'].strip() and result['provider'] == 'local', {key: result.get(key) for key in ('ok', 'state', 'error')}
           PYTHON
       - name: 清理语音服务
         if: always()

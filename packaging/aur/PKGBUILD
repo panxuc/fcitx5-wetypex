@@ -30,12 +30,12 @@ depends=(
     'layer-shell-qt'
     'wl-clipboard'
     'pipewire'
-    'ffmpeg'
+    'ffmpeg' 'opencc'
     'libnotify'
     'polkit'
 )
 
-makedepends=('cmake' 'clang' 'git' 'boost' 'openssl')
+makedepends=('rust' 'cmake' 'clang' 'git' 'boost' 'openssl')
 optdepends=('fcitx5-configtool: manage input methods'
             'zenity: update installation dialog when notification actions are unavailable'
             'kdialog: KDE update installation dialog when notification actions are unavailable'
