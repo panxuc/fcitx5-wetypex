@@ -114,6 +114,21 @@ outputs = { nixpkgs, wetypex, ... }: {
 };
 ```
 
+也可通过默认 overlay 使用 `pkgs.fcitx5-wetypex`，让包直接跟随当前系统的 Nixpkgs 和其他 overlays：
+
+```nix
+{ pkgs, ... }: {
+  nixpkgs.overlays = [ wetypex.overlays.default ];
+  i18n.inputMethod = {
+    enable = true;
+    type = "fcitx5";
+    fcitx5.addons = [ pkgs.fcitx5-wetypex ];
+  };
+}
+```
+
+将这段模块放入上例的 `modules`，其中 `wetypex` 来自 flake 的 `outputs` 参数。包的 `.override` 参数同样可用于 overlay 提供的包。
+
 ### 构建参数
 
 Nix 包支持通过 `.override` 调整以下参数：
