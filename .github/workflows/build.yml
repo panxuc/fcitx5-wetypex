@@ -70,7 +70,9 @@ jobs:
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" model install --accept-upstream-license
               mkdir -p "$XDG_CONFIG_HOME/fcitx5"
               python3 -c '\''import json,os; from pathlib import Path; p=Path(os.environ["XDG_CONFIG_HOME"])/"fcitx5/wetypex.json"; p.write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_smart_polish":True,"voice_copy_to_clipboard":False}))'\''
-              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/speech.wav" --realtime --traditional > "$XDG_CACHE_HOME/local-voice.json"
+              # Reuse the pinned natural-speech fixture from the Flatpak check.
+              python3 -c '\''import hashlib,urllib.request; from pathlib import Path; data=urllib.request.urlopen("https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav",timeout=90).read(); assert hashlib.sha256(data).hexdigest()=="59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"; Path(__import__("os").environ["XDG_CACHE_HOME"]+"/local-speech.wav").write_bytes(data)'\''
+              "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" transcribe "$XDG_CACHE_HOME/local-speech.wav" --realtime --traditional > "$XDG_CACHE_HOME/local-voice.json"
               python3 -c '\''import json,os; v=json.load(open(os.environ["XDG_CACHE_HOME"]+"/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
               "$WETYPEX_PREFIX/bin/fcitx5-wetypex-voice" shutdown
             '
@@ -177,7 +179,7 @@ jobs:
               fcitx5-wetypex-voice model install --accept-upstream-license
               mkdir -p /root/.config/fcitx5
               python3 -c '\''import json; from pathlib import Path; Path("/root/.config/fcitx5/wetypex.json").write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_copy_to_clipboard":False}))'\''
-              espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is an offline voice input check. One two three."
+              python3 -c '\''import hashlib,urllib.request; from pathlib import Path; data=urllib.request.urlopen("https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav",timeout=90).read(); assert hashlib.sha256(data).hexdigest()=="59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"; Path("/tmp/speech.wav").write_bytes(data)'\''
               WETYPE_LOCAL_VOICE_CPU=scalar fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/local-voice.json
               python3 -c '\''import json; v=json.load(open("/tmp/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
               fcitx5-wetypex-voice shutdown
@@ -273,7 +275,7 @@ jobs:
               fcitx5-wetypex-voice model install --accept-upstream-license
               mkdir -p /root/.config/fcitx5
               python3 -c '\''import json; from pathlib import Path; Path("/root/.config/fcitx5/wetypex.json").write_text(json.dumps({"voice_provider":"local","standalone":True,"voice_copy_to_clipboard":False}))'\''
-              espeak-ng -v en-us -s 135 -w /tmp/speech.wav "Hello, this is an offline voice input check. One two three."
+              python3 -c '\''import hashlib,urllib.request; from pathlib import Path; data=urllib.request.urlopen("https://raw.githubusercontent.com/ggml-org/whisper.cpp/b0a11594aec50892a02cd8d129eee2dfe93a8bb8/samples/jfk.wav",timeout=90).read(); assert hashlib.sha256(data).hexdigest()=="59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e"; Path("/tmp/speech.wav").write_bytes(data)'\''
               WETYPE_LOCAL_VOICE_CPU=scalar fcitx5-wetypex-voice transcribe /tmp/speech.wav --realtime > /tmp/local-voice.json
               python3 -c '\''import json; v=json.load(open("/tmp/local-voice.json")); assert v["ok"] and v["text"].strip() and v["provider"]=="local"'\''
               fcitx5-wetypex-voice shutdown
