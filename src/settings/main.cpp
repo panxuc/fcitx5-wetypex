@@ -325,6 +325,7 @@ static QWidget *iconRow(const QString &icon, const QString &title,
   if (!subtitle.isEmpty()) {
     auto *detail = new QLabel(subtitle);
     detail->setObjectName("rowSubtitle");
+    detail->setWordWrap(true);
     labels->addWidget(detail);
   }
   labels->addStretch();
@@ -991,6 +992,9 @@ int main(int argc, char **argv) {
            {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
            "voice_hold_shortcut")}));
   auto *microphone = new QComboBox;
+  microphone->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  microphone->setMinimumContentsLength(12);
+  microphone->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
   microphone->addItem("自动检测");
   QProcess pipewire;
   pipewire.start(QStringLiteral("pw-dump"), QStringList{});
@@ -1056,6 +1060,9 @@ int main(int argc, char **argv) {
     }
     microphone->setCurrentIndex(index);
   }
+  microphone->setToolTip(microphone->currentText());
+  QObject::connect(microphone, &QComboBox::currentTextChanged,
+                   microphone, &QWidget::setToolTip);
   QObject::connect(
       microphone, qOverload<int>(&QComboBox::currentIndexChanged), [microphone](int index) {
         writeSetting("voice_microphone",

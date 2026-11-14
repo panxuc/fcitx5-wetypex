@@ -266,7 +266,7 @@ public:
     setWindowFlags(flags);
     setAttribute(Qt::WA_TranslucentBackground);
     setMinimumSize(600, 450);
-    resize(715, 569);
+    resize(900, 820);
     sizeGrip_ = new QSizeGrip(this);
     sizeGrip_->setStyleSheet("background:transparent;");
     fitInitialScreen();
