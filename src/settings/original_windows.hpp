@@ -122,9 +122,11 @@ protected:
 };
 
 class SourceIconButton final : public QAbstractButton {
-  QLabel *icon_;
+  QSvgRenderer renderer_;
 
-  static QPixmap renderSource(const QString &path) {
+  static QByteArray readSource(const QString &path) {
+    if (path.isEmpty())
+      return {};
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
       return {};
@@ -139,32 +141,16 @@ class SourceIconButton final : public QAbstractButton {
         break;
       source.remove(begin, end - begin + 1);
     }
-    QSvgRenderer renderer(source);
-    QPixmap pixmap(46, 28);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    if (renderer.isValid()) {
-      renderer.render(&painter, pixmap.rect());
-    } else {
-      // The window must remain closable before upstream artwork is installed.
-      painter.setRenderHint(QPainter::Antialiasing);
-      painter.setPen(QPen(QColor("#555555"), 1.5));
-      painter.drawLine(QPointF(18, 9), QPointF(28, 19));
-      painter.drawLine(QPointF(28, 9), QPointF(18, 19));
-    }
-    return pixmap;
+    return source;
   }
 
 public:
   explicit SourceIconButton(const QString &path, QWidget *parent = nullptr)
-      : QAbstractButton(parent), icon_(new QLabel(this)) {
+      : QAbstractButton(parent), renderer_(readSource(path)) {
     setFixedSize(46, 28);
     setCursor(Qt::PointingHandCursor);
     setAccessibleName(QStringLiteral("关闭"));
     setToolTip(QStringLiteral("关闭"));
-    icon_->setGeometry(rect());
-    icon_->setPixmap(renderSource(path));
-    icon_->setAttribute(Qt::WA_TransparentForMouseEvents);
   }
 
 protected:
@@ -172,6 +158,18 @@ protected:
     QPainter painter(this);
     if (underMouse())
       painter.fillRect(rect(), QColor(0, 0, 0, 12));
+    if (renderer_.isValid()) {
+      // Paint at the widget's current size and device pixel ratio, including
+      // the smaller buttons in dialogs and moves between scaled screens.
+      renderer_.render(&painter, QRectF(rect()));
+    } else {
+      // First-run windows also need an icon before upstream assets exist.
+      painter.setRenderHint(QPainter::Antialiasing);
+      painter.setPen(QPen(QColor("#555555"), 1.5));
+      const QPointF center = QRectF(rect()).center();
+      painter.drawLine(center + QPointF(-5, -5), center + QPointF(5, 5));
+      painter.drawLine(center + QPointF(5, -5), center + QPointF(-5, 5));
+    }
   }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
   void enterEvent(QEnterEvent *event) override {
