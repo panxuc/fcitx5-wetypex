@@ -197,7 +197,9 @@ def microphone_command(config):
                    '--format', 's16', '--latency', '20ms']
         if b'--properties' in options:
             command += ['--properties',
-                        'application.name=WeTypeX node.name=wetypex-voice-input'
+                        # Restored per-stream routing must not override the
+                        # selected microphone or this session's system default.
+                        'application.name=WeTypeX node.name=wetypex-voice-input node.dont-move=true'
                         + (' node.dont-fallback=true' if selected else '')]
         if selected:
             command += ['--target', str(microphone)]

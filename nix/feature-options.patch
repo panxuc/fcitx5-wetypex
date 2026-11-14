@@ -508,7 +508,7 @@ index 142a2beb..9cc686aa 100644
 +      return;
      voiceWarmTick_ = now(CLOCK_MONOTONIC);
      if (networkEnabled_ &&
-         (*config_.voice->launchShortcut || *config_.voice->holdShortcut) &&
+         ((*config_.voice->launchShortcut && !config_.voice->launchKey->empty()) ||
 @@ -1931,6 +1991,8 @@ class WeType : public InputMethodEngineV2 {
      return false;
    }
@@ -689,15 +689,14 @@ index 808c46cc..7b1905b0 100644
 +  shortcuts.body->addWidget(rowsCard(quickShortcutRows));
 +#if WETYPE_ENABLE_VOICE
 +  auto *voiceShortcutCard = rowsCard(
-       {row("语音输入", {}, nullptr, 44),
-        shortcutRow(
-            "启动语音输入",
-@@ -1360,7 +1393,10 @@ int main(int argc, char **argv) {
-            "按住说话",
-            wetype::settingBool(settings.value("voice_hold_shortcut"), true),
-            {"Ctrl", "Win", "×"}, "按住可语音输入，松手结束", true,
--           "voice_hold_shortcut")}));
-+           "voice_hold_shortcut")});
+       {row("语音输入", "在其他应用的文本框中使用；点击按键可修改", nullptr, 62),
+        voiceShortcutRow("启动语音输入",
+                         "按下启动或结束；空格结束，回车上屏，Esc 取消",
+@@ -1360,6 +1393,9 @@ int main(int argc, char **argv) {
+        voiceShortcutRow("按住说话", "按住可语音输入，松手结束",
+                         "voice_hold_shortcut", "voice_hold_key",
+-                        "Control+Super_L")}));
++                        "Control+Super_L")});
 +  voiceShortcutCard->setObjectName("voiceShortcutCard");
 +  shortcuts.body->addWidget(voiceShortcutCard);
 +#endif
