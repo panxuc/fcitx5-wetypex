@@ -21,6 +21,7 @@ pub struct Stream {
     ids: Vec<u32>,
     s: usize,
     fresh: usize,
+    has_signal: bool,
 }
 
 impl Stream {
@@ -32,10 +33,12 @@ impl Stream {
             ids: Vec::new(),
             s: 0,
             fresh: 0,
+            has_signal: false,
         }
     }
 
     pub fn push(&mut self, pcm: &[i16]) {
+        self.has_signal |= pcm.iter().any(|&sample| sample != 0);
         let n = self.feats.len();
         self.fb.push(pcm, &mut self.feats);
         self.fresh += self.feats.len() - n;
@@ -59,6 +62,10 @@ impl Stream {
     }
 
     fn commit(&mut self) {
+        if !self.has_signal {
+            self.s += BLK;
+            return;
+        }
         let mut ids = self.decode(PREV, self.s + BLK + POST, PAD);
         ids.truncate(BLK / 5);
         // 在块尾附近的连续 blank 处截断，避免字恰好落在块边界上被两边都丢掉
@@ -80,6 +87,11 @@ impl Stream {
     /// 中间结果，尾部临时解码带 `prev` 帧前文（评测用）。
     pub fn partial_with(&mut self, prev: usize) -> String {
         self.fresh = 0;
+        // Dither is part of feature extraction, not microphone activity.
+        // Muted (all-zero) PCM must never display or commit a guessed word.
+        if !self.has_signal {
+            return String::new();
+        }
         let mut ids = self.ids.clone();
         if self.feats.len() > self.s {
             ids.extend(self.decode(prev, self.feats.len(), PAD));
@@ -88,6 +100,9 @@ impl Stream {
     }
 
     pub fn finish(&mut self) -> String {
+        if !self.has_signal {
+            return String::new();
+        }
         if self.feats.len() <= WHOLE_MAX {
             let ids = self.m.forward(&self.feats);
             return tidy(&self.m.text(&ids));
