@@ -1,0 +1,11 @@
+diff --git a/src/SerializedValues.cpp b/src/SerializedValues.cpp
+--- a/src/SerializedValues.cpp
++++ b/src/SerializedValues.cpp
+@@ -17,6 +17,7 @@
+  */
+ 
+ #include <cassert>
++#include <cstdint>
+ #include <cstring>
+ 
+ #include "Lexicon.hpp"
