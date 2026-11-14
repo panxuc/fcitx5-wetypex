@@ -94,7 +94,12 @@ def install_font(archive, data, metadata=None):
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
-    subprocess.run(['fc-cache', '-f', str(directory)], check=True)
+    # Font registration is optional; an unavailable/read-only font cache must
+    # not prevent the verified original core from being installed.
+    try:
+        subprocess.run(['fc-cache', '-f', str(directory)], timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
     return target
 
 
