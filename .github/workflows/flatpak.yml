@@ -91,7 +91,7 @@ jobs:
           - arch: aarch64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 50
     defaults:
       run:
         shell: bash
@@ -132,10 +132,12 @@ jobs:
           flatpak info --user --show-ref org.fcitx.Fcitx5.Addon.WeTypeX | grep -Fx "runtime/org.fcitx.Fcitx5.Addon.WeTypeX/$PACKAGE_ARCH/stable"
           flatpak override --user --filesystem="$RUNNER_TEMP/wetypex-speech.wav:ro" org.fcitx.Fcitx5
       - name: 下载并校验原版运行时
-        timeout-minutes: 12
+        timeout-minutes: 32
         run: |
           status=0
-          dbus-run-session -- timeout --kill-after=15s 10m \
+          # A clean installation needs two independently verified archives.
+          # Slow but productive CDN retries must not be killed at ten minutes.
+          dbus-run-session -- timeout --kill-after=15s 30m \
             flatpak run --command=/app/addons/WeTypeX/bin/fcitx5-wetypex-setup \
             org.fcitx.Fcitx5 --download --accept-upstream-license || status=$?
           if [ "$status" -ne 0 ]; then

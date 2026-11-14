@@ -24,4 +24,4 @@ RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       ln -sf /usr/bin/clang-18 /usr/local/bin/clang && \
       ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++ && \
       rm -rf /var/lib/apt/lists/*; \
-    fi && rm -f /tmp/llvm.asc
+    fi && rm -f /tmp/llvm.asc /etc/apt/sources.list.d/llvm.list

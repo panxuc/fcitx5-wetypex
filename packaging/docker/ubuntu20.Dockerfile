@@ -31,7 +31,7 @@ RUN if [ "$(dpkg --print-architecture)" = arm64 ]; then \
       ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++ && \
       pip3 install --no-cache-dir cmake==3.28.4 && \
       rm -rf /var/lib/apt/lists/*; \
-    fi && rm -f /tmp/llvm.asc
+    fi && rm -f /tmp/llvm.asc /etc/apt/sources.list.d/llvm.list
 
 RUN git clone https://github.com/fcitx/xcb-imdkit.git /tmp/xcb-imdkit && \
     git -C /tmp/xcb-imdkit checkout 30e2f16f9a8b0e338e25ce5e3643809a07ad41f0 && \
