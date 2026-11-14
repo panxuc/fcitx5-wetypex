@@ -2781,7 +2781,11 @@ class WeType : public InputMethodEngineV2 {
     // Text("") contains one empty segment and is not empty to Fcitx UI.
     Text text;
     if (!displayed.empty()) {
-      text.append(displayed);
+      // A partial transcript is a preview. Fcitx commits ordinary client
+      // preedit before focus-out reaches deactivate(), which would otherwise
+      // accept the partial even though the voice session is cancelled.
+      text.append(displayed, voice ? TextFormatFlag::DontCommit
+                                   : TextFormatFlag::NoFlag);
       text.setCursor(
           voice || englishPreedit ? displayed.size()
           : !s->displayPreedit.empty()
