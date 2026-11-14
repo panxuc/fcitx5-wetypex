@@ -142,6 +142,8 @@ fcitx5-wetypex-voice transcribe /path/to/recording.wav
 
 文件转写遵循当前选择的识别方式；加上 `--traditional` 输出繁体。离线单次输入上限为十分钟，达到时自动结束并保留已识别结果，可再启动下一段。`WETYPE_LOCAL_VOICE_CPU=scalar` 可用于排查旧 x86 CPU 的兼容性，通常保持自动选择即可。
 
+文件超过上限时结果包含 `truncated: true`、`limit_reached: true` 与 `reason: duration_limit`，同时向标准错误输出提示；需要完整转写时请先分段。
+
 日志位于 `~/.local/share/fcitx5-wetypex/state/voice/`：
 
 | 文件 | 内容 |

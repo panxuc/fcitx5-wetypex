@@ -59,7 +59,7 @@ flatpak override --user --filesystem=xdg-download org.fcitx.Fcitx5
 
 ## 从源码构建
 
-安装 Flatpak Builder、Flathub 的 Fcitx5、KDE SDK 6.11 和 LLVM 21 SDK 扩展，然后在仓库根目录执行：
+安装 Flatpak Builder、Flathub 的 Fcitx5、KDE SDK 6.11，以及 25.08 分支的 LLVM 21、rust-stable SDK 扩展，然后在仓库根目录执行：
 
 ```bash
 flatpak-builder --user --install-deps-from=flathub --jobs=2 \

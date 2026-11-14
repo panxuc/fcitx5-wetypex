@@ -93,7 +93,7 @@ jobs:
         run: >-
           pacman -Syu --noconfirm git cmake clang rust boost fcitx5 fcitx5-qt libime libc++
           json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig qt6-base qt6-svg
-          qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit
+          qt6-webengine layer-shell-qt pipewire ffmpeg opencc wl-clipboard libnotify polkit
       - uses: actions/checkout@v7
       - name: 配置
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
