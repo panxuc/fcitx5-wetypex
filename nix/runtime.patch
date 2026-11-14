@@ -532,9 +532,7 @@ diff --git a/src/settings/main.cpp b/src/settings/main.cpp
 index 7d8aa115..808c46cc 100644
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
-@@ -976,7 +976,10 @@ int main(int argc, char **argv) {
-   auto *microphone = new QComboBox;
-   microphone->addItem("自动检测");
+@@ -976,5 +976,8 @@ int main(int argc, char **argv) {
    QProcess pipewire;
 -  pipewire.start(QStringLiteral("pw-dump"), QStringList{});
 +  pipewire.start(QStandardPaths::findExecutable(
