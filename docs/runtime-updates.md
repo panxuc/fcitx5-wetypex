@@ -39,6 +39,8 @@ fcitx5-wetypex-setup --download --accept-upstream-license
 
 `--download` 必须与 `--accept-upstream-license` 一起使用，表示你已阅读并同意原版软件许可。在设置界面首次点击“下载并更新原版核心”时，也会先弹出许可确认。下载的 ZIP 经 SHA-256 校验后缓存到 `~/.cache/fcitx5-wetypex/archives/`。
 
+下载连接中断或过慢时，会保留本次下载已收到的数据，换地址继续，并在完成后校验整个文件。连续六次没有有效进展，或单个 ZIP 的下载超过 30 分钟时，会报告失败。可重新尝试，或按下文导入离线文件；下载失败不会切换当前运行时。
+
 完成后运行 `fcitx5-wetypex-setup --check` 验证，预期结果见[命令参考](#命令参考)。
 
 ## 离线准备

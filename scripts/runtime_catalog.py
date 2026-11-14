@@ -1,5 +1,6 @@
 """Discover official Mac runtime channels without executing website JavaScript."""
 import http.client
+import functools
 import json
 import re
 import socket
@@ -75,13 +76,16 @@ def discover(channel='stable'):
 
 
 def _archive_connection(address, timeout=None, source_address=None,
-                        family=socket.AF_UNSPEC, **_options):
+                        family=socket.AF_UNSPEC, address_offset=0, **_options):
     # The standard helper gives *each* address a fresh timeout. Keep one
     # connection budget even when a CDN resolves to many unreachable hosts.
     deadline = time.monotonic() + (timeout if isinstance(timeout, (int, float)) else 45)
     last_error = None
-    for domain, kind, protocol, _canonical, target in socket.getaddrinfo(
-            address[0], address[1], family, socket.SOCK_STREAM):
+    addresses = socket.getaddrinfo(address[0], address[1], family, socket.SOCK_STREAM)
+    if addresses:
+        offset = address_offset % len(addresses)
+        addresses = addresses[offset:] + addresses[:offset]
+    for domain, kind, protocol, _canonical, target in addresses:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise socket.timeout('original archive connection timed out')
@@ -99,44 +103,51 @@ def _archive_connection(address, timeout=None, source_address=None,
     raise last_error or OSError('no address for the original archive server')
 
 
-def _ipv4_connection(address, timeout=None, source_address=None, **options):
-    return _archive_connection(address, timeout, source_address,
-                               family=socket.AF_INET, **options)
-
-
 class _ArchiveHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, *args, **kwargs):
+    ipv4 = False
+
+    def __init__(self, *args, address_offset=0, **kwargs):
         super().__init__(*args, **kwargs)
-        self._create_connection = _archive_connection
+        self._create_connection = functools.partial(
+            _archive_connection, address_offset=address_offset,
+            family=socket.AF_INET if self.ipv4 else socket.AF_UNSPEC)
+
+    def connect(self):
+        super().connect()
+        self.sock.settimeout(15)
 
 
-class _IPv4HTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._create_connection = _ipv4_connection
+class _IPv4HTTPSConnection(_ArchiveHTTPSConnection):
+    ipv4 = True
 
 
 class _ArchiveHTTPSHandler(urllib.request.HTTPSHandler):
     handler_order = 499
     ipv4 = False
+    address_offset = 0
 
     def do_open(self, http_class, request, **kwargs):
         if http_class is http.client.HTTPSConnection:
             http_class = _IPv4HTTPSConnection if self.ipv4 else _ArchiveHTTPSConnection
+            kwargs['address_offset'] = self.address_offset
         return super().do_open(http_class, request, **kwargs)
 
 
 def download_archive(opener, url, output):
     """Download bounded ranges; the caller verifies the complete archive SHA."""
     limit = 768 * 1024 * 1024
-    segment = 16 * 1024 * 1024
+    segment = 8 * 1024 * 1024
     failures = 0
+    interruptions = 0
+    deadline = time.monotonic() + 30 * 60
     full_size = None
     validator = None
     logged = output.tell()
     transport = _ArchiveHTTPSHandler()
     opener.add_handler(transport)
     for _request in range(1024):
+        if time.monotonic() >= deadline:
+            raise OSError('original archive download exceeded its 30-minute deadline')
         offset = output.tell()
         end = min(offset + segment, limit) - 1
         if offset < 0 or offset >= limit:
@@ -189,7 +200,8 @@ def download_archive(opener, url, output):
                         raise ValueError('original archive validator changed during download')
                     validator = tag
                 total = offset
-                progress_time, progress_bytes = time.monotonic(), total
+                transfer_start = progress_time = time.monotonic()
+                progress_bytes = total
                 while True:
                     # read() can keep filling its buffer indefinitely while
                     # tiny packets arrive. read1() returns after one I/O.
@@ -201,16 +213,23 @@ def download_archive(opener, url, output):
                         raise ValueError('original archive exceeds its declared size')
                     output.write(block)
                     now = time.monotonic()
-                    if now - progress_time >= 60:
-                        if total - progress_bytes < 64 * 1024:
+                    if now >= deadline:
+                        raise OSError('original archive download exceeded its 30-minute deadline')
+                    if now - progress_time >= 30:
+                        if total - progress_bytes < 256 * 1024:
                             raise socket.timeout('original archive download made no useful progress')
                         progress_time, progress_bytes = now, total
+                    # A trickling connection never reaches the socket timeout.
+                    # Keep its received prefix and reconnect to another address.
+                    if response.status == 206 and now - transfer_start >= 30 and total < expected:
+                        raise socket.timeout('original archive range transfer exceeded 30 seconds')
                     if total - logged >= 32 * 1024 * 1024:
                         print('Original archive downloaded: %d MiB' % (total // (1024 * 1024)),
                               file=sys.stderr)
                         logged = total
                 if expected is not None and total < expected:
                     raise http.client.IncompleteRead(b'', expected - total)
+                failures = 0
                 if full_size is None or total == full_size:
                     return
                 # A complete 206 segment is success, not an interrupted
@@ -229,12 +248,16 @@ def download_archive(opener, url, output):
                     full_size, validator = None, None
                 elif error.code not in (408, 429, 500, 502, 503, 504):
                     raise
-            failures += 1
+            interruptions += 1
+            # Productive interruptions must not exhaust a cumulative retry
+            # counter on a large archive. The overall deadline still bounds it.
+            failures = 0 if output.tell() - offset >= 256 * 1024 else failures + 1
             if failures >= 6:
-                raise OSError('original archive download failed after six interruptions: ' + str(error)) from error
+                raise OSError('original archive download failed after six attempts without useful progress: ' + str(error)) from error
+            transport.address_offset += 1
             if not isinstance(error, urllib.error.HTTPError):
                 transport.ipv4 = True
-                if failures >= 2:
+                if interruptions >= 2:
                     # Keep IPv4 and certificate/hostname verification while
                     # avoiding oversized hybrid key shares on old gateways.
                     context = ssl.create_default_context()
@@ -242,7 +265,7 @@ def download_archive(opener, url, output):
                     if ssl.HAS_ALPN:
                         context.set_alpn_protocols(['http/1.1'])
                     transport._context = context
-            print('Original archive download interrupted at %s (%s); resuming at %d MiB (%d/6)' %
+            print('Original archive download interrupted at %s (%s); resuming at %d MiB (%d/6 attempts without useful progress)' %
                   (opener.archive_last_host, type(error).__name__,
                    output.tell() // (1024 * 1024), failures), file=sys.stderr)
             time.sleep(min(failures, 3))
