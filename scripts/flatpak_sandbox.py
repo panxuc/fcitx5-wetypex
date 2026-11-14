@@ -34,10 +34,10 @@ def main(arguments):
             source, destination = values
             if option == '--ro-bind-try' and not pathlib.Path(source).exists():
                 continue
-            if destination in ('/input', '/support', '/work', '/voice-vad'):
+            if destination in ('/input', '/support', '/work', '/voice-vad', '/model'):
                 mounts[destination] = pathlib.Path(source).resolve(strict=True)
             elif source != destination or not (
-                    destination == '/usr' or destination == '/lib64' or
+                    destination in ('/usr', '/lib64', '/nix/store') or
                     destination.startswith('/etc/')):
                 raise ValueError('unsupported engine sandbox mount')
         elif option == '--setenv':
@@ -57,10 +57,14 @@ def main(arguments):
         else:
             raise ValueError('unsupported engine sandbox option: ' + option)
 
-    if not {'/input', '/support', '/work'} <= mounts.keys():
-        raise ValueError('the engine runtime, support and workspace are required')
     command = arguments[index:]
-    if len(command) < 3 or command[0] != '/support/wetypex-engine-host':
+    local_voice = command == ['/support/wetypex-local-voice', '--model', '/model']
+    required = {'/model', '/support', '/work'} if local_voice else {'/input', '/support', '/work'}
+    if not required <= mounts.keys():
+        raise ValueError('the runtime/model, support and workspace are required')
+    if local_voice and not offline:
+        raise ValueError('local voice requires a network-isolated child sandbox')
+    if not local_voice and (len(command) < 3 or command[0] != '/support/wetypex-engine-host'):
         raise ValueError('only the WeTypeX engine host can use this launcher')
 
     def translate(value):
@@ -72,7 +76,10 @@ def main(arguments):
                 return str(directory / relative)
         return value
 
-    command[:2] = [translate(value) for value in command[:2]]
+    if local_voice:
+        command = [translate(command[0]), '--model', translate(command[2])]
+    else:
+        command[:2] = [translate(value) for value in command[:2]]
     path_variables = {'HOME', 'WETYPE_SUPPORT_DIR', 'WETYPE_WORK_DIR',
                       'WETYPE_IDENTITY_FILE', 'WETYPE_P2P_INFO_FILE',
                       'WETYPE_VOICE_FILE', 'WETYPE_SEND_CLIPBOARD_IMAGE',

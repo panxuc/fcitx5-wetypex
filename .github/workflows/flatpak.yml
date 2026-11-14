@@ -50,7 +50,7 @@ jobs:
           chmod 700 "$RUNNER_TEMP/flatpak-runtime"
           echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/flatpak-runtime" >> "$GITHUB_ENV"
           flatpak remote-add --user --if-not-exists --from flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          for ref in org.fcitx.Fcitx5 org.kde.Sdk//6.11 org.freedesktop.Sdk.Extension.llvm21//25.08; do
+          for ref in org.fcitx.Fcitx5 org.kde.Sdk//6.11 org.freedesktop.Sdk.Extension.llvm21//25.08 org.freedesktop.Sdk.Extension.rust-stable//25.08; do
             if ! flatpak info "$ref" > /dev/null 2>&1; then
               flatpak install --user --noninteractive -y flathub "$ref"
             fi

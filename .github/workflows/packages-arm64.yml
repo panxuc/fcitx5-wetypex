@@ -52,7 +52,7 @@ jobs:
             bash -euc '
               pacman -Syu --disable-sandbox-filesystem --noconfirm git cmake clang rust boost fcitx5 fcitx5-qt libime libc++ \
                 json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig \
-                qt6-base qt6-svg qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit qemu-user
+                qt6-base qt6-svg qt6-webengine layer-shell-qt pipewire ffmpeg opencc wl-clipboard libnotify polkit qemu-user
               useradd -m builder
               cp -a /src/dist/arch /tmp/arch
               chown -R builder:builder /tmp/arch

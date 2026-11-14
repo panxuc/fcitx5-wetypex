@@ -411,7 +411,10 @@ class LocalBackend(Backend):
                        '--ro-bind-try', '/nix/store', '/nix/store',
                        '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
                        '--ro-bind', str(self.model_path), '/model',
-                       '--ro-bind', str(SUPPORT), '/support', '--chdir', '/tmp',
+                       '--ro-bind', str(SUPPORT), '/support']
+            workspace = VOICE / 'local-work'
+            workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
+            command += ['--bind', str(workspace), '/work', '--chdir', '/work',
                        '--setenv', 'WETYPE_LOCAL_VOICE_CPU', os.environ.get('WETYPE_LOCAL_VOICE_CPU', 'auto'),
                        '/support/wetypex-local-voice', '--model', '/model']
             self.ready = threading.Event()
@@ -477,6 +480,7 @@ class Job:
         self.done = threading.Event()
         self.immediate = False
         self.stop_sent = False
+        self.limit_reached = False
         self.error = ''
         self.text = ''
         self.since = time.monotonic()
@@ -718,6 +722,8 @@ class Service:
                                epoch=job.epoch, state=state, text=text,
                                capture_backend=job.capture_backend,
                                provider=job.provider,
+                               limit_reached=job.limit_reached,
+                               truncated=job.limit_reached and bool(job.request.get('file')),
                                timings=dict(job.timing), **extra)
             self.last_activity = time.monotonic()
             self.last_native_activity = self.last_activity
@@ -788,6 +794,7 @@ class Service:
                 self.fail(job, '识别结果过长，请分段输入')
                 return
             if kind == 'state' and event.get('state') in (2, 3):
+                job.limit_reached = bool(event.get('limit'))
                 job.stop_capture()
                 self.publish(job, 'recognizing', job.text)
             elif kind == 'partial':
@@ -810,7 +817,8 @@ class Service:
                 if job.stopped_at is not None:
                     job.timing['stop_to_final_ms'] = round((time.monotonic() - job.stopped_at) * 1000)
                 self.publish(job, 'final' if text else 'error', text,
-                             error='' if text else (job.error or '没有识别到语音'), reason=event.get('reason'))
+                             error='' if text else (job.error or '没有识别到语音'),
+                             reason='duration_limit' if job.limit_reached else event.get('reason'))
                 job.done.set()
                 # The focused input context acknowledges an accepted final
                 # result with 'copy'. Discarded/stale results never copy.
@@ -1150,6 +1158,8 @@ def main():
                 print(json.dumps(event, ensure_ascii=False), file=sys.stderr)
             if event.get('state') in ('final', 'error', 'cancelled'):
                 result = dict(event, ok=event['state'] == 'final')
+                if result.get('truncated'):
+                    print('已达到本地语音十分钟上限，文件只转写了前十分钟。', file=sys.stderr)
                 print(json.dumps(result, ensure_ascii=False))
                 return 0 if result['ok'] else 1
     return 1
