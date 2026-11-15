@@ -250,7 +250,7 @@ install(FILES data/fcitx5-wetypex-settings.desktop DESTINATION ${CMAKE_INSTALL_D
 install(DIRECTORY data/icons/hicolor/ DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor)
 install(PROGRAMS scripts/setup_runtime.py tools/prepare_macos_runtime.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/runtime-lease.sh DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
-install(FILES scripts/wechat_emoticons.py scripts/runtime_catalog.py scripts/runtime_manager.py data/runtime-profiles.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
+install(FILES scripts/wechat_emoticons.py scripts/runtime_catalog.py scripts/runtime_manager.py scripts/group_sync.py data/runtime-profiles.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES scripts/voice_stream.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-LICENSE)
 install(FILES ${kqueue_SOURCE_DIR}/LICENSE DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/fcitx5-wetypex RENAME libkqueue-ISC-LICENSE)

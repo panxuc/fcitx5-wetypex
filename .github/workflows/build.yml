@@ -107,7 +107,7 @@ jobs:
             case "$script" in *-syncd.sh.in|*-update.sh.in|*-sync.sh.in) continue;; esac
             sh -n "$script"
           done
-          python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py scripts/local_voice.py tools/*.py \
+          python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py scripts/local_voice.py scripts/group_sync.py tools/*.py \
             build/fcitx5-wetypex-syncd build/fcitx5-wetypex-update build/fcitx5-wetypex-sync
       - name: 构建 Arch 软件包（启用 LTO）
         run: |

@@ -3,10 +3,8 @@
 import json
 import os
 import pathlib
-import socket
 import subprocess
 import sys
-import time
 
 def main():
     if sys.argv[1:] not in ([], ["--refresh-state"]):
@@ -35,30 +33,12 @@ def main():
         raise ValueError("尚未关联设备，请先完成设备配对")
     if not functions & 6 and not refresh_state:
         raise ValueError("个人词库和常用语同步均未开启，请先开启对应功能")
-    request = {"session": 1, "seq": time.time_ns(), "epoch": 1, "op": "group_sync",
-               "group_id": group_id, "func_switch": functions}
+    sys.path.insert(0, "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex")
+    from group_sync import request_group_sync
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-            client.settimeout(10)
-            directory = os.open(state, os.O_RDONLY | os.O_DIRECTORY)
-            try:
-                client.connect(f"/proc/self/fd/{directory}/control.sock")
-            finally:
-                os.close(directory)
-            client.sendall(json.dumps(request).encode()+b"\n")
-            reply = bytearray()
-            while b"\n" not in reply:
-                chunk = client.recv(4096)
-                if not chunk or len(reply)+len(chunk) > 65536:
-                    raise ValueError("输入核心返回了无效同步响应")
-                reply.extend(chunk)
+        request_group_sync(state, group)
     except OSError as error:
         raise ValueError("请先启用 WeTypeX 输入法，再请求同步") from error
-    response = json.loads(reply.split(b"\n", 1)[0])
-    if not isinstance(response, dict):
-        raise ValueError("输入核心返回了无效同步响应")
-    if not response.get("requested"):
-        raise ValueError(response.get("error", "输入核心未接受同步请求"))
     return {"ok": True, "requested": True,
             "dictionary_enabled": bool(functions & 4), "phrases_enabled": bool(functions & 2)}
 
