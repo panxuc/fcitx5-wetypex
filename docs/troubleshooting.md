@@ -147,6 +147,8 @@ fcitx5-wetypex-account sync-now
 
 后台轮询每次成功读取设备组后，会将功能开关和常用语版本交给正在运行的原版核心；核心尚未启动或忙碌时，后续轮询会重试。`state/sync-runtime.json` 的 `core_sync_requested` 记录最近一次成功轮询的本地交接确认，常用语上传与下载由原版核心异步执行。
 
+`core_sync_error` 记录最近一次交接失败的原因。升级后若提示“同步组件版本不匹配”，重启 Fcitx5 以加载新的适配层；原版核心版本可保持不变。
+
 `state/sync-runtime.json` 中的 `remote_version`、`local_kind` 和 `local_digest` 只描述剪贴板状态。原版核心的 `state/user/persistent_data`、`state/user/network` 与 `state/userDict` 在重启后保留，排查普通连接故障时请保持这些目录原样。
 
 ### 跨设备剪贴板没有同步

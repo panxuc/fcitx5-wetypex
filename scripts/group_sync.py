@@ -42,4 +42,7 @@ def request_group_sync(state, group, timeout=10):
         raise ValueError('输入核心返回了无效同步响应')
     if not response.get('requested'):
         raise ValueError(response.get('error', '输入核心未接受同步请求'))
+    if any(response.get(name) != request[name]
+           for name in ('group_id', 'func_switch', 'hotword_version')):
+        raise ValueError('同步组件版本不匹配，请重启 Fcitx5 后重试')
     return response
