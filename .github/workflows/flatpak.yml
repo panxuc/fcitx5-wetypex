@@ -55,9 +55,20 @@ jobs:
               flatpak install --user --noninteractive -y flathub "$ref"
             fi
           done
+      - name: 下载并校验扩展源码
+        run: |
+          for attempt in 1 2 3; do
+            if flatpak-builder --user --download-only \
+              --state-dir=build/flatpak/state \
+              build/flatpak/app packaging/flatpak/org.fcitx.Fcitx5.Addon.WeTypeX.json; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then exit 1; fi
+            sleep "$((attempt * 5))"
+          done
       - name: 在本机架构构建扩展
         run: |
-          flatpak-builder --user --disable-rofiles-fuse --jobs=2 \
+          flatpak-builder --user --disable-download --force-clean --disable-rofiles-fuse --jobs=2 \
             --state-dir=build/flatpak/state --repo=build/flatpak/repo \
             build/flatpak/app packaging/flatpak/org.fcitx.Fcitx5.Addon.WeTypeX.json
       - name: 生成单文件安装包
