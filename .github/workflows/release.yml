@@ -91,9 +91,9 @@ jobs:
             -e CMAKE_BUILD_PARALLEL_LEVEL=2 \
             -v "$PWD:/src:ro" -v "$PWD/dist:/out" \
             archlinux:base-devel bash -euc '
-              pacman -Syu --noconfirm git cmake clang boost fcitx5 fcitx5-qt libime libc++ \
-                json-c curl bubblewrap util-linux python python-fonttools python-pillow fontconfig qt6-base qt6-svg \
-                qt6-webengine layer-shell-qt pipewire ffmpeg wl-clipboard libnotify polkit
+              pacman -Syu --noconfirm git cmake clang rust boost fcitx5 fcitx5-qt libime libc++ \
+                json-c curl openssl bubblewrap util-linux python python-fonttools python-pillow fontconfig qt6-base qt6-svg \
+                qt6-webengine layer-shell-qt pipewire ffmpeg opencc wl-clipboard libnotify polkit
               useradd -m builder
               cp -a /src/dist/arch /tmp/arch
               chown -R builder:builder /tmp/arch
