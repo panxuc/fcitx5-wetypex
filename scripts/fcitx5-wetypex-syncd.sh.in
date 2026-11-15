@@ -333,14 +333,15 @@ while True:
     if group.get("ok"):
         atomic_json(state_dir / "sync-state.json", group)
         core_sync_requested = False
+        core_sync_error = ''
         try:
             request_group_sync(state_dir, group, timeout=.5)
             core_sync_requested = True
-        except (OSError, ValueError):
+        except (OSError, ValueError) as error:
             # Retry on the next successful poll: the core may be starting,
             # restarting, or still loading user data. Acknowledgement only
             # means the snapshot was forwarded, not that transfer finished.
-            pass
+            core_sync_error = str(error)
         group_id = int(group.get("group_id", 0))
         functions = int(group.get("func_switch", 0))
         clipboard_enabled = bool(group_id and functions & 1)
@@ -461,6 +462,7 @@ while True:
                 last_remote_version = version
         atomic_json(runtime_path, {"group_id": last_group_id,
                                    "core_sync_requested": core_sync_requested,
+                                   "core_sync_error": core_sync_error,
                                    "remote_version": last_remote_version,
                                    "local_kind": last_local_kind,
                                    "local_digest": last_local_digest,

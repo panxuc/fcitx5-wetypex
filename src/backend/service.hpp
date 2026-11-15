@@ -559,6 +559,9 @@ static void service_loop() {
         // The native core schedules synchronization asynchronously. This
         // acknowledges the request, not a completed dictionary download.
         wire::boolean(response.get(), "requested", true);
+        wire::put(response.get(), "group_id", group);
+        wire::put(response.get(), "func_switch", functions);
+        wire::put(response.get(), "hotword_version", hotwordVersion);
       }
     } else if (op == "hotword_list" || op == "hotword_set") {
       // Local words load asynchronously. An early empty list must never be
