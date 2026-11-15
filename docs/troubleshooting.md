@@ -175,11 +175,11 @@ wl-copy --version
 
 ### 语音没有识别结果
 
-1. 确认单机模式关闭，语音识别需要联网；首次使用会初始化设备身份。
+1. 先核对“语音输入 → 识别方式”：原版在线识别需关闭单机模式并联网，首次使用会初始化设备身份；本地离线识别可在单机模式使用，通过 `fcitx5-wetypex-voice model status` 检查模型是否就绪，缺失时在设置中下载或修复。
 2. 按[流式语音输入](voice-input.md#诊断)中的命令单独录制几秒，确认默认输入设备有声音。
 3. 运行 `fcitx5-wetypex-voice status`，检查 `capture_backend`、`native_ready`、`vad`、`state` 和 `timings`。
-4. 查看 `~/.local/share/fcitx5-wetypex/state/voice/capture.log`（录音错误）和 `backend.log`（原版宿主错误）。
-5. 宿主运行时 `vad` 仍为 `false`，或日志报告 VAD 文件缺失时，先运行 `fcitx5-wetypex-voice shutdown`，再运行 `fcitx5-wetypex-setup --repair-voice-resources --download --accept-upstream-license` 恢复模型。离线修复与说明见[修复语音资源](voice-input.md#修复语音资源)。
+4. 查看 `~/.local/share/fcitx5-wetypex/state/voice/capture.log`（录音错误）；原版在线识别的宿主日志为 `backend.log`，本地离线解码器日志为 `local-backend.log`。
+5. 原版在线识别的宿主运行时 `vad` 仍为 `false`，或日志报告 VAD 文件缺失时，先运行 `fcitx5-wetypex-voice shutdown`，再运行 `fcitx5-wetypex-setup --repair-voice-resources --download --accept-upstream-license` 恢复资源。本地离线模式的 `vad: false` 属于正常状态。VAD 资源的本地导入与说明见[修复语音资源](voice-input.md#修复语音资源)。
 
 Ubuntu 22.04 的 `pw-record` 0.3.48 不支持 `--raw` 和 `--properties`；WeTypeX 会检测实际选项，自动改用 `parec` 或 FFmpeg 的 PulseAudio 输入。
 

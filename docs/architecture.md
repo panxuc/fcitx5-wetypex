@@ -23,7 +23,7 @@ WeTypeX 把微信输入法 macOS 版的原版 C/C++ 输入核心接入 Fcitx5。
 | `fcitx5-wetypex-account` | 配对、设备组、同步、语音文件和网络诊断等业务命令 |
 | `fcitx5-wetypex-syncd` | 轮询设备组并交换剪贴板内容 |
 | `fcitx5-wetypex-transfer` | 隔空传送窗口：生成官方二维码，驱动原版 Flurry 局域网与 WXP2P 文件通道 |
-| `fcitx5-wetypex-voice` | 流式采集音频，管理原版语音引擎会话并投递结果 |
+| `fcitx5-wetypex-voice` | 流式采集音频，管理原版在线或本地离线识别会话并投递结果 |
 | `fcitx5-wetypex-ai`、`fcitx5-wetypex-ai-viewer` | 调用原版 AI 服务并显示问答窗口 |
 | `fcitx5-wetypex-vmode` | V 快捷栏窗口 |
 | `fcitx5-wetypex-clipboard-set` | 剪贴板写入和 Wayland 协议探测助手 |
@@ -110,4 +110,4 @@ AI 以目标应用的 surrounding text 作为问题。原版服务返回服务�
 
 ## 数据流向
 
-WeTypeX 不运营自己的服务器。开启云候选、同步、语音或问 AI 时，相关内容发送到原版腾讯服务；单机模式关闭这些联网能力。适配层更新器访问 GitHub Release，原版运行时更新访问微信输入法官方下载服务。
+WeTypeX 不运营自己的服务器。开启云候选、同步、原版在线语音或问 AI 时，相关内容发送到原版腾讯服务；单机模式关闭这些联网能力。本地离线语音在本机解码，录音不上传。适配层更新器访问 GitHub Release，原版运行时更新访问微信输入法官方下载服务。
