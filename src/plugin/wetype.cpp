@@ -424,8 +424,12 @@ class WeType : public InputMethodEngineV2 {
     return std::string_view(ic->frontend()) == "wayland_v2";
   }
   static bool virtualKeyboardCursor(InputContext *ic) {
-    // GNOME's IBus bridge also forwards keys through a Wayland keyboard.
-    return waylandV2(ic) || std::string_view(ic->frontend()) == "ibus";
+    // KWin uses the v1 frontend ("wayland"). Both native protocols and
+    // GNOME's IBus bridge need ordering against the physical modifiers and
+    // the client's asynchronous cursor updates.
+    const std::string_view frontend = ic->frontend();
+    return frontend == "wayland" || frontend == "wayland_v2" ||
+           frontend == "ibus";
   }
   static bool legacyClientKeys(InputContext *ic) {
     return std::string_view(ic->frontend()) == "dbus" &&
