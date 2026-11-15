@@ -27,6 +27,9 @@ try:
 except BlockingIOError:
     raise SystemExit(0)
 
+sys.path.insert(0, "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex")
+from group_sync import request_group_sync
+
 def atomic_json(path, value):
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(json.dumps(value, ensure_ascii=False) + "\n")
@@ -329,6 +332,15 @@ while True:
     group = call("group-info", str(last_remote_version))
     if group.get("ok"):
         atomic_json(state_dir / "sync-state.json", group)
+        core_sync_requested = False
+        try:
+            request_group_sync(state_dir, group, timeout=.5)
+            core_sync_requested = True
+        except (OSError, ValueError):
+            # Retry on the next successful poll: the core may be starting,
+            # restarting, or still loading user data. Acknowledgement only
+            # means the snapshot was forwarded, not that transfer finished.
+            pass
         group_id = int(group.get("group_id", 0))
         functions = int(group.get("func_switch", 0))
         clipboard_enabled = bool(group_id and functions & 1)
@@ -448,6 +460,7 @@ while True:
                 # Do not retry malformed or unsupported messages forever.
                 last_remote_version = version
         atomic_json(runtime_path, {"group_id": last_group_id,
+                                   "core_sync_requested": core_sync_requested,
                                    "remote_version": last_remote_version,
                                    "local_kind": last_local_kind,
                                    "local_digest": last_local_digest,
