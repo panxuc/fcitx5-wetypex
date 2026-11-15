@@ -245,6 +245,7 @@ struct State : InputContextProperty {
   uint64_t id, epoch = 1, seq = 0, applied = 0, revision = 0, inputSeq = 0;
   uint64_t appliedUpdate = 0;
   uint64_t initialPanelDeadline = 0;
+  uint64_t initialPanelInputSeq = 0;
   bool initialPanelShown = false;
   uint64_t cloudPollUntil = 0, lastCloudPoll = 0;
   int candidatePage = 0, candidateCursor = 0;
@@ -2728,33 +2729,32 @@ class WeType : public InputMethodEngineV2 {
       updateEnglishCandidates(ic, s);
     const bool voice = voicePending_ && voiceSession_ == s->id &&
                        voiceEpoch_ == s->epoch;
+    const bool doublePinyin =
+        *config_.input->mode == wetype_config::InputMode::DoublePinyin;
     const auto candidates = ic->inputPanel().candidateList();
-    if (s->preedit.empty() || inlinePreedit || voice || s->vMode ||
+    if (s->preedit.empty() || (inlinePreedit && !doublePinyin) || voice || s->vMode ||
         s->vMenu != VMenu::None) {
       s->initialPanelDeadline = 0;
       s->initialPanelShown = false;
-    } else if (!s->initialPanelShown &&
-               (!candidates || !candidates->size()) &&
-               s->inputSeq > s->applied && !failed_) {
+    } else if ((doublePinyin ||
+                (!s->initialPanelShown && (!candidates || !candidates->size()))) &&
+               s->inputSeq > s->applied && !failed_ &&
+               s->initialPanelInputSeq != s->inputSeq) {
       const auto time = now(CLOCK_MONOTONIC);
       if (!s->initialPanelDeadline) {
-        // Usually the real core replies within a millisecond. Let that
-        // reply populate the first popup instead of mapping a tiny window.
-        // One frame bounds feedback for a slow or still-starting core.
+        // Double-pinyin segmentation is supplied by the core. Preserve its
+        // previous frame until the reply, rather than flashing raw spelling
+        // between two segmented strings. Do not restart this deadline on
+        // each key: slow/startup paths still get feedback within one frame.
         s->initialPanelDeadline = time + 16000;
         if (timer_) {
           timer_->setAccuracy(1000);
           timer_->setTime(std::min(timer_->time(), s->initialPanelDeadline));
         }
       }
-      if (time < s->initialPanelDeadline) {
-        const bool visible = !ic->inputPanel().empty();
-        ic->inputPanel().reset();
-        ic->updatePreedit();
-        if (visible)
-          ic->updateUserInterface(UserInterfaceComponent::InputPanel);
+      if (time < s->initialPanelDeadline)
         return;
-      }
+      s->initialPanelInputSeq = s->inputSeq;
       s->initialPanelShown = true;
       s->initialPanelDeadline = 0;
     } else {
@@ -2927,6 +2927,8 @@ class WeType : public InputMethodEngineV2 {
         auto *s = ic->propertyFor(&factory_);
         ++s->epoch;
         s->seq = s->applied = s->inputSeq = s->appliedUpdate = 0;
+        s->initialPanelInputSeq = 0;
+        s->initialPanelDeadline = 0;
         s->cloudPollUntil = 0;
         if (s->active && ic->hasFocus()) {
           ic->inputPanel().reset();
@@ -3023,6 +3025,7 @@ class WeType : public InputMethodEngineV2 {
         s->heldModifierKeys.clear();
         ++s->epoch;
         s->seq = s->applied = s->inputSeq = 0;
+        s->initialPanelInputSeq = 0;
         s->appliedUpdate = 0;
         s->initialPanelDeadline = 0;
         s->initialPanelShown = false;
