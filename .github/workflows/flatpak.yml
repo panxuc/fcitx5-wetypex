@@ -2,10 +2,10 @@ name: Flatpak 扩展
 
 on:
   pull_request:
-    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/flatpak/**"]
+    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/PKGBUILD.in", "packaging/flatpak/**"]
   push:
     branches: [main]
-    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/flatpak/**"]
+    paths: [".github/workflows/flatpak.yml", "CMakeLists.txt", "cmake/**", "src/**", "scripts/**", "data/**", "packaging/PKGBUILD.in", "packaging/flatpak/**"]
   workflow_dispatch:
 
 permissions:

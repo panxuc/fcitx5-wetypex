@@ -49,12 +49,12 @@ jobs:
       - name: 安装编译和真实运行依赖
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y build-essential cmake clang git pkg-config libboost-dev \
+          sudo apt-get install -y build-essential cmake clang rustc git pkg-config libboost-dev \
             libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev fcitx5-modules-dev \
             libfcitx5-qt-dev libimecore-dev libimepinyin-dev libjson-c-dev libssl-dev \
             libc++-dev libc++abi-dev libfontconfig1-dev libwayland-dev qtbase5-dev \
             libqt5svg5-dev qtwebengine5-dev bubblewrap python3-fonttools python3-pil \
-            ffmpeg espeak-ng qemu-user
+            ffmpeg espeak-ng opencc qemu-user
       - name: 编译并安装独立验证环境
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/wetypex" \

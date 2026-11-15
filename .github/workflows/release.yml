@@ -243,6 +243,6 @@ jobs:
                 echo "AUR metadata is already current"
                 exit 0
               fi
-              git commit -m "fcitx5-wetypex $version-$pkgrel"
+              git commit -m "chore(release): update fcitx5-wetypex to $version-$pkgrel"
               git push
             ' _ "$GITHUB_WORKSPACE"
