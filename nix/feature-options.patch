@@ -456,13 +456,14 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      std::string oldBytes((std::istreambuf_iterator<char>(oldFile)), {});
      auto json = wire::parse(oldBytes);
      if (!json || !json_object_is_type(json.get(), json_type_object))
-@@ -1691,6 +1741,7 @@
+@@ -1691,7 +1741,8 @@
      wire::put(json.get(), "device_dictionary_sync",
                bool(*devices.dictionarySync));
      wire::put(json.get(), "device_phrase_sync", bool(*devices.phraseSync));
 +#if WETYPE_ENABLE_VOICE
      const auto &voice = *config_.voice;
      wire::put(json.get(), "voice_provider", std::string(*voice.provider == wetype_config::VoiceProviderMode::Local ? "local" : "original"));
+     wire::put(json.get(), "local_voice_model", *voice.localModel);
      wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
 @@ -1712,10 +1763,13 @@
              ? "空格替换标点"

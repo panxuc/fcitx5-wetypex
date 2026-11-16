@@ -731,6 +731,10 @@ class OfflineVoiceModelPanel final : public QFrame {
   QProgressBar *progress_ = new QProgressBar(this);
   QByteArray pending_;
   QString error_;
+  QComboBox *models_ = new QComboBox(this);
+  QLabel *description_ = new QLabel(this);
+  QString downloadDetails_;
+  QString selectedModel_;
   bool ready_ = false;
   bool cancelled_ = false;
   bool acceptedDownload_ = false;
@@ -778,8 +782,10 @@ class OfflineVoiceModelPanel final : public QFrame {
   }
 
   void refresh() {
-    if (operation_->state() == QProcess::NotRunning && probe_->state() == QProcess::NotRunning)
-      probe_->start(QStringLiteral(WETYPE_VOICE_TOOL), {"model", "status"});
+    if (operation_->state() == QProcess::NotRunning && probe_->state() == QProcess::NotRunning) {
+      probe_->setProperty("model", models_->currentData());
+      probe_->start(QStringLiteral(WETYPE_VOICE_TOOL), {"model", "status", "--model", models_->currentData().toString()});
+    }
   }
   void stop() {
     cancelled_ = true;
@@ -794,7 +800,8 @@ class OfflineVoiceModelPanel final : public QFrame {
     progress_->setValue(0); progress_->setVisible(action == "install");
     download_->setText("取消下载"); remove_->setEnabled(false);
     status_->setText(action == "install" ? "正在连接下载，可取消后继续" : action == "verify" ? "正在校验离线模型…" : "正在删除离线模型…");
-    QStringList args{"model", action};
+    models_->setEnabled(false);
+    QStringList args{"model", action, "--model", models_->currentData().toString()};
     if (action == "install")
       args << "--accept-upstream-license";
     operation_->start(QStringLiteral(WETYPE_VOICE_TOOL), args);
@@ -807,9 +814,32 @@ public:
     layout->setContentsMargins(15, 12, 15, 12);
     auto *title = new QLabel("离线语音模型"); title->setObjectName("rowTitle");
     layout->addWidget(title);
-    auto *description = new QLabel("使用微信输入法官方离线模型，录音不上传；下载后可在单机模式使用。");
-    description->setObjectName("rowSubtitle"); description->setWordWrap(true);
-    layout->addWidget(description);
+    models_->setObjectName("local-voice-model-selector");
+    models_->addItem("微信输入法官方模型", "wetype");
+    models_->addItem("X-ASR · 中英实时识别", "xasr");
+    models_->addItem("Qwen3-ASR 0.6B · INT8", "qwen3");
+    models_->addItem("FireRedASR2 CTC · INT8", "firered");
+    models_->addItem("Fun-ASR-Nano · INT8", "funasr");
+    models_->setCurrentIndex(qMax(0, models_->findData(readSettings().value("local_voice_model").toString("wetype"))));
+    selectedModel_ = models_->currentData().toString();
+    layout->addWidget(models_);
+    description_->setObjectName("rowSubtitle"); description_->setWordWrap(true);
+    description_->setText("录音在本机识别，不上传；下载后可在单机模式使用。");
+    layout->addWidget(description_);
+    QObject::connect(models_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+      if (!writeSetting("local_voice_model", models_->currentData().toString())) {
+        QSignalBlocker block(models_);
+        models_->setCurrentIndex(models_->findData(selectedModel_));
+        message("无法切换模型", "请检查输入法配置文件的写入权限。", "知道了", false);
+        return;
+      }
+      selectedModel_ = models_->currentData().toString();
+      if (probe_->state() != QProcess::NotRunning) probe_->kill();
+      acceptedDownload_ = resumable_ = ready_ = false;
+      download_->setEnabled(false); remove_->setEnabled(false);
+      status_->setText("正在检查所选模型…");
+      refresh();
+    });
     auto *actions = new QHBoxLayout;
     status_->setObjectName("rowSubtitle"); status_->setWordWrap(true);
     actions->addWidget(status_, 1);
@@ -827,7 +857,7 @@ public:
       if (ready_) { run("verify"); return; }
       if (acceptedDownload_ || resumable_) { run("install"); return; }
       if (message("下载离线语音模型",
-          "将从腾讯官方服务器下载约 103 MB 原版模型，安装后占用约 130 MB。原版资源适用微信输入法相关协议。", "下载")) {
+          downloadDetails_, "下载")) {
         acceptedDownload_ = true; run("install");
       }
     });
@@ -855,13 +885,14 @@ public:
     });
     QObject::connect(operation_, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
         [this](int code, QProcess::ExitStatus) {
-          progress_->setVisible(false); remove_->setEnabled(false);
+          progress_->setVisible(false); remove_->setEnabled(false); models_->setEnabled(true);
           if (code && !cancelled_)
             message("离线模型未准备好", error_.isEmpty() ? "操作未完成，请检查网络、可用空间或离线模型使用状态后重试。" : error_, "知道了", false);
           refresh();
         });
     QObject::connect(operation_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
       if (error == QProcess::FailedToStart) {
+        models_->setEnabled(true);
         progress_->setVisible(false); status_->setText("无法启动语音组件，请重新安装 WeTypeX");
         download_->setText("重试"); remove_->setEnabled(false);
       }
@@ -870,6 +901,7 @@ public:
         [this](int code, QProcess::ExitStatus) {
           if (operation_->state() != QProcess::NotRunning) return;
           const auto value = QJsonDocument::fromJson(probe_->readAllStandardOutput()).object();
+          if (probe_->property("model") != models_->currentData()) { refresh(); return; }
           ready_ = !code && value.value("ready").toBool();
           const bool supported = !code && value.value("supported").toBool();
           resumable_ = value.value("downloaded_bytes").toDouble() > 0;
@@ -877,9 +909,18 @@ public:
           download_->setEnabled(supported); download_->setText(ready_ ? "校验模型" : resumable_ ? "继续下载" : present ? "修复模型" : "下载模型");
           remove_->setText(present ? "删除模型" : "清除下载");
           remove_->setEnabled(value.value("removable").toBool());
-          status_->setText(!supported ? "当前安装缺少离线组件，请更新 WeTypeX" :
-                           ready_ ? "已下载 · 约 130 MB" :
-                           value.value("downloaded_bytes").toDouble() > 0 ? "下载未完成，可继续下载" : present ? "模型需要修复，可重新下载" : "未下载 · 约 103 MB");
+          const auto mb = [](double bytes) { return QString::number(bytes / 1000000., 'f', 0) + " MB"; };
+          const auto size = mb(value.value("size").toDouble());
+          const auto installed = mb(value.value("model_bytes").toDouble());
+          const auto runtime = value.value("runtime_size").toDouble();
+          description_->setText(value.value("description").toString() + " 录音不上传，可在单机模式使用。");
+          downloadDetails_ = QString("模型下载约 %1，安装后约 %2。许可：%3。来源：%4。")
+              .arg(size, installed, value.value("license").toString(), value.value("source").toString());
+          if (runtime > 0)
+            downloadDetails_ += QString("首次另需下载约 %1 共享运行组件，其他可选模型会复用。").arg(mb(runtime));
+          status_->setText(!supported ? "当前平台或安装缺少离线组件，请检查安装" :
+                           ready_ ? "已下载 · 约 " + installed :
+                           resumable_ ? "下载未完成，可继续下载" : present ? "模型需要修复，可重新下载" : "未下载 · 约 " + size);
         });
     QObject::connect(probe_, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
       if (error == QProcess::FailedToStart) {
@@ -897,6 +938,7 @@ public:
       }
     });
   }
+  QComboBox *modelSelector() const { return models_; }
   void setLocal(bool value) {
     if (!value && operation_->state() != QProcess::NotRunning) stop();
     setVisible(value);
@@ -1426,12 +1468,18 @@ int main(int argc, char **argv) {
     voiceLocalModel->setLocal(index == 1);
     polishToggle->setEnabled(index == 0);
     polishToggle->setToolTip(index == 1 ? "智能整理需要联网，仅在原版在线识别时使用" : "");
-    const QStringList localFeatures{"语音实时转写到输入框，在本机完成识别", "单次最长十分钟，空格结束、回车确认", "支持中文、英文，录音不上传"};
+    const auto model = voiceLocalModel->modelSelector()->currentData().toString();
+    const bool streaming = model == "wetype" || model == "xasr";
+    const QStringList localFeatures{streaming ? "边说边出字，在本机完成识别" : "停顿后分段出字，在本机完成识别",
+                                   "单次最长十分钟，空格结束、回车确认", "语言范围见所选模型，录音不上传"};
     for (int i = 0; i < voiceFeatureLabels.size(); ++i)
       voiceFeatureLabels[i]->setText(index == 1 ? localFeatures[i] : voiceFeatures[i].second);
     if (voiceLanguageArrow) voiceLanguageArrow->setVisible(index == 0);
   };
   updateProvider(provider->currentIndex());
+  QObject::connect(voiceLocalModel->modelSelector(), qOverload<int>(&QComboBox::currentIndexChanged), [=] {
+    updateProvider(provider->currentIndex());
+  });
   QObject::connect(provider, qOverload<int>(&QComboBox::currentIndexChanged), [=](int index) {
     if (!writeSetting("voice_provider", index == 1 ? "local" : "original")) {
       QSignalBlocker block(provider); provider->setCurrentIndex(1 - index);

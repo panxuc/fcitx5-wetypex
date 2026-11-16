@@ -34,7 +34,7 @@ def main(arguments):
             source, destination = values
             if option == '--ro-bind-try' and not pathlib.Path(source).exists():
                 continue
-            if destination in ('/input', '/support', '/work', '/voice-vad', '/model'):
+            if destination in ('/input', '/support', '/work', '/voice-vad', '/model', '/asr-runtime'):
                 mounts[destination] = pathlib.Path(source).resolve(strict=True)
             elif source != destination or not (
                     destination in ('/usr', '/lib64', '/nix/store') or
@@ -58,8 +58,13 @@ def main(arguments):
             raise ValueError('unsupported engine sandbox option: ' + option)
 
     command = arguments[index:]
-    local_voice = command == ['/support/wetypex-local-voice', '--model', '/model']
+    sherpa_voice = (len(command) == 5 and command[:4] ==
+                    ['/support/wetypex-sherpa-voice', '--model', '/model', '/asr-runtime'] and
+                    command[4] in ('xasr', 'qwen3', 'firered', 'funasr'))
+    local_voice = sherpa_voice or command == ['/support/wetypex-local-voice', '--model', '/model']
     required = {'/model', '/support', '/work'} if local_voice else {'/input', '/support', '/work'}
+    if sherpa_voice:
+        required.add('/asr-runtime')
     if not required <= mounts.keys():
         raise ValueError('the runtime/model, support and workspace are required')
     if local_voice and not offline:
@@ -77,7 +82,8 @@ def main(arguments):
         return value
 
     if local_voice:
-        command = [translate(command[0]), '--model', translate(command[2])]
+        command = [translate(command[0]), '--model', translate(command[2])] + (
+            [translate(command[3]), command[4]] if sherpa_voice else [])
     else:
         command[:2] = [translate(value) for value in command[:2]]
     path_variables = {'HOME', 'WETYPE_SUPPORT_DIR', 'WETYPE_WORK_DIR',

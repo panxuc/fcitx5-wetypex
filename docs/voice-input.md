@@ -9,13 +9,25 @@ WeTypeX 边录音边识别。PipeWire 或 PulseAudio 采集 16 kHz、单声道�
 | 方式 | 行为 |
 | --- | --- |
 | 原版在线（默认） | 调用当前原版核心的 `voice_engine_*` 接口，保留原版 Opus、VAD、分包、重试、识别与智能整理；需要联网 |
-| 本地离线 | 按需下载腾讯官方离线模型，由原生 CPU 解码进程在本机识别；单机模式下也可使用 |
+| 本地离线 | 按需选择并下载模型，由原生 CPU 解码进程在本机识别；单机模式下也可使用 |
 
-选择本地离线后，点击“下载模型”并确认。下载约 103 MB，安装后约 130 MB；可取消、续传、校验和删除。下载失败保留可续传分片，校验、格式检查和实际加载全部成功后才替换当前模型，成功后清理压缩包和旧模型。模型不随软件包分发，也不计入原版核心的版本代。
+选择本地离线后，选择模型，再点击“下载模型”。已有腾讯模型继续使用原来的目录，无须重新下载。
+
+| 模型 | 出字方式 | 下载 / 安装后大小（约） |
+| --- | --- | --- |
+| 微信输入法官方模型（默认） | 边说边出字 | 103 / 136 MB |
+| X-ASR | 160 ms 流式模型，边说边出字 | 615 / 615 MB |
+| Qwen3-ASR 0.6B INT8 | 停顿后分段出字 | 879 / 987 MB |
+| FireRedASR2 CTC INT8 | 停顿后分段出字 | 521 / 776 MB |
+| Fun-ASR-Nano INT8 | 停顿后分段出字 | 842 / 1010 MB |
+
+X-ASR 及其后三个模型共用一份原生 sherpa-onnx / ONNX Runtime CPU 组件，首次额外下载约 26 MB（ARM64 约 29 MB），安装后约 32 / 40 MB。模型权重跨架构通用。没有 GPU、PyTorch 或 Python 包安装步骤。首次使用较大模型需要载入；后续会话复用已载入的模型，空闲两分钟后释放内存。
+
+下载可取消和续传，每个文件均校验固定 SHA-256；实际加载成功后才启用新模型。成功后清理压缩包和旧代文件。删除所选模型保留其他模型；最后一个可选模型删除时同时清理共享组件。模型不随软件包分发，也不计入原版核心的版本代。设置会显示当前模型的来源、许可和大小。
 
 离线进程使用独立网络命名空间，不调用原版联网语音宿主；模型缺失、损坏或处理失败会明确报错，不自动切换到在线识别。输入法的其他联网功能仍由“单机模式”等各自开关控制。智能整理只在原版在线识别时使用，切回在线后恢复原有设置。离线模型的语言覆盖、准确率、标点与在线引擎有所区别。
 
-离线识别采用原生 x86-64 / ARM64 解码器，不需要 QEMU、GPU、PyTorch 或 ONNX Runtime。x86 按 CPU 能力选择 AVX2/AVX-VNNI 或基础指令路径；ARM64 使用基础 NEON。模型首次使用时载入，空闲两分钟后释放。本地繁体输出通过 OpenCC 转换，发行包提供相应依赖；源码安装时需安装 `opencc`。
+腾讯模型使用自带的原生 x86-64 / ARM64 解码器，不需要 ONNX Runtime。x86 按 CPU 能力选择 AVX2/AVX-VNNI 或基础指令路径；ARM64 使用基础 NEON。可选模型使用按需下载的原生 CPU 组件；两种方式均不需要 QEMU。本地繁体输出通过 OpenCC 转换，发行包提供相应依赖；源码安装时需安装 `opencc`。
 
 升级后，空闲的旧版语音服务会自动退出并以新协议启动；正在进行的旧会话会提示先结束再重试。
 
@@ -24,13 +36,16 @@ WeTypeX 边录音边识别。PipeWire 或 PulseAudio 采集 16 kHz、单声道�
 命令行管理同一套模型：
 
 ```bash
+fcitx5-wetypex-voice model list
 fcitx5-wetypex-voice model status
 fcitx5-wetypex-voice model install --accept-upstream-license
 fcitx5-wetypex-voice model verify
 fcitx5-wetypex-voice model remove
+# 也可显式指定：wetype / xasr / qwen3 / firered / funasr
+fcitx5-wetypex-voice model install --model xasr --accept-upstream-license
 ```
 
-可用 `model install --archive /path/to/model.apk --accept-upstream-license` 导入相同的官方资源包。校验清单固定于 `data/local-voice-model.json`，模型更新随兼容性验证后的适配层更新提供。默认目录是 `~/.local/share/fcitx5-wetypex/voice/local/`，删除模型保留语音偏好和原版在线功能。正在进行离线录音或识别时拒绝替换、删除；空闲解码器会先释放模型。
+可用 `model install --archive /path/to/model.apk --accept-upstream-license` 导入相同的官方资源包。校验清单固定于 `data/local-voice-model.json`，模型更新随兼容性验证后的适配层更新提供。腾讯模型目录是 `~/.local/share/fcitx5-wetypex/voice/local/`，可选模型与共享组件在 `voice/sherpa/` 下，删除模型保留语音偏好和原版在线功能。正在进行离线录音或识别时拒绝替换、删除；空闲解码器会先释放模型。
 
 ## 使用
 
@@ -134,7 +149,7 @@ pw-record --rate 16000 --channels 1 --format s16 /tmp/wetypex-test.wav
 parec --file-format=wav --rate=16000 --channels=1 --format=s16le > /tmp/wetypex-test.wav
 ```
 
-转写已有音频文件（会连接原版语音服务）：
+用当前选择的识别方式转写已有音频文件：
 
 ```bash
 fcitx5-wetypex-voice transcribe /path/to/recording.wav
@@ -142,7 +157,7 @@ fcitx5-wetypex-voice transcribe /path/to/recording.wav
 
 加上 `--realtime --verbose` 可按音频实际时长送入并查看中间状态。`fcitx5-wetypex-account voice-file recording.opus` 使用同一引擎。
 
-文件转写遵循当前选择的识别方式；加上 `--traditional` 输出繁体。离线单次输入上限为十分钟，达到时自动结束并保留已识别结果，可再启动下一段。`WETYPE_LOCAL_VOICE_CPU=scalar` 可用于排查旧 x86 CPU 的兼容性，通常保持自动选择即可。
+文件转写遵循当前选择的识别方式；加上 `--traditional` 输出繁体。离线单次输入上限为十分钟，达到时自动结束并保留已识别结果，可再启动下一段。腾讯模型的 `WETYPE_LOCAL_VOICE_CPU=scalar` 可用于排查旧 x86 CPU 的兼容性，通常保持自动选择即可。
 
 文件超过上限时结果包含 `truncated: true`、`limit_reached: true` 与 `reason: duration_limit`，同时向标准错误输出提示；需要完整转写时请先分段。
 

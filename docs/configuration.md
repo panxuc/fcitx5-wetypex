@@ -64,7 +64,8 @@ VS Code、Code OSS、VSCodium 和应用明确标记为“禁止拼写检查”�
 | --- | --- |
 | 麦克风 | “自动检测”使用当前默认输入源，也可指定 PipeWire 节点或 PulseAudio 音源。 |
 | 标点设置 | 智能标点、添加完整标点、句末不加句号、空格替换标点，字段 `voice_punctuation`。 |
-| 识别方式 | `voice_provider`：`original`（默认，原版在线）或 `local`（本地离线，需下载官方模型）。见[模型管理](voice-input.md#选择识别方式)。 |
+| 识别方式 | `voice_provider`：`original`（默认，原版在线）或 `local`（本地离线，需下载所选模型）。见[模型管理](voice-input.md#选择识别方式)。 |
+| 本地语音模型 | `local_voice_model`：`wetype`（默认腾讯）、`xasr`、`qwen3`、`firered` 或 `funasr`。切换不删除已下载模型，在线识别不受此选项影响。 |
 | 语音智能整理 | 仅在线模式交给原版引擎的 aggressive polish，字段 `voice_smart_polish`；本地模式保留偏好并禁用该控件。 |
 | 识别后复制到剪贴板 | 默认开启，字段 `voice_copy_to_clipboard`。仅复制当前聚焦会话确认接收的最终结果，详见[流式语音输入](voice-input.md#提交与剪贴板)。 |
 | 快捷键 | 启动语音 `voice_launch_key`，按住说话 `voice_hold_key`，默认值见下表。 |

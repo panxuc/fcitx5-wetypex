@@ -96,6 +96,7 @@ FCITX_CONFIGURATION(
 
 FCITX_CONFIGURATION(
     VoiceConfig, Option<VoiceProviderMode> provider{this, "Provider", "识别方式", VoiceProviderMode::Original};
+    Option<std::string> localModel{this, "LocalModel", "本地语音模型", "wetype"};
     Option<bool> launchShortcut{this, "LaunchShortcut",
                                              "启动语音输入快捷键", true};
     KeyListOption launchKey{
