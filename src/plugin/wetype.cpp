@@ -540,9 +540,9 @@ class WeType : public InputMethodEngineV2 {
     const auto viewHash = std::hash<std::string>{}(view.text());
     flushTextBatch(ic);
     clearSpacing(s);
-    // Wayland virtual keyboards inherit physical modifiers even
-    // when forwardKey requests none. Wait for their real release rather
-    // than sending Shift+Left and selecting the closing bracket.
+    // Order native cursor events after the client applies the insertion.
+    // Virtual-keyboard protocols also need the physical modifiers released;
+    // Wayland v1 keysym events carry their own modifier mask.
     if (virtualKeyboardCursor(ic) || legacyClientKeys(ic)) {
       s->pendingClientKey = false;
       s->clientExpected.clear();
@@ -738,7 +738,11 @@ class WeType : public InputMethodEngineV2 {
       replayDeferredKeys(ic, std::move(keys), true);
       return s->pendingCursorSteps || s->pendingClientKey;
     }
-    if (modifiersHeld(instance_, ic, s))
+    // V1 forwards a keysym with an explicit empty modifier mask. Waiting
+    // for Shift here stalls paired quotes and every later key until release.
+    // V2 and IBus use virtual keyboards that inherit the physical mask.
+    if (std::string_view(ic->frontend()) != "wayland" &&
+        modifiersHeld(instance_, ic, s))
       return true;
     if (!s->cursorDeadline)
       s->cursorDeadline = time + 250000;
