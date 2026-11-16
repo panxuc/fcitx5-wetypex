@@ -1104,6 +1104,7 @@ int main(int argc, char **argv) {
     QCheckBox::indicator:checked { background:#23c891; border:1px solid #23c891; border-radius:3px; }
     QCheckBox::indicator:unchecked { background:white; border:1px solid #cfd1d2; border-radius:3px; }
     QComboBox,QSpinBox { min-height:25px; padding:0 8px; border:0; background:transparent; color:#777; }
+    QComboBox QAbstractItemView { background:#fff; color:#202124; }
     QPushButton { min-height:26px; padding:0 14px; background:white; border:1px solid #d9d9d9; border-radius:4px; }
     QPushButton:hover { border-color:#23c891; }
     QPushButton#greenButton { color:white; background:#23c891; border-color:#23c891; min-height:28px; }
