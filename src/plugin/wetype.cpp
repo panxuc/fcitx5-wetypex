@@ -1167,6 +1167,15 @@ class WeType : public InputMethodEngineV2 {
     return output;
   }
   void trackPassedKey(InputContext *ic, State *s, const KeyEvent &event) {
+    // Remember only physical presses that Wayland v2 will pass to the
+    // client. Buffered presses are committed as text and own no held key.
+    if (waylandV2(ic) && !replayingKeys_ && !event.isRelease() &&
+        !event.key().isModifier() && !event.filtered() && !event.accepted() &&
+        std::none_of(s->forwardedKeys.begin(), s->forwardedKeys.end(),
+                     [&](const Key &key) {
+                       return samePhysicalKey(key, event.rawKey());
+                     }))
+      s->forwardedKeys.push_back(event.rawKey());
     const auto modifiers = event.key().states().toInteger() &
                            uint32_t(KeyState::SimpleMask) &
                            ~uint32_t(KeyState::Shift);
@@ -4098,8 +4107,16 @@ public:
         s->physicalModifiers &= ~Key::keySymToStates(sym).toInteger();
       if (s->pressedShifts)
         s->physicalModifiers |= uint32_t(KeyState::Shift);
-      if (e.isRelease())
+      if (e.isRelease() && !waylandV2(ic))
         releaseForwardedKey(ic, s, e.rawKey());
+    }
+    // A passed press belongs to the client even if an IM transaction has
+    // started since. Release it immediately instead of buffering/dropping
+    // its up event and leaving the client's repeat timer running.
+    if (!replayingKeys_ && waylandV2(ic) && e.isRelease() &&
+        releaseForwardedKey(ic, s, e.rawKey())) {
+      e.filterAndAccept();
+      return;
     }
     if (!replayingKeys_) {
       if (key.isModifier()) {
