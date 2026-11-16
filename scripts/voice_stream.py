@@ -39,7 +39,7 @@ def code_revision():
         return configured
     # Source-tree CLI usage has no generated wrapper.
     root = Path(__file__).resolve().parent.parent
-    files = [root / name for name in ('scripts/voice_stream.py', 'scripts/local_voice.py', 'data/local-voice-model.json')]
+    files = [root / name for name in ('scripts/voice_stream.py', 'scripts/local_voice.py', 'scripts/optional_voice.py', 'data/local-voice-model.json', 'data/optional-voice-models.json', 'src/sherpavoice/main.cpp', 'src/sherpavoice/c-api.h')]
     files += sorted((root / 'src/localvoice').glob('*.rs'))
     if not all(path.is_file() for path in files):
         files = [Path(__file__).resolve()]
@@ -390,18 +390,25 @@ class Backend:
 
 
 class LocalBackend(Backend):
-    def __init__(self, owner):
+    def __init__(self, owner, model):
         import local_voice
         self.owner, self.provider = owner, 'local'
-        local_voice.ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.runtime_lease = (local_voice.ROOT / 'use.lock').open('a+')
+        self.model = model
+        if model == 'wetype':
+            root = local_voice.ROOT
+        else:
+            import optional_voice
+            optional_voice.profile(model)
+            root = optional_voice.ROOT
+        root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.runtime_lease = (root / 'use.lock').open('a+')
         try:
             try:
                 fcntl.flock(self.runtime_lease, fcntl.LOCK_SH | fcntl.LOCK_NB)
             except BlockingIOError as error:
                 raise RuntimeError('离线模型正在更新，请稍后重试') from error
-            self.model_path = local_voice.require_model(full=True)
-            binary = SUPPORT / 'wetypex-local-voice'
+            self.model_path, runtime_path = local_voice.resolve_model(model, full=True)
+            binary = SUPPORT / ('wetypex-local-voice' if model == 'wetype' else 'wetypex-sherpa-voice')
             wrapper = shutil.which(os.environ.get('WETYPE_SANDBOX') or 'bwrap')
             if not wrapper or not os.access(binary, os.X_OK):
                 raise RuntimeError('当前安装缺少离线语音组件或 Bubblewrap，请更新 WeTypeX')
@@ -412,11 +419,15 @@ class LocalBackend(Backend):
                        '--proc', '/proc', '--dev', '/dev', '--tmpfs', '/tmp',
                        '--ro-bind', str(self.model_path), '/model',
                        '--ro-bind', str(SUPPORT), '/support']
+            if runtime_path:
+                command += ['--ro-bind', str(runtime_path), '/asr-runtime']
             workspace = VOICE / 'local-work'
             workspace.mkdir(mode=0o700, parents=True, exist_ok=True)
             command += ['--bind', str(workspace), '/work', '--chdir', '/work',
                        '--setenv', 'WETYPE_LOCAL_VOICE_CPU', os.environ.get('WETYPE_LOCAL_VOICE_CPU', 'auto'),
-                       '/support/wetypex-local-voice', '--model', '/model']
+                       '/support/' + binary.name, '--model', '/model']
+            if runtime_path:
+                command += ['/asr-runtime', model]
             self.ready = threading.Event()
             self.write_lock = threading.Lock()
             self.vad, self.broken = False, False
@@ -435,7 +446,7 @@ class LocalBackend(Backend):
         data = bytes.fromhex(message['data']) if op == 'pcm' else message.get('token', '').encode()
         with self.write_lock:
             payload = memoryview(code + struct.pack('<I', len(data)) + data)
-            deadline = time.monotonic() + 10
+            deadline = time.monotonic() + (10 if self.model == 'wetype' else 120)
             try:
                 while payload:
                     remaining = deadline - time.monotonic()
@@ -469,6 +480,7 @@ class Job:
         self.provider = self.config.get('voice_provider', 'original')
         if request.get('provider') == 'local':
             self.provider = 'local'
+        self.local_model = request.get('model', self.config.get('local_voice_model', 'wetype'))
         self.capture = None
         self.capture_backend = ''
         self.reader = None
@@ -491,7 +503,7 @@ class Job:
         self.stopped_at = None
         self.timing = {}
         self.last_level = 0
-        self.chunks = queue.Queue(maxsize=500)
+        self.chunks = queue.Queue(maxsize=6000 if self.provider == 'local' and self.local_model != 'wetype' else 500)
 
     def stop_capture(self):
         if self.stopped_at is None:
@@ -596,7 +608,7 @@ class Job:
                 raise RuntimeError('语音识别方式无效，请在设置中重新选择')
             if self.provider == 'local':
                 import local_voice
-                local_voice.require_model()
+                local_voice.resolve_model(self.local_model)
                 if self.request.get('traditional'):
                     self.converter = opencc_command()
                     if not self.converter:
@@ -622,7 +634,7 @@ class Job:
             self.reader = threading.Thread(target=self.capture_audio, daemon=True)
             self.reader.start()
             self.backend = self.owner.get_backend(self)
-            if not self.backend or not self.backend.ready.wait(20):
+            if not self.backend or not self.backend.ready.wait(120 if self.provider == 'local' and self.local_model != 'wetype' else 20):
                 raise RuntimeError('连接语音服务超时')
             self.timing['backend_ready_ms'] = round((time.monotonic() - self.since) * 1000)
             if self.backend.broken or self.backend.process.poll() is not None:
@@ -650,7 +662,7 @@ class Job:
             self.stop_sent = True
             self.owner.publish(self, 'recognizing', self.text)
             self.owner.send(self, {'op': 'finish' if self.immediate else 'stop'})
-            if not self.done.wait(45):
+            if not self.done.wait(120 if self.provider == 'local' and self.local_model != 'wetype' else 45):
                 raise RuntimeError('语音识别超时')
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             self.owner.fail(self, str(error))
@@ -738,12 +750,13 @@ class Service:
             identity = read_json(ACCOUNT / 'identity.json') if job.provider == 'original' else {}
             signature = (identity.get('uin'), identity.get('device_code'))
             changed = self.backend and (self.backend.provider != job.provider or
-                      (job.provider == 'original' and signature != self.backend.identity))
+                      (job.provider == 'original' and signature != self.backend.identity) or
+                      (job.provider == 'local' and self.backend.model != job.local_model))
             if self.backend and (self.backend.broken or self.backend.process.poll() is not None or changed):
                 self.backend.close()
                 self.backend = None
             if self.backend is None:
-                self.backend = LocalBackend(self) if job.provider == 'local' else Backend(self)
+                self.backend = LocalBackend(self, job.local_model) if job.provider == 'local' else Backend(self)
             return self.backend
 
     def trim_backend(self):
@@ -1100,8 +1113,11 @@ def main():
     parser.add_argument('--verbose', action='store_true')
     parser.add_argument('--traditional', action='store_true')
     parser.add_argument('--archive')
+    parser.add_argument('--model', help='local voice model ID (see model list)')
     parser.add_argument('--accept-upstream-license', action='store_true')
     options = parser.parse_args()
+    if options.model and options.command not in ('model', 'transcribe'):
+        parser.error('--model is supported by model and transcribe')
     if options.command == 'model':
         import local_voice
         if options.args and options.args[0] in ('install', 'remove'):
@@ -1121,7 +1137,7 @@ def main():
                 pass
             finally:
                 connection.close()
-        result = local_voice.command(options.args, options.archive, options.accept_upstream_license)
+        result = local_voice.command(options.args, options.archive, options.accept_upstream_license, options.model)
         print(json.dumps(result, ensure_ascii=False))
         return 0
     if options.command == 'serve':
@@ -1146,6 +1162,8 @@ def main():
                        pid=os.getpid(), realtime=options.realtime, traditional=options.traditional)
     elif options.args:
         request['token'] = options.args[0]
+    if options.model and options.command == 'transcribe':
+        request.update(provider='local', model=options.model)
     try:
         connection = connect(options.command in ('stop', 'finish', 'cancel', 'shutdown', 'quiesce'),
                              options.command in ('start', 'transcribe'))

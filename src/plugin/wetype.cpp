@@ -861,6 +861,7 @@ class WeType : public InputMethodEngineV2 {
     input->chinesePunctuation.setValue(*before.input->chinesePunctuation);
     input->rememberPunctuation.setValue(*before.input->rememberPunctuation);
     comparable.voice.mutableValue()->provider.setValue(*before.voice->provider);
+    comparable.voice.mutableValue()->localModel.setValue(*before.voice->localModel);
     return comparable == before;
   }
   void refreshPresentation() {
@@ -1549,6 +1550,7 @@ class WeType : public InputMethodEngineV2 {
     voice->launchKey.setValue(voiceKeys("voice_launch_key", "Control+Super+Shift_L"));
     voice->holdKey.setValue(voiceKeys("voice_hold_key", "Control+Super_L"));
     voice->provider.setValue(wire::str(j.get(), "voice_provider") == "local" ? wetype_config::VoiceProviderMode::Local : wetype_config::VoiceProviderMode::Original);
+    voice->localModel.setValue(wire::str(j.get(), "local_voice_model", "wetype"));
     voice->microphone.setValue(stringSetting("voice_microphone", "自动检测"));
     const auto voicePunctuation =
         stringSetting("voice_punctuation", "智能标点");
@@ -1604,7 +1606,7 @@ class WeType : public InputMethodEngineV2 {
     for (const char *key : {"page_size", "vertical", "preedit_position",
                             "candidate_label_style", "candidate_size",
                             "theme_mode", "chinese_punctuation",
-                            "remember_punctuation", "voice_provider"})
+                            "remember_punctuation", "voice_provider", "local_voice_model"})
       if (j && json_object_is_type(j.get(), json_type_object))
         json_object_object_del(j.get(), key);
     engineSettings_ = std::move(j);
@@ -1698,6 +1700,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "device_phrase_sync", bool(*devices.phraseSync));
     const auto &voice = *config_.voice;
     wire::put(json.get(), "voice_provider", std::string(*voice.provider == wetype_config::VoiceProviderMode::Local ? "local" : "original"));
+    wire::put(json.get(), "local_voice_model", *voice.localModel);
     wire::put(json.get(), "voice_launch_shortcut", bool(*voice.launchShortcut));
     wire::put(json.get(), "voice_hold_shortcut", bool(*voice.holdShortcut));
     wire::put(json.get(), "voice_smart_polish", bool(*voice.smartPolish));
@@ -3690,7 +3693,8 @@ public:
     const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
     saveNativeConfig();
     applyAppearance(themeChanged, sizeChanged);
-    if (*before.voice->provider != *config_.voice->provider)
+    if (*before.voice->provider != *config_.voice->provider ||
+        *before.voice->localModel != *config_.voice->localModel)
       cancelVoice();
     if (frontendOnly(before)) {
       refreshPresentation();
@@ -3721,7 +3725,8 @@ public:
     const auto before = config_;
     auto oldEngineSettings = std::move(engineSettings_);
     reloadSettings();
-    if (*before.voice->provider != *config_.voice->provider)
+    if (*before.voice->provider != *config_.voice->provider ||
+        *before.voice->localModel != *config_.voice->localModel)
       cancelVoice();
     if (frontendOnly(before) && oldEngineSettings && engineSettings_ &&
         json_object_equal(oldEngineSettings.get(), engineSettings_.get())) {

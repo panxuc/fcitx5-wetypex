@@ -1,6 +1,6 @@
 # Invalidate an idle resident controller when its implementation/model contract
 # changes, including upgrades that retain the same public protocol number.
-set(wetype_voice_sources scripts/voice_stream.py scripts/local_voice.py data/local-voice-model.json)
+set(wetype_voice_sources scripts/voice_stream.py scripts/local_voice.py scripts/optional_voice.py data/local-voice-model.json data/optional-voice-models.json src/sherpavoice/main.cpp src/sherpavoice/c-api.h)
 file(GLOB wetype_voice_rust RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src/localvoice/*.rs")
 list(SORT wetype_voice_rust)
 list(APPEND wetype_voice_sources ${wetype_voice_rust})

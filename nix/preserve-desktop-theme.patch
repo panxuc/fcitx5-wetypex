@@ -185,7 +185,8 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
 -    const bool sizeChanged = *config_.appearance->candidateSize != oldSize;
      saveNativeConfig();
 -    applyAppearance(themeChanged, sizeChanged);
-     if (*before.voice->provider != *config_.voice->provider)
+     if (*before.voice->provider != *config_.voice->provider ||
+         *before.voice->localModel != *config_.voice->localModel)
        cancelVoice();
      if (frontendOnly(before)) {
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp

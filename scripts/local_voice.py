@@ -204,10 +204,53 @@ def remove():
     return dict(ok=True, ready=False)
 
 
-def command(args, archive=None, accept=False):
+def selected_model():
+    config = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config')) / 'fcitx5/wetypex.json'
+    try:
+        value = json.loads(config.read_text())
+        return value.get('local_voice_model', 'wetype') if isinstance(value, dict) else 'wetype'
+    except (OSError, ValueError):
+        return 'wetype'
+
+
+def model_info():
+    return dict(id='wetype', name='微信输入法官方模型', description='原版腾讯模型，边说边出字。',
+                license='微信输入法相关协议', source='https://z.weixin.qq.com/',
+                size=PROFILE['size'], model_bytes=sum(f['size'] for f in PROFILE['files'].values()),
+                runtime_size=0, runtime_bytes=0)
+
+
+def resolve_model(model, full=False):
+    if model == 'wetype':
+        return require_model(full), None
+    import optional_voice
+    return optional_voice.require_model(model, full)
+
+
+def command(args, archive=None, accept=False, model=None):
     action = args[0] if args else 'status'
+    import optional_voice
+    if action == 'list':
+        return dict(ok=True, models=[model_info()] + [optional_voice.metadata(k) for k in optional_voice.CATALOG['models']])
+    model = model if model is not None else selected_model()
+    if model != 'wetype':
+        optional_voice.profile(model)
+        if action == 'status':
+            return optional_voice.status(model)
+        if action == 'remove':
+            return optional_voice.remove(model)
+        if action == 'verify':
+            with optional_voice.lock():
+                optional_voice.require_model(model, full=True)
+            return optional_voice.status(model)
+        if action != 'install':
+            raise ValueError('model: list, status, verify, install, remove')
+        def cancelled(_signum, _frame):
+            raise InterruptedError('已取消下载，可重新点击下载以继续')
+        signal.signal(signal.SIGTERM, cancelled)
+        return optional_voice.install(model, accept, archive)
     if action == 'status':
-        return status()
+        return dict(model_info(), **status())
     if action == 'remove':
         return remove()
     if action == 'verify':
