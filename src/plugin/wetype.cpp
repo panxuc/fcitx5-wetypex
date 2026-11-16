@@ -1058,12 +1058,13 @@ class WeType : public InputMethodEngineV2 {
     const auto *entry = punctuationEntry(ascii);
     if (!entry)
       return std::string(1, ascii);
-    const bool useEnglish =
-        asciiMode || englishPunctuation(s);
-    if (ascii == '/' && slashPunctuation_ && !useEnglish && !s->fullWidth)
-      return "、";
+    // Original CharMapHelper chooses full-width symbols by input language.
+    // The punctuation preference applies only in the default character form.
     if (s->fullWidth)
-      return useEnglish ? entry->englishFull : entry->full;
+      return asciiMode ? entry->englishFull : entry->full;
+    const bool useEnglish = asciiMode || englishPunctuation(s);
+    if (ascii == '/' && slashPunctuation_ && !useEnglish)
+      return "、";
     if (useEnglish)
       return entry->englishHalf;
     return entry->normal;
@@ -3977,7 +3978,7 @@ public:
     return std::string(s->english ? "英文" : "中文") +
            (s->traditional ? " · 繁体" : " · 简体") +
            (s->fullWidth ? " · 全角" : " · 半角") +
-           (s->english || englishPunctuation(s)
+           (s->english || (!s->fullWidth && englishPunctuation(s))
                 ? " · 英文标点" : " · 中文标点");
   }
   void modeChanged(InputContext *ic, State *s, bool notify = true) {
