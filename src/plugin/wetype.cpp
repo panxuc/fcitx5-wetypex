@@ -261,9 +261,7 @@ struct State : InputContextProperty {
   std::string pendingPairRight;
   uint8_t symbolAutoState = 0;
   bool validateNumericState = false;
-  std::string pendingNumericText, pendingNumericReplacement;
-  bool numericCommit = false;
-  uint64_t pendingNumericUntil = 0;
+  std::string numericPreview;
   bool doubleQuoteLeft = true, singleQuoteLeft = true;
   bool english = false, fullWidth = false, traditional = false,
        vMode = false, vCalculator = false;
@@ -282,7 +280,7 @@ struct State : InputContextProperty {
   bool cursorHadView = false;
   std::vector<DeferredKey> cursorKeys;
   std::vector<Key> forwardedKeys;
-  bool pendingClientKey = false, pendingNumericReplay = false;
+  bool pendingClientKey = false;
   std::string clientExpected;
   size_t clientTextHash = 0;
   unsigned clientCursor = 0, clientAnchor = 0;
@@ -378,9 +376,9 @@ class WeType : public InputMethodEngineV2 {
   pid_t child_ = -1;
   int read_ = -1, write_ = -1;
   std::unique_ptr<EventSourceIO> reader_, writer_;
-  std::unique_ptr<EventSourceTime> timer_, numericTimer_, cursorTimer_;
+  std::unique_ptr<EventSourceTime> timer_, cursorTimer_;
   std::unique_ptr<HandlerTableEntry<EventHandler>> languageModifierWatcher_;
-  std::unique_ptr<HandlerTableEntry<EventHandler>> numericWatcher_;
+  std::unique_ptr<HandlerTableEntry<EventHandler>> surroundingWatcher_;
   bool ready_ = false, failed_ = false, backendUpdates_ = false;
   uint64_t activity_ = 0;
   uint64_t restartAt_ = 0, restartBackoff_ = 250000;
@@ -491,7 +489,7 @@ class WeType : public InputMethodEngineV2 {
   }
   static void clearCursorMove(State *s) {
     s->pendingCursorSteps = 0;
-    s->pendingClientKey = s->pendingNumericReplay = false;
+    s->pendingClientKey = false;
     s->clientExpected.clear();
     s->clientCursorReplay = false;
     s->clientRequireChange = false;
@@ -518,7 +516,6 @@ class WeType : public InputMethodEngineV2 {
     flushTextBatch(ic);
     const auto &text = ic->surroundingText();
     s->pendingClientKey = true;
-    s->pendingNumericReplay = false;
     s->clientExpected = expected;
     s->clientCursorReplay = cursorReplay;
     s->clientRequireChange = requireChange;
@@ -665,7 +662,6 @@ class WeType : public InputMethodEngineV2 {
               state(target)->cursorKeys.push_back(key);
               continue;
             }
-            clearNumericCorrection(state(target));
             state(target)->symbolAutoState = !batch.text.empty() &&
                                                      batch.text.back() >= '0' &&
                                                      batch.text.back() <= '9'
@@ -997,42 +993,13 @@ class WeType : public InputMethodEngineV2 {
     }
     return true;
   }
-  // Confirm a committed suffix at the actual, unselected caret. Numeric
-  // replacement additionally requires its leading digit to be unchanged.
-  static bool previousTextIs(InputContext *ic, const std::string &expected,
-                             bool numeric = false) {
+  // Confirm a committed suffix at the actual, unselected caret.
+  static bool previousTextIs(InputContext *ic, const std::string &expected) {
     const auto context = symbolContext(ic);
-    if (!context.valid || !context.selected.empty())
-      return false;
-    const auto text = context.before;
-    return text.size() >= expected.size() &&
-           (!numeric || (text.size() > expected.size() &&
-                         text[text.size() - expected.size() - 1] >= '0' &&
-                         text[text.size() - expected.size() - 1] <= '9')) &&
-           text.compare(text.size() - expected.size(), expected.size(),
-                        expected) == 0;
-  }
-  static const char *numericPunctuation(char ascii) {
-    return ascii == ':' ? "：" : ascii == ',' ? "，" : "。";
-  }
-  static void clearNumericCorrection(State *s) {
-    s->pendingNumericText.clear();
-    s->pendingNumericReplacement.clear();
-    s->pendingNumericUntil = 0;
-    s->numericCommit = false;
-  }
-  static char numericReplacement(uint8_t state) {
-    return state == 1 ? ':' : state == 2 ? ',' : state == 4 ? '.' : 0;
-  }
-  static void appendNumericCorrection(State *s, const std::string &text) {
-    if (s->pendingNumericText.empty())
-      return;
-    if (s->pendingNumericText.size() + text.size() > 1024) {
-      clearNumericCorrection(s);
-      return;
-    }
-    s->pendingNumericText += text;
-    s->pendingNumericReplacement += text;
+    return context.valid && context.selected.empty() &&
+           context.before.size() >= expected.size() &&
+           context.before.compare(context.before.size() - expected.size(),
+                                  expected.size(), expected) == 0;
   }
   static bool numericKeyTransport(InputContext *ic) {
     // KeyEventOrderFix also appears in GTK clients such as Chromium, whose
@@ -1089,53 +1056,25 @@ class WeType : public InputMethodEngineV2 {
       }
     }
   }
-  void scheduleNumericCorrection() {
-    if (!numericTimer_)
+  void flushNumericPreview(InputContext *ic, State *s, bool commit = true) {
+    if (s->numericPreview.empty())
       return;
-    const auto wake = now(CLOCK_MONOTONIC) + 1;
-    if (!numericTimer_->isEnabled() || numericTimer_->time() > wake)
-      numericTimer_->setTime(wake);
-    numericTimer_->setEnabled(true);
-  }
-  void resolveNumericCorrection(InputContext *ic, State *s) {
-    if (s->pendingNumericText.empty()) {
-      if (s->pendingNumericReplay)
-        waitForClient(ic, s);
-      return;
-    }
-    if (!s->active || !ic->hasFocus() || !symbolAutoChange_ || s->english ||
-        englishPunctuation(s) || s->fullWidth ||
-        voicePending_ || s->vMode || s->vMenu != VMenu::None ||
-        !s->preedit.empty() ||
-        ic->capabilityFlags().test(CapabilityFlag::Password) ||
-        ic->capabilityFlags().test(CapabilityFlag::Sensitive) ||
-        now(CLOCK_MONOTONIC) > s->pendingNumericUntil) {
-      clearNumericCorrection(s);
-      if (s->pendingNumericReplay)
-        waitForClient(ic, s);
-      return;
-    }
-    const auto &expected = s->pendingNumericText;
-    if (!previousTextIs(ic, expected, true))
-      return;
-    const auto replacement = s->pendingNumericReplacement;
-    const int length = int(utf8::length(expected));
-    const bool commit = s->numericCommit;
-    clearNumericCorrection(s);
-    if (!commit && numericKeyTransport(ic)) {
-      for (int i = 0; i < length; ++i) {
-        ic->forwardKey(Key(FcitxKey_BackSpace));
-        ic->forwardKey(Key(FcitxKey_BackSpace), true);
-      }
-    } else {
-      ic->deleteSurroundingText(-length, length);
-    }
+    auto text = std::move(s->numericPreview);
+    s->numericPreview.clear();
+    s->symbolAutoState = 0;
+    ic->inputPanel().setClientPreedit(Text());
+    ic->updatePreedit();
     if (commit)
-      commitText(ic, replacement);
-    else
-      deliverNumericText(ic, state(ic), replacement);
-    if (s->pendingNumericReplay)
-      waitForClient(ic, s, replacement);
+      commitText(ic, text);
+  }
+  void finishNumericPreviews() {
+    for (const auto &[id, ref] : contexts_)
+      if (auto *ic = ref.get()) {
+        auto *s = ic->propertyFor(&factory_);
+        flushNumericPreview(ic, s, s->active && ic->hasFocus() &&
+            !ic->capabilityFlags().test(CapabilityFlag::Password) &&
+            !ic->capabilityFlags().test(CapabilityFlag::Sensitive));
+      }
   }
   std::string mappedSymbol(State *s, char ascii, bool asciiMode) const {
     const auto *entry = punctuationEntry(ascii);
@@ -1268,7 +1207,6 @@ class WeType : public InputMethodEngineV2 {
     if (!event.isRelease() && !event.key().isModifier() && !event.filtered() &&
         !event.accepted() && (modifiers || scalar < 0x20 || scalar == 0x7f)) {
       s->symbolAutoState = 0;
-      clearNumericCorrection(s);
     }
     if (!event.isRelease() && !event.key().isModifier() && !event.filtered() &&
         !event.accepted() && !replayingForwarded_ && legacyClientKeys(ic) &&
@@ -1347,7 +1285,6 @@ class WeType : public InputMethodEngineV2 {
         nextSurroundingTextIs(ic, s->pendingPairRight)) {
       forwardCursor(ic, s, 1, s->pendingPairRight);
       finishPair(s);
-      clearNumericCorrection(s);
       s->symbolAutoState = 0;
       return true;
     }
@@ -1358,8 +1295,7 @@ class WeType : public InputMethodEngineV2 {
     const bool autoChangeActive = symbolAutoChange_ && !asciiMode &&
                                   !englishPunctuation(s) &&
                                   !s->fullWidth;
-    const bool numeric = autoChangeActive &&
-                         (s->symbolAutoState || !s->pendingNumericText.empty());
+    const bool numeric = autoChangeActive && s->symbolAutoState;
     auto emit = [&](const std::string &value) {
       if (numeric || (!asciiMode && !s->fullWidth && numericKeyTransport(ic)))
         deliverNumericText(ic, s, value);
@@ -1370,16 +1306,30 @@ class WeType : public InputMethodEngineV2 {
       if (!value.empty())
         rememberSpacing(ic, s, lastScalar(value));
     };
-    // Without client text there is no safe suffix to replace later. Insert
-    // numeric separators as ASCII immediately, including the trailing dot.
+    // A client without native preedit cannot own a temporary separator.
+    // Keep the established literal ASCII fallback instead of rewriting text.
     const bool numericAscii =
         autoChangeActive && s->symbolAutoState == 3 &&
-        !ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
+        (!ic->capabilityFlags().test(CapabilityFlag::Preedit) ||
+         !ic->isPreeditEnabled()) &&
         (ascii == '.' || ascii == ',' || ascii == ':');
     std::string mapped = numericAscii ? std::string(1, ascii)
                                       : mappedSymbol(s, ascii, asciiMode);
-    if (autoChangeActive && !entry->pairType)
-      appendNumericCorrection(s, mapped);
+    if (autoChangeActive && s->symbolAutoState == 3 &&
+        ic->capabilityFlags().test(CapabilityFlag::Preedit) &&
+        ic->isPreeditEnabled() &&
+        (ascii == '.' || ascii == ',' || ascii == ':')) {
+      // Native preedit owns the tentative separator. The next key commits
+      // its final form once; no timer deletes previously committed text.
+      flushTextBatch(ic);
+      s->numericPreview = mapped;
+      Text preview(mapped);
+      preview.setCursor(mapped.size());
+      ic->inputPanel().setClientPreedit(preview);
+      ic->updatePreedit();
+      s->symbolAutoState = 0;
+      return true;
+    }
     auto [left, right] = splitPair(mapped);
     if (entry->pairType && !right.empty()) {
       if (asciiMode) {
@@ -1413,16 +1363,7 @@ class WeType : public InputMethodEngineV2 {
       emit(mapped);
     }
 
-    if (numericAscii)
-      s->symbolAutoState = 0;
-    else if (autoChangeActive && s->symbolAutoState == 3 && ascii == ':')
-      s->symbolAutoState = 1;
-    else if (autoChangeActive && s->symbolAutoState == 3 && ascii == ',')
-      s->symbolAutoState = 2;
-    else if (autoChangeActive && s->symbolAutoState == 3 && ascii == '.')
-      s->symbolAutoState = 4;
-    else
-      s->symbolAutoState = 0;
+    s->symbolAutoState = 0;
     return true;
   }
   static std::filesystem::path configPath() {
@@ -1467,7 +1408,6 @@ class WeType : public InputMethodEngineV2 {
         auto *s = ic->propertyFor(&factory_);
         s->englishPunctuation.reset();
         s->symbolAutoState = 0;
-        clearNumericCorrection(s);
         ic->updateUserInterface(UserInterfaceComponent::StatusArea);
       }
   }
@@ -1489,6 +1429,7 @@ class WeType : public InputMethodEngineV2 {
     return true;
   }
   void reloadSettings() {
+    finishNumericPreviews();
     std::ifstream f(configPath());
     std::string bytes(16385, '\0');
     f.read(bytes.data(), bytes.size());
@@ -2056,6 +1997,7 @@ class WeType : public InputMethodEngineV2 {
     if (voicePending_ || ic->capabilityFlags().test(CapabilityFlag::Password))
       return;
     auto *s = state(ic);
+    flushNumericPreview(ic, s);
     if (s->vMode || s->vMenu != VMenu::None)
       cancelVMode(ic, "voice input started");
     ++s->epoch;
@@ -2477,7 +2419,6 @@ class WeType : public InputMethodEngineV2 {
     s->preedit.clear();
     s->cursor = 0;
     s->symbolAutoState = 0;
-    clearNumericCorrection(s);
     clearDisplayState(s);
     ic->inputPanel().setCandidateList(nullptr);
     for (size_t i = 1; i < prefix.size(); ++i) {
@@ -2827,7 +2768,7 @@ class WeType : public InputMethodEngineV2 {
   void panel(InputContext *ic, State *s) {
     // The insertion must reach the client before its preedit is replaced.
     flushTextBatch(ic);
-    const bool inlinePreedit = inlinePreeditEnabled(ic);
+    const bool inlinePreedit = !s->numericPreview.empty() || inlinePreeditEnabled(ic);
     const bool englishPreedit = !s->englishWord.empty();
     if (englishPreedit)
       updateEnglishCandidates(ic, s);
@@ -2877,6 +2818,7 @@ class WeType : public InputMethodEngineV2 {
     ic->inputPanel().setAuxUp(aux);
     const std::string displayed =
         voice ? voiceText_
+        : !s->numericPreview.empty() ? s->numericPreview
         : englishPreedit ? s->englishWord
         : !s->displayPreedit.empty() ? s->displayPreedit
         : !s->vMode && *config_.input->mode == wetype_config::InputMode::Pinyin
@@ -2891,7 +2833,7 @@ class WeType : public InputMethodEngineV2 {
       text.append(displayed, voice ? TextFormatFlag::DontCommit
                                    : TextFormatFlag::NoFlag);
       text.setCursor(
-          voice || englishPreedit ? displayed.size()
+          voice || englishPreedit || !s->numericPreview.empty() ? displayed.size()
           : !s->displayPreedit.empty()
               ? std::min(s->displayCursor, displayed.size())
               : displayCursorForRaw(s->preedit, displayed, s->cursor));
@@ -2909,7 +2851,8 @@ class WeType : public InputMethodEngineV2 {
                         : "正在识别… Enter 立即上屏 · Esc 取消");
     else if (voiceSession_ == s->id && voiceStatusUntil_)
       status.append(voiceError_);
-    else if (!englishPreedit && !displayed.empty() && (failed_ || !ready_))
+    else if (!englishPreedit && s->numericPreview.empty() &&
+             !displayed.empty() && (failed_ || !ready_))
       status.append(failed_ ? "WeTypeX 核心正在恢复…" : "WeTypeX 核心启动中…");
     ic->inputPanel().setAuxDown(status);
     if (s->preedit.empty() && !englishPreedit && !s->vMode)
@@ -2953,12 +2896,13 @@ class WeType : public InputMethodEngineV2 {
       for (const auto &[id, ref] : contexts_)
         if (auto *ic = ref.get()) {
           const auto *s = ic->propertyFor(&factory_);
-          if (!s->preedit.empty() || !s->englishWord.empty() || s->vMode ||
+          if (!s->preedit.empty() || !s->englishWord.empty() ||
+              !s->numericPreview.empty() || s->vMode ||
               s->vMenu != VMenu::None ||
               s->seq != s->applied || s->selectionPending ||
               !s->deferredKeys.empty() || !s->cursorKeys.empty() ||
-              s->pendingCursorSteps || s->pendingClientKey || s->pendingNumericReplay ||
-              !s->forwardedKeys.empty() || !s->pendingNumericText.empty() ||
+              s->pendingCursorSteps || s->pendingClientKey ||
+              !s->forwardedKeys.empty() ||
               modifiersHeld(instance_, ic, s, true))
             return false;
         }
@@ -3133,7 +3077,6 @@ class WeType : public InputMethodEngineV2 {
         s->appliedUpdate = 0;
         s->initialPanelDeadline = 0;
         s->initialPanelShown = false;
-        clearNumericCorrection(s);
         s->selectionPending = false;
         s->deferredKeys.clear();
         s->modifierCandidate = Key();
@@ -3651,37 +3594,15 @@ public:
             key.filterAndAccept();
           }
         });
-    numericWatcher_ = instance_->watchEvent(
+    surroundingWatcher_ = instance_->watchEvent(
         EventType::InputContextSurroundingTextUpdated, EventWatcherPhase::Default,
         [this](Event &event) {
           auto *ic = static_cast<InputContextEvent &>(event).inputContext();
           const auto *entry = instance_->inputMethodEntry(ic);
           if (entry && entry->uniqueName() == "wetypex" &&
-              !state(ic)->pendingNumericText.empty())
-            scheduleNumericCorrection();
-          if (entry && entry->uniqueName() == "wetypex" &&
               state(ic)->pendingClientKey)
             scheduleCursorMove();
         });
-    // Old Fcitx emits deletes immediately but queues key-event commits.
-    // Correct text outside that key transaction and retry while the client
-    // acknowledges its recently inserted numeric text.
-    numericTimer_ = instance_->eventLoop().addTimeEvent(
-        CLOCK_MONOTONIC, now(CLOCK_MONOTONIC), 1000,
-        [this](auto *source, uint64_t) {
-          bool retry = false;
-          for (auto &[id, ref] : contexts_)
-            if (auto *ic = ref.get()) {
-              auto *s = ic->propertyFor(&factory_);
-              resolveNumericCorrection(ic, s);
-              retry |= !s->pendingNumericText.empty();
-            }
-          if (retry)
-            source->setTime(now(CLOCK_MONOTONIC) + 2000);
-          source->setEnabled(retry);
-          return true;
-        });
-    numericTimer_->setEnabled(false);
     cursorTimer_ = instance_->eventLoop().addTimeEvent(
         CLOCK_MONOTONIC, now(CLOCK_MONOTONIC), 1000,
         [this](auto *source, uint64_t time) {
@@ -3781,6 +3702,7 @@ public:
     return &config_;
   }
   void setConfig(const RawConfig &raw) override {
+    finishNumericPreviews();
     const auto before = config_;
     const auto oldTheme = *config_.appearance->theme;
     const auto oldSize = *config_.appearance->candidateSize;
@@ -3851,8 +3773,7 @@ public:
         releaseForwardedKeys(ic, ic->propertyFor(&factory_));
     cancelVoice();
     languageModifierWatcher_.reset();
-    numericWatcher_.reset();
-    numericTimer_.reset();
+    surroundingWatcher_.reset();
     cursorTimer_.reset();
     timer_.reset();
     stop();
@@ -3905,18 +3826,13 @@ public:
         !ic->capabilityFlags().test(CapabilityFlag::Password) &&
         !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
         s->preedit.empty() && s->englishWord.empty() && !s->selectionPending;
-    // GTK clients may reset after an ordinary commit or forwarded digit.
-    // Keep only the bounded edit acknowledgement, not a composition. Its
-    // timer still requires the actual numeric suffix before replacing text.
-    const bool numericPending = editing && !s->pendingNumericText.empty() &&
-                                time <= s->pendingNumericUntil;
     const bool clientPending = editing && s->pendingClientKey && s->clientHadText &&
         ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
         time < s->cursorReplayAt &&
-        (numericPending || !s->clientExpected.empty() || s->symbolAutoState);
+        (!s->clientExpected.empty() || s->symbolAutoState);
     const auto numericState = editing ? s->symbolAutoState : 0;
     releaseForwardedKeys(ic, s);
-    if (!numericPending && !clientPending)
+    if (!clientPending)
       clearCursorMove(s);
     else if (clientPending) {
       s->clientResetPending = true;
@@ -3937,8 +3853,7 @@ public:
     ++s->epoch;
     s->initialPanelDeadline = 0;
     s->initialPanelShown = false;
-    if (!numericPending)
-      clearNumericCorrection(s);
+    s->numericPreview.clear();
     s->preedit.clear();
     s->englishWord.clear();
     s->englishCandidateCursor = 0;
@@ -3965,6 +3880,8 @@ public:
     auto *ic = e.inputContext();
     auto *s = state(ic);
     // Fcitx or the client commits inline preedit when focus leaves.
+    if (e.type() != EventType::InputContextFocusOut)
+      flushNumericPreview(ic, s);
     if (englishCompletionField(ic) &&
         (e.type() != EventType::InputContextFocusOut || !inlinePreeditEnabled(ic)))
       commitEnglishWord(ic, s);
@@ -4095,6 +4012,7 @@ public:
       showModeInfo(instance_, ic, modeDescription(s));
   }
   void switchLanguage(InputContext *ic, State *s) {
+    flushNumericPreview(ic, s);
     if (s->vMode)
       cancelVMode(ic);
     commitEnglishWord(ic, s);
@@ -4121,7 +4039,6 @@ public:
     }
     s->english = !s->english;
     s->symbolAutoState = 0;
-    clearNumericCorrection(s);
     s->modifierCandidate = Key();
     ic->inputPanel().reset();
     panel(ic, s);
@@ -4275,19 +4192,37 @@ public:
         return;
       }
     }
-    const auto *numericBoundarySymbol =
-        sym >= 0x20 && sym <= 0x7e ? punctuationEntry(char(sym)) : nullptr;
-    const bool numericEdit =
-        !e.isRelease() &&
-        (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete ||
-         sym == FcitxKey_Left || sym == FcitxKey_Right ||
-         sym == FcitxKey_Home || sym == FcitxKey_End ||
-         sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R ||
-         sym == FcitxKey_Return || sym == FcitxKey_KP_Enter ||
-         sym == FcitxKey_Tab ||
-         (numericBoundarySymbol && numericBoundarySymbol->pairType) ||
-         (sym >= FcitxKey_a && sym <= FcitxKey_z) ||
-         (sym >= FcitxKey_A && sym <= FcitxKey_Z));
+    if (!s->numericPreview.empty() &&
+        (!symbolAutoChange_ || s->english || englishPunctuation(s) || s->fullWidth))
+      flushNumericPreview(ic, s);
+    if (!s->numericPreview.empty() && !e.isRelease() && !key.isModifier()) {
+      s->modifierCandidate = Key();
+      const auto commands = key.states().toInteger() &
+          uint32_t(KeyState::SimpleMask) & ~uint32_t(KeyState::Shift);
+      if (!commands && sym >= FcitxKey_0 && sym <= FcitxKey_9) {
+        const auto value = s->numericPreview == "。" ? "." :
+                           s->numericPreview == "，" ? "," : ":";
+        const auto text = std::string(value) + char(sym);
+        flushNumericPreview(ic, s, false);
+        commitText(ic, text);
+        s->symbolAutoState = 3;
+        e.filterAndAccept();
+        return;
+      }
+      if (!commands && sym == FcitxKey_BackSpace) {
+        flushNumericPreview(ic, s, false);
+        e.filterAndAccept();
+        return;
+      }
+      if (!commands && sym == FcitxKey_space) {
+        const auto value = s->numericPreview + " ";
+        flushNumericPreview(ic, s, false);
+        commitText(ic, value);
+        e.filterAndAccept();
+        return;
+      }
+      flushNumericPreview(ic, s);
+    }
     const auto scalar = Key::keySymToUnicode(sym);
     const auto commandState = key.states().toInteger() &
                               uint32_t(KeyState::SimpleMask) &
@@ -4314,15 +4249,10 @@ public:
                        return !key.release && c >= 0x20 && c != 0x7f &&
                               !key.key.isModifier();
                      });
-    if ((!nativeClientKey && s->pendingClientKey) || s->pendingNumericReplay ||
-        (!s->pendingNumericText.empty() && numericEdit)) {
+    if (!nativeClientKey && s->pendingClientKey) {
       if (!e.isRelease())
         s->modifierCandidate = Key();
       s->cursorKeys.push_back({e.rawKey(), e.isRelease(), e.time(), replayingForwarded_});
-      if (!s->pendingClientKey) {
-        s->pendingNumericReplay = true;
-        scheduleNumericCorrection();
-      }
       e.filterAndAccept();
       return;
     }
@@ -4362,18 +4292,6 @@ public:
         replayDeferredKeys(ic, std::move(keys), true);
       }
     }
-    if (!e.isRelease() && !s->pendingNumericText.empty()) {
-      const auto commands = key.states().toInteger() &
-                            uint32_t(KeyState::SimpleMask) &
-                            ~uint32_t(KeyState::Shift);
-      const bool numeric = sym >= FcitxKey_0 && sym <= FcitxKey_9;
-      const auto *symbol = sym >= 0x20 && sym <= 0x7e
-                               ? punctuationEntry(char(sym)) : nullptr;
-      const bool continuation = (symbol && !symbol->pairType) || sym == FcitxKey_space ||
-                                sym == FcitxKey_Shift_L || sym == FcitxKey_Shift_R;
-      if (commands || (!numeric && !continuation))
-        clearNumericCorrection(s);
-    }
     if (voiceAvailable() && e.rawKey().states().test(KeyState::Repeat) &&
         ((*config_.voice->launchShortcut &&
           key.checkKeyList(*config_.voice->launchKey)) ||
@@ -4392,7 +4310,6 @@ public:
     if (replayingForwarded_) {
       s->modifierCandidate = Key();
       s->symbolAutoState = 0;
-      clearNumericCorrection(s);
       clearSpacing(s);
       return;
     }
@@ -4521,7 +4438,6 @@ public:
       }
       s->englishPunctuation = !englishPunctuation(s);
       s->symbolAutoState = 0;
-      clearNumericCorrection(s);
       const bool saved = !*config_.input->rememberPunctuation ||
                          rememberPunctuation(!*s->englishPunctuation);
       modeChanged(ic, s, saved);
@@ -5017,7 +4933,6 @@ public:
       if (composing)
         send(ic, "punctuation", std::string(1, asciiChar), 0, -1, -1, literal);
       else {
-        appendNumericCorrection(s, literal);
         deliverNumericText(ic, s, literal);
       }
       e.filterAndAccept();
@@ -5030,91 +4945,23 @@ public:
     if (!composing && s->validateNumericState) {
       s->validateNumericState = false;
       const auto context = symbolContext(ic);
-      const auto replacement = numericReplacement(s->symbolAutoState);
-      const bool matches = context.valid && context.selected.empty() &&
-          (s->symbolAutoState == 3
-               ? !context.before.empty() && context.before.back() >= '0' &&
-                     context.before.back() <= '9'
-               : replacement && previousTextIs(ic, numericPunctuation(replacement), true));
-      if (!matches)
+      if (!context.valid || !context.selected.empty() ||
+          context.before.empty() || context.before.back() < '0' ||
+          context.before.back() > '9')
         s->symbolAutoState = 0;
     }
     const bool autoChangeActive = symbolAutoChange_ && !composing &&
                                   !englishPunctuation(s) &&
                                   !s->fullWidth;
-    if (autoChangeActive && sym == FcitxKey_space &&
-        (s->symbolAutoState || !s->pendingNumericText.empty())) {
-      appendNumericCorrection(s, " ");
+    if (autoChangeActive && sym == FcitxKey_space && s->symbolAutoState) {
       s->symbolAutoState = 0;
       deliverNumericText(ic, s, " ");
       e.filterAndAccept();
       return;
     }
     if (!composing && digit && autoChangeActive) {
-      const char replacement = numericReplacement(s->symbolAutoState);
-      bool correctedBatch = false;
-      if (replacement && textBatch_ && textBatch_->context.get() == ic) {
-        auto &text = textBatch_->text;
-        const std::string previous = numericPunctuation(replacement);
-        if (text.size() > previous.size() &&
-            text.compare(text.size() - previous.size(), previous.size(),
-                         previous) == 0 &&
-            text[text.size() - previous.size() - 1] >= '0' &&
-            text[text.size() - previous.size() - 1] <= '9') {
-          text.replace(text.size() - previous.size(), previous.size(), 1,
-                       replacement);
-          clearNumericCorrection(s);
-          correctedBatch = true;
-        }
-      }
-      if (!correctedBatch && !s->pendingNumericText.empty()) {
-        if (replacement) {
-          const std::string previous = numericPunctuation(replacement);
-          auto &text = s->pendingNumericReplacement;
-          if (text.size() >= previous.size() &&
-              text.compare(text.size() - previous.size(), previous.size(),
-                           previous) == 0)
-            text.replace(text.size() - previous.size(), previous.size(), 1,
-                         replacement);
-        }
-        appendNumericCorrection(s, std::string(1, asciiChar));
-      } else if (!correctedBatch && replacement) {
-        const char *previous = numericPunctuation(replacement);
-        if (previousTextIs(ic, previous, true)) {
-          // The client already confirms the separator before this digit.
-          // Replace it and insert the digit together, outside the key-event
-          // transaction. Firefox may not report the digit until another key.
-          s->pendingNumericText = previous;
-          s->pendingNumericReplacement = std::string(1, replacement) + asciiChar;
-          s->pendingNumericUntil = now(CLOCK_MONOTONIC) + 250000;
-          s->numericCommit = true;
-          s->pendingNumericReplay = true;
-          s->symbolAutoState = 3;
-          scheduleNumericCorrection();
-          e.filterAndAccept();
-          return;
-        }
-        // Wayland clients may acknowledge committed punctuation after the
-        // next digit. Observe that exact suffix without delaying any keys.
-        if ((ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
-             numericKeyTransport(ic)) &&
-            !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
-            // Qt temporarily invalidates its cache while forwarded keys are
-            // pending. The timer still requires the exact unselected suffix.
-            (!ic->surroundingText().isValid() ||
-             ic->surroundingText().cursor() ==
-                 ic->surroundingText().anchor())) {
-          s->pendingNumericText = std::string(previous) + asciiChar;
-          s->pendingNumericReplacement = std::string(1, replacement) + asciiChar;
-          s->pendingNumericUntil = now(CLOCK_MONOTONIC) + 250000;
-        }
-      }
       s->symbolAutoState = 3;
-      // Keep numeric separators on the client's ordered text path.
-      // Raw key forwarding can otherwise overtake a Wayland commit.
       deliverNumericText(ic, s, std::string(1, asciiChar));
-      if (!s->pendingNumericText.empty())
-        scheduleNumericCorrection();
       e.filterAndAccept();
       return;
     } else if (!composing && (!entry || !autoChangeActive)) {

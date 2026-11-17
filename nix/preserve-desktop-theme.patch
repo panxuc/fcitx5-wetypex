@@ -72,7 +72,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
  #include <unistd.h>
  #include <utility>
  #include <vector>
-@@ -856,8 +855,6 @@
+@@ -975,8 +974,6 @@
      appearance->vertical.setValue(*before.appearance->vertical);
      appearance->preeditPosition.setValue(*before.appearance->preeditPosition);
      appearance->labelStyle.setValue(*before.appearance->labelStyle);
@@ -81,7 +81,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      auto *input = comparable.input.mutableValue();
      input->chinesePunctuation.setValue(*before.input->chinesePunctuation);
      input->rememberPunctuation.setValue(*before.input->rememberPunctuation);
-@@ -1545,8 +1542,6 @@
+@@ -1702,8 +1699,6 @@
      phrases->clipboard.setValue(clipboardEnabled_);
      auto *appearance = config_.appearance.mutableValue();
      appearance->pageSize.setValue(pageSize_);
@@ -90,7 +90,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      appearance->vertical.setValue(vertical_);
      appearance->autoSpace.setValue(boolSetting("auto_space", false));
      appearance->autoSpaceEnglish.setValue(
-@@ -1560,8 +1555,6 @@
+@@ -1717,8 +1712,6 @@
          wire::str(j.get(), "candidate_label_style") == "fcitx"
              ? wetype_config::CandidateLabelStyle::Fcitx
              : wetype_config::CandidateLabelStyle::WeType);
@@ -99,7 +99,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      auto *devices = config_.devices.mutableValue();
      devices->clipboardSync.setValue(
          json_object_get_boolean(wire::get(j.get(), "device_clipboard_sync")));
-@@ -1716,7 +1709,6 @@
+@@ -1874,7 +1867,6 @@
      wire::put(json.get(), "fuzzy_eng_ong", bool(*input.fuzzyEngOng));
      const auto &appearance = *config_.appearance;
      wire::put(json.get(), "page_size", int64_t(*appearance.pageSize));
@@ -107,7 +107,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      wire::put(json.get(), "vertical", bool(*appearance.vertical));
      wire::put(json.get(), "auto_space", bool(*appearance.autoSpace));
      wire::put(json.get(), "auto_space_english",
-@@ -1732,7 +1724,6 @@
+@@ -1890,7 +1882,6 @@
                                    wetype_config::CandidateLabelStyle::Fcitx
                                ? "fcitx"
                                : "wetype"));
@@ -115,7 +115,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      wire::put(json.get(), "clipboard_enabled",
                bool(config_.phrases->clipboard.value()));
      const auto &devices = *config_.devices;
-@@ -1802,57 +1793,6 @@
+@@ -1961,57 +1952,6 @@
      wire::put(json.get(), "auto_update", bool(*config_.update->autoUpdate));
      storeSettings(json.get());
      reloadSettings();
@@ -173,9 +173,9 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
    }
    void applyDeviceFunctions() {
      std::ifstream input(stateDirectory() / "sync-state.json");
-@@ -3737,14 +3677,9 @@
-   }
+@@ -3885,14 +3825,9 @@
    void setConfig(const RawConfig &raw) override {
+     finishNumericPreviews();
      const auto before = config_;
 -    const auto oldTheme = *config_.appearance->theme;
 -    const auto oldSize = *config_.appearance->candidateSize;
@@ -188,7 +188,7 @@ diff --git a/src/plugin/wetype.cpp b/src/plugin/wetype.cpp
      if (*before.voice->provider != *config_.voice->provider ||
          *before.voice->localModel != *config_.voice->localModel)
        cancelVoice();
-     if (frontendOnly(before)) {
+
 diff --git a/src/settings/main.cpp b/src/settings/main.cpp
 --- a/src/settings/main.cpp
 +++ b/src/settings/main.cpp
