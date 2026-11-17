@@ -1019,7 +1019,7 @@ def serve():
                         if service.clipboard_owner and service.clipboard_owner.poll() is not None:
                             service.clipboard_owner = None
                         job = service.job
-                        if job and not job.done.is_set() and job.pid:
+                        if job and not job.done.is_set() and job.pid and job.session:
                             try:
                                 os.kill(job.pid, 0)
                             except ProcessLookupError:
