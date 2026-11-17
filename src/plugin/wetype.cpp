@@ -260,7 +260,9 @@ struct State : InputContextProperty {
   char pendingPairKey = 0;
   std::string pendingPairRight;
   uint8_t symbolAutoState = 0;
+  bool validateNumericState = false;
   std::string pendingNumericText, pendingNumericReplacement;
+  bool numericCommit = false;
   uint64_t pendingNumericUntil = 0;
   bool doubleQuoteLeft = true, singleQuoteLeft = true;
   bool english = false, fullWidth = false, traditional = false,
@@ -286,6 +288,7 @@ struct State : InputContextProperty {
   unsigned clientCursor = 0, clientAnchor = 0;
   bool clientHadText = false, clientCursorReplay = false;
   bool clientRequireChange = false;
+  bool clientResetPending = false;
   bool selectionPending = false;
   std::vector<DeferredKey> deferredKeys;
   VMenu vMenu = VMenu::None;
@@ -492,6 +495,7 @@ class WeType : public InputMethodEngineV2 {
     s->clientExpected.clear();
     s->clientCursorReplay = false;
     s->clientRequireChange = false;
+    s->clientResetPending = false;
     s->cursorDeadline = 0;
     s->cursorReplayAt = 0;
     s->cursorTarget = -1;
@@ -518,6 +522,7 @@ class WeType : public InputMethodEngineV2 {
     s->clientExpected = expected;
     s->clientCursorReplay = cursorReplay;
     s->clientRequireChange = requireChange;
+    s->clientResetPending = false;
     s->clientHadText =
         ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
         text.isValid();
@@ -725,6 +730,10 @@ class WeType : public InputMethodEngineV2 {
               : viewChanged;
       if (!acknowledged && time < s->cursorReplayAt)
         return true;
+      if (!acknowledged && s->clientResetPending) {
+        clearCursorMove(s);
+        return false;
+      }
       auto keys = std::move(s->cursorKeys);
       const auto cursorReplay = s->clientCursorReplay;
       clearCursorMove(s);
@@ -992,17 +1001,15 @@ class WeType : public InputMethodEngineV2 {
   // replacement additionally requires its leading digit to be unchanged.
   static bool previousTextIs(InputContext *ic, const std::string &expected,
                              bool numeric = false) {
-    const auto &surrounding = ic->surroundingText();
-    if (!surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
+    const auto context = symbolContext(ic);
+    if (!context.valid || !context.selected.empty())
       return false;
-    const auto &text = surrounding.text();
-    auto byte = utf8::ncharByteLength(text.begin(), surrounding.cursor());
-    return byte >= 0 && size_t(byte) <= text.size() &&
-           size_t(byte) >= expected.size() &&
-           (!numeric || (size_t(byte) > expected.size() &&
-                         text[size_t(byte) - expected.size() - 1] >= '0' &&
-                         text[size_t(byte) - expected.size() - 1] <= '9')) &&
-           text.compare(size_t(byte) - expected.size(), expected.size(),
+    const auto text = context.before;
+    return text.size() >= expected.size() &&
+           (!numeric || (text.size() > expected.size() &&
+                         text[text.size() - expected.size() - 1] >= '0' &&
+                         text[text.size() - expected.size() - 1] <= '9')) &&
+           text.compare(text.size() - expected.size(), expected.size(),
                         expected) == 0;
   }
   static const char *numericPunctuation(char ascii) {
@@ -1012,6 +1019,7 @@ class WeType : public InputMethodEngineV2 {
     s->pendingNumericText.clear();
     s->pendingNumericReplacement.clear();
     s->pendingNumericUntil = 0;
+    s->numericCommit = false;
   }
   static char numericReplacement(uint8_t state) {
     return state == 1 ? ':' : state == 2 ? ',' : state == 4 ? '.' : 0;
@@ -1039,7 +1047,7 @@ class WeType : public InputMethodEngineV2 {
     // Preserve the original native key and its layout/modifier state for
     // ASCII. A manufactured colon without Shift becomes a semicolon in GTK.
     const bool orderedAscii =
-        legacyClientKeys(ic) && currentKeyEvent_ &&
+        (legacyClientKeys(ic) || numericKeyTransport(ic)) && currentKeyEvent_ &&
         currentKeyEvent_->inputContext() == ic && text.size() == 1 &&
         static_cast<unsigned char>(text.front()) >= 0x20 &&
         static_cast<unsigned char>(text.front()) <= 0x7e &&
@@ -1112,8 +1120,9 @@ class WeType : public InputMethodEngineV2 {
       return;
     const auto replacement = s->pendingNumericReplacement;
     const int length = int(utf8::length(expected));
+    const bool commit = s->numericCommit;
     clearNumericCorrection(s);
-    if (numericKeyTransport(ic)) {
+    if (!commit && numericKeyTransport(ic)) {
       for (int i = 0; i < length; ++i) {
         ic->forwardKey(Key(FcitxKey_BackSpace));
         ic->forwardKey(Key(FcitxKey_BackSpace), true);
@@ -1121,7 +1130,10 @@ class WeType : public InputMethodEngineV2 {
     } else {
       ic->deleteSurroundingText(-length, length);
     }
-    deliverNumericText(ic, state(ic), replacement);
+    if (commit)
+      commitText(ic, replacement);
+    else
+      deliverNumericText(ic, state(ic), replacement);
     if (s->pendingNumericReplay)
       waitForClient(ic, s, replacement);
   }
@@ -1349,7 +1361,7 @@ class WeType : public InputMethodEngineV2 {
     const bool numeric = autoChangeActive &&
                          (s->symbolAutoState || !s->pendingNumericText.empty());
     auto emit = [&](const std::string &value) {
-      if (numeric)
+      if (numeric || (!asciiMode && !s->fullWidth && numericKeyTransport(ic)))
         deliverNumericText(ic, s, value);
       else
         commitText(ic, value);
@@ -3888,8 +3900,28 @@ public:
   void reset(const InputMethodEntry &, InputContextEvent &e) override {
     auto *ic = e.inputContext();
     auto *s = state(ic);
+    const auto time = now(CLOCK_MONOTONIC);
+    const bool editing = s->active && ic->hasFocus() &&
+        !ic->capabilityFlags().test(CapabilityFlag::Password) &&
+        !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
+        s->preedit.empty() && s->englishWord.empty() && !s->selectionPending;
+    // GTK clients may reset after an ordinary commit or forwarded digit.
+    // Keep only the bounded edit acknowledgement, not a composition. Its
+    // timer still requires the actual numeric suffix before replacing text.
+    const bool numericPending = editing && !s->pendingNumericText.empty() &&
+                                time <= s->pendingNumericUntil;
+    const bool clientPending = editing && s->pendingClientKey && s->clientHadText &&
+        ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
+        time < s->cursorReplayAt &&
+        (numericPending || !s->clientExpected.empty() || s->symbolAutoState);
+    const auto numericState = editing ? s->symbolAutoState : 0;
     releaseForwardedKeys(ic, s);
-    clearCursorMove(s);
+    if (!numericPending && !clientPending)
+      clearCursorMove(s);
+    else if (clientPending) {
+      s->clientResetPending = true;
+      s->clientRequireChange = true;
+    }
     s->physicalModifiers = s->pressedShifts = 0;
     s->heldModifierKeys.clear();
     if (voicePending_ && voiceSession_ == s->id)
@@ -3905,7 +3937,8 @@ public:
     ++s->epoch;
     s->initialPanelDeadline = 0;
     s->initialPanelShown = false;
-    clearNumericCorrection(s);
+    if (!numericPending)
+      clearNumericCorrection(s);
     s->preedit.clear();
     s->englishWord.clear();
     s->englishCandidateCursor = 0;
@@ -3913,7 +3946,8 @@ public:
     clearDisplayState(s);
     s->pendingPairKey = 0;
     s->pendingPairRight.clear();
-    s->symbolAutoState = 0;
+    s->symbolAutoState = numericState;
+    s->validateNumericState = numericState != 0;
     s->vMode = false;
     s->vCalculator = false;
     s->cloudPollUntil = 0;
@@ -4993,6 +5027,18 @@ public:
     // SymbolAutoChangedHelper in the desktop implementation delays numeric
     // punctuation correction. Numeric punctuation is displayed in
     // Chinese form first; only another digit changes it back to ASCII.
+    if (!composing && s->validateNumericState) {
+      s->validateNumericState = false;
+      const auto context = symbolContext(ic);
+      const auto replacement = numericReplacement(s->symbolAutoState);
+      const bool matches = context.valid && context.selected.empty() &&
+          (s->symbolAutoState == 3
+               ? !context.before.empty() && context.before.back() >= '0' &&
+                     context.before.back() <= '9'
+               : replacement && previousTextIs(ic, numericPunctuation(replacement), true));
+      if (!matches)
+        s->symbolAutoState = 0;
+    }
     const bool autoChangeActive = symbolAutoChange_ && !composing &&
                                   !englishPunctuation(s) &&
                                   !s->fullWidth;
@@ -5034,6 +5080,20 @@ public:
         appendNumericCorrection(s, std::string(1, asciiChar));
       } else if (!correctedBatch && replacement) {
         const char *previous = numericPunctuation(replacement);
+        if (previousTextIs(ic, previous, true)) {
+          // The client already confirms the separator before this digit.
+          // Replace it and insert the digit together, outside the key-event
+          // transaction. Firefox may not report the digit until another key.
+          s->pendingNumericText = previous;
+          s->pendingNumericReplacement = std::string(1, replacement) + asciiChar;
+          s->pendingNumericUntil = now(CLOCK_MONOTONIC) + 250000;
+          s->numericCommit = true;
+          s->pendingNumericReplay = true;
+          s->symbolAutoState = 3;
+          scheduleNumericCorrection();
+          e.filterAndAccept();
+          return;
+        }
         // Wayland clients may acknowledge committed punctuation after the
         // next digit. Observe that exact suffix without delaying any keys.
         if ((ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
@@ -5070,6 +5130,13 @@ public:
         (upper || digit || sym == FcitxKey_space)) {
       const uint32_t full = sym == FcitxKey_space ? 0x3000 : sym + 0xfee0;
       commitText(ic, utf8::UCS4ToUTF8(full));
+      e.filterAndAccept();
+      return;
+    }
+    if (!composing && digit && numericKeyTransport(ic)) {
+      // Use the same native event queue as Chinese punctuation even with
+      // auto-conversion disabled; an unhandled digit can overtake its commit.
+      deliverNumericText(ic, s, std::string(1, asciiChar));
       e.filterAndAccept();
       return;
     }
