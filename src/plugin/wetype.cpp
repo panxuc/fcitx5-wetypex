@@ -278,6 +278,8 @@ struct State : InputContextProperty {
   size_t cursorViewHash = 0;
   unsigned cursorViewCursor = 0, cursorViewAnchor = 0;
   bool cursorHadView = false;
+  bool cursorResetPending = false;
+  bool cursorMoveReset = false;
   std::vector<DeferredKey> cursorKeys;
   std::vector<Key> forwardedKeys;
   bool pendingClientKey = false;
@@ -372,6 +374,12 @@ class WeType : public InputMethodEngineV2 {
     std::string text;
   };
   TextBatch *textBatch_ = nullptr;
+  struct ReplayView {
+    InputContext *context = nullptr;
+    std::string text;
+    unsigned cursor = 0;
+  };
+  ReplayView *replayView_ = nullptr;
   std::map<uint64_t, TrackableObjectReference<InputContext>> contexts_;
   pid_t child_ = -1;
   int read_ = -1, write_ = -1;
@@ -500,6 +508,8 @@ class WeType : public InputMethodEngineV2 {
     s->cursorExpected.clear();
     s->cursorPrefix.clear();
     s->cursorHadView = false;
+    s->cursorResetPending = false;
+    s->cursorMoveReset = false;
     s->cursorKeys.clear();
   }
   void scheduleCursorMove() {
@@ -560,6 +570,7 @@ class WeType : public InputMethodEngineV2 {
       s->cursorDeadline = 0;
       s->cursorReplayAt = 0;
       s->cursorTarget = -1;
+      s->cursorResetPending = s->cursorMoveReset = false;
       scheduleCursorMove();
       return;
     }
@@ -578,8 +589,24 @@ class WeType : public InputMethodEngineV2 {
         ic->forwardKey(key, true);
     }
   }
+  void recordReplayCommit(InputContext *ic, const std::string &text) {
+    if (!replayView_ || replayView_->context != ic)
+      return;
+    auto &view = *replayView_;
+    const auto length = text.empty() ? 0 : utf8::lengthValidated(text);
+    if (length == utf8::INVALID_LENGTH) {
+      view.context = nullptr;
+      return;
+    }
+    const auto byte = view.cursor
+                          ? utf8::ncharByteLength(view.text.begin(), view.cursor)
+                          : 0;
+    view.text.insert(size_t(byte), text);
+    view.cursor += length;
+  }
   void commitText(InputContext *ic, const std::string &text) {
     if (!textBatch_ || textBatch_->context.get() != ic) {
+      recordReplayCommit(ic, text);
       ic->commitString(text);
       return;
     }
@@ -590,6 +617,7 @@ class WeType : public InputMethodEngineV2 {
           applyAutoSpace(value, textBatch_->text.empty() ? beforeWindow(ic, s)
                                                          : textBatch_->text);
     textBatch_->text += value;
+    recordReplayCommit(ic, value);
   }
   void flushTextBatch(InputContext *ic) {
     if (!textBatch_ || textBatch_->context.get() != ic ||
@@ -646,6 +674,13 @@ class WeType : public InputMethodEngineV2 {
           if (!key.release) {
             if (key.key.sym() == FcitxKey_BackSpace) {
               const auto length = utf8::length(batch.text);
+              if (replayView_ && replayView_->context == target && replayView_->cursor) {
+                auto &view = *replayView_;
+                const auto last = utf8::ncharByteLength(view.text.begin(), view.cursor);
+                const auto first = utf8::ncharByteLength(view.text.begin(), view.cursor - 1);
+                view.text.erase(size_t(first), size_t(last - first));
+                --view.cursor;
+              }
               batch.text.resize(
                   utf8::ncharByteLength(batch.text.begin(), length - 1));
             } else {
@@ -706,7 +741,8 @@ class WeType : public InputMethodEngineV2 {
     if (!s->pendingCursorSteps && !s->pendingClientKey)
       return false;
     if (!s->active || !ic->hasFocus() ||
-        ic->capabilityFlags().test(CapabilityFlag::Password)) {
+        ic->capabilityFlags().test(CapabilityFlag::Password) ||
+        ic->capabilityFlags().test(CapabilityFlag::Sensitive)) {
       releaseForwardedKeys(ic, s);
       clearCursorMove(s);
       return false;
@@ -737,13 +773,37 @@ class WeType : public InputMethodEngineV2 {
       return s->pendingCursorSteps || s->pendingClientKey;
     }
     if (s->cursorReplayAt) {
-      const bool acknowledged = s->cursorTarget >= 0 && surrounding.isValid() &&
-          surrounding.cursor() == surrounding.anchor() &&
+      const auto context = symbolContext(ic);
+      const bool sameText = s->cursorHadView &&
+          context.valid && context.selected.empty() &&
+          std::hash<std::string>{}(surrounding.text()) == s->cursorViewHash;
+      const bool acknowledged = sameText && s->cursorTarget >= 0 &&
           int64_t(surrounding.cursor()) == s->cursorTarget;
       if (!acknowledged && time < s->cursorReplayAt)
         return true;
+      if (!acknowledged && s->cursorHadView && !s->cursorMoveReset &&
+          time < s->cursorDeadline)
+        return true;
+      ReplayView moved;
+      if (acknowledged) {
+        moved = {ic, surrounding.text(), surrounding.cursor()};
+      } else if (s->cursorMoveReset && sameText && s->cursorTarget >= 0 &&
+          surrounding.cursor() == s->cursorViewCursor &&
+          uint64_t(s->cursorTarget) <= utf8::length(surrounding.text())) {
+        // Some GTK clients reset after our Left key, but only publish that
+        // new caret on the next physical key. Scope the confirmed text and
+        // our own ordered movement to this replay; never alter the client's
+        // surrounding-text cache or infer context for an opaque client.
+        moved = {ic, surrounding.text(), unsigned(s->cursorTarget)};
+      } else if (!acknowledged && s->cursorResetPending && s->cursorHadView) {
+        clearCursorMove(s);
+        return false;
+      }
       auto keys = std::move(s->cursorKeys);
       clearCursorMove(s);
+      ScopedRestore<ReplayView *> restoreView(replayView_);
+      if (moved.context)
+        replayView_ = &moved;
       replayDeferredKeys(ic, std::move(keys), true);
       return s->pendingCursorSteps || s->pendingClientKey;
     }
@@ -765,6 +825,7 @@ class WeType : public InputMethodEngineV2 {
         std::hash<std::string>{}(surrounding.text()) != s->cursorViewHash;
     const bool prefixApplied =
         !s->cursorHadView ||
+        !ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
         (surrounding.isValid() &&
          (s->cursorPrefix.empty() || previousTextIs(ic, s->cursorPrefix)) &&
          ((s->pendingCursorSteps >= 0 && s->cursorPrefix.empty()) ||
@@ -773,7 +834,9 @@ class WeType : public InputMethodEngineV2 {
       return true;
     // Terminals can support native input without exposing surrounding text.
     // With no text to compare, preserve the ordered cursor-key fallback.
-    const bool hasText = surrounding.isValid() && !surrounding.text().empty();
+    const bool hasText =
+        ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
+        surrounding.isValid() && !surrounding.text().empty();
     bool matches = prefixApplied &&
                    (!hasText || surrounding.cursor() == surrounding.anchor());
     if (matches && hasText) {
@@ -793,6 +856,11 @@ class WeType : public InputMethodEngineV2 {
     const int steps = s->pendingCursorSteps;
     // A click, selection or context change must not receive a late movement.
     if (matches) {
+      s->cursorHadView = hasText;
+      s->cursorViewHash = std::hash<std::string>{}(surrounding.text());
+      s->cursorViewCursor = surrounding.cursor();
+      s->cursorMoveReset = false;
+      s->cursorDeadline = time + 250000;
       emitCursor(ic, steps);
       // Cursor keys and IM commits use different Wayland protocols. Give
       // the client a turn to apply the key before replaying nested pairs or
@@ -802,8 +870,10 @@ class WeType : public InputMethodEngineV2 {
       return true;
     }
     auto keys = std::move(s->cursorKeys);
+    const bool reset = s->cursorResetPending;
     clearCursorMove(s);
-    replayDeferredKeys(ic, std::move(keys), true);
+    if (!reset)
+      replayDeferredKeys(ic, std::move(keys), true);
     return s->pendingCursorSteps || s->pendingClientKey;
   }
   void startSync() {
@@ -923,32 +993,31 @@ class WeType : public InputMethodEngineV2 {
   }
   bool nextSurroundingTextIs(InputContext *ic,
                              const std::string &expected) const {
-    const auto &surrounding = ic->surroundingText();
-    if (!ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
-        !surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
-      return false;
-    const auto &text = surrounding.text();
-    auto byte = utf8::ncharByteLength(text.begin(), surrounding.cursor());
-    return byte >= 0 && size_t(byte) <= text.size() &&
-           text.compare(size_t(byte), expected.size(), expected) == 0;
+    const auto context = symbolContext(ic);
+    return context.valid && context.selected.empty() &&
+           context.after.compare(0, expected.size(), expected) == 0;
   }
   struct SymbolContext {
     bool valid = false;
     std::string_view before, selected, after;
   };
-  static SymbolContext symbolContext(InputContext *ic) {
+  SymbolContext symbolContext(InputContext *ic) const {
     const auto &view = ic->surroundingText();
+    const bool replay = replayView_ && replayView_->context == ic;
     if (!ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
-        !view.isValid())
+        (!replay && !view.isValid()))
       return {};
-    const auto begin = std::min(view.cursor(), view.anchor());
-    const auto end = std::max(view.cursor(), view.anchor());
-    const auto length = view.text().empty() ? 0 : utf8::lengthValidated(view.text());
+    const auto cursor = replay ? replayView_->cursor : view.cursor();
+    const auto anchor = replay ? cursor : view.anchor();
+    const auto &value = replay ? replayView_->text : view.text();
+    const auto begin = std::min(cursor, anchor);
+    const auto end = std::max(cursor, anchor);
+    const auto length = value.empty() ? 0 : utf8::lengthValidated(value);
     if (length == utf8::INVALID_LENGTH || end > length)
       return {};
-    const auto first = begin ? utf8::ncharByteLength(view.text().begin(), begin) : 0;
-    const auto last = end ? utf8::ncharByteLength(view.text().begin(), end) : 0;
-    const std::string_view text(view.text());
+    const auto first = begin ? utf8::ncharByteLength(value.begin(), begin) : 0;
+    const auto last = end ? utf8::ncharByteLength(value.begin(), end) : 0;
+    const std::string_view text(value);
     return {true, text.substr(0, first), text.substr(first, last - first),
             text.substr(last)};
   }
@@ -994,7 +1063,7 @@ class WeType : public InputMethodEngineV2 {
     return true;
   }
   // Confirm a committed suffix at the actual, unselected caret.
-  static bool previousTextIs(InputContext *ic, const std::string &expected) {
+  bool previousTextIs(InputContext *ic, const std::string &expected) const {
     const auto context = symbolContext(ic);
     return context.valid && context.selected.empty() &&
            context.before.size() >= expected.size() &&
@@ -1237,6 +1306,16 @@ class WeType : public InputMethodEngineV2 {
                                    size_t cursor) {
     if (textBatch_ && textBatch_->context.get() == ic &&
         !textBatch_->text.empty()) {
+      if (replayView_ && replayView_->context == ic) {
+        auto &view = *replayView_;
+        const auto byte = utf8::ncharByteLength(view.text.begin(), view.cursor);
+        const auto &prefix = textBatch_->text;
+        if (size_t(byte) >= prefix.size() &&
+            view.text.compare(size_t(byte) - prefix.size(), prefix.size(), prefix) == 0) {
+          view.text.erase(size_t(byte) - prefix.size(), prefix.size());
+          view.cursor -= utf8::length(prefix);
+        }
+      }
       auto combined = std::move(textBatch_->text);
       textBatch_->text.clear();
       const auto position = utf8::length(combined) + cursor;
@@ -1250,6 +1329,9 @@ class WeType : public InputMethodEngineV2 {
     cursor = std::min(cursor, length);
     if constexpr (HasCursorCommit<Context, Flag>::value) {
       if (ic->capabilityFlags().test(Flag::CommitStringWithCursor)) {
+        recordReplayCommit(ic, text);
+        if (replayView_ && replayView_->context == ic)
+          replayView_->cursor -= length - cursor;
         ic->commitStringWithCursor(text, cursor);
         // The caret now sits inside the pair, so the character before it, not
         // the pair's last character, is what the next commit follows.
@@ -1261,6 +1343,7 @@ class WeType : public InputMethodEngineV2 {
     // XIM and some Wayland text-input clients cannot express a cursor inside
     // committed text. Commit the complete pair first, then reproduce the
     // original desktop behavior with ordinary cursor movement.
+    recordReplayCommit(ic, text);
     ic->commitString(text);
     forwardCursor(ic, state(ic), -int(length - cursor), text);
     rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
@@ -1354,7 +1437,8 @@ class WeType : public InputMethodEngineV2 {
         // Fast physical keys can arrive before a Wayland client applies the
         // previous quote. Use its updated text for the next decision, even
         // if the old suffix happens to be the same ASCII quote character.
-        if (context.valid && (virtualKeyboardCursor(ic) || replayingKeys_))
+        if (context.valid && (!replayView_ || replayView_->context != ic) &&
+            (virtualKeyboardCursor(ic) || replayingKeys_))
           waitForClient(ic, s, opening ? left : right, replayingCursor_, true);
       } else {
         emit(left);
@@ -3826,20 +3910,29 @@ public:
         !ic->capabilityFlags().test(CapabilityFlag::Password) &&
         !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
         s->preedit.empty() && s->englishWord.empty() && !s->selectionPending;
+    const bool cursorPending = editing && s->pendingCursorSteps &&
+        (!s->cursorDeadline || time <= s->cursorDeadline);
     const bool clientPending = editing && s->pendingClientKey && s->clientHadText &&
         ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
         time < s->cursorReplayAt &&
         (!s->clientExpected.empty() || s->symbolAutoState);
     const auto numericState = editing ? s->symbolAutoState : 0;
-    releaseForwardedKeys(ic, s);
-    if (!clientPending)
+    if (!cursorPending)
+      releaseForwardedKeys(ic, s);
+    if (!clientPending && !cursorPending)
       clearCursorMove(s);
     else if (clientPending) {
       s->clientResetPending = true;
       s->clientRequireChange = true;
     }
-    s->physicalModifiers = s->pressedShifts = 0;
-    s->heldModifierKeys.clear();
+    if (cursorPending) {
+      s->cursorResetPending = true;
+      if (s->cursorReplayAt)
+        s->cursorMoveReset = true;
+    } else {
+      s->physicalModifiers = s->pressedShifts = 0;
+      s->heldModifierKeys.clear();
+    }
     if (voicePending_ && voiceSession_ == s->id)
       cancelVoice();
     if (vModeSession_ == s->id)
@@ -3859,8 +3952,10 @@ public:
     s->englishCandidateCursor = 0;
     s->cursor = 0;
     clearDisplayState(s);
-    s->pendingPairKey = 0;
-    s->pendingPairRight.clear();
+    if (!cursorPending) {
+      s->pendingPairKey = 0;
+      s->pendingPairRight.clear();
+    }
     s->symbolAutoState = numericState;
     s->validateNumericState = numericState != 0;
     s->vMode = false;
@@ -4274,7 +4369,8 @@ public:
             (enter &&
              (queuedText || !e.rawKey().states().test(KeyState::Shift))) ||
             (queuedText &&
-             (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete));
+             (sym == FcitxKey_BackSpace || sym == FcitxKey_Delete ||
+              sym == FcitxKey_Escape));
         if (!commands && ((scalar >= 0x20 && scalar != 0x7f) || orderedEdit)) {
           // This is a chord even if its printable key is replayed later.
           // Otherwise releasing Shift can switch language before a queued
