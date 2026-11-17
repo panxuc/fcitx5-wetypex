@@ -163,6 +163,15 @@ def probe_core(command, work, user_snapshot=None, report=None, seed_common_phras
             source=pathlib.Path(user_snapshot)/name
             if source.is_dir():
                 shutil.copytree(source,pathlib.Path(work)/relative,symlinks=True)
+    # 与正常后端一致，仅清理校验副本的一次性词库清理标记。
+    work_root=pathlib.Path(work).resolve()
+    marker=work_root/'user/persistent_data/user_dict_clean_up.bin'
+    # 复制会保留符号链接，不能沿父目录链接触碰快照或外部文件。
+    try:
+        marker.parent.resolve().relative_to(work_root)
+    except ValueError:
+        raise ValueError('probe cleanup marker escapes the temporary work directory') from None
+    marker.unlink(missing_ok=True)
     command=list(command)
     command[-1]='serve'
     with tempfile.TemporaryFile() as errors:

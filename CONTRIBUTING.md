@@ -35,6 +35,7 @@ for script in scripts/*.sh.in; do
 done
 python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py tools/*.py \
   build/fcitx5-wetypex-syncd build/fcitx5-wetypex-update build/fcitx5-wetypex-sync
+python3 tools/test_runtime_probe.py
 ```
 
 修改 Nix 打包时，另运行 `nix flake check`。涉及原版运行时、传输或语音时，请在实际环境中运行：
