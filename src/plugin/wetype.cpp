@@ -280,6 +280,7 @@ struct State : InputContextProperty {
   bool cursorHadView = false;
   bool cursorResetPending = false;
   bool cursorMoveReset = false;
+  bool cursorViewAcknowledged = false;
   std::vector<DeferredKey> cursorKeys;
   std::vector<Key> forwardedKeys;
   bool pendingClientKey = false;
@@ -510,6 +511,7 @@ class WeType : public InputMethodEngineV2 {
     s->cursorHadView = false;
     s->cursorResetPending = false;
     s->cursorMoveReset = false;
+    s->cursorViewAcknowledged = false;
     s->cursorKeys.clear();
   }
   void scheduleCursorMove() {
@@ -571,6 +573,7 @@ class WeType : public InputMethodEngineV2 {
       s->cursorReplayAt = 0;
       s->cursorTarget = -1;
       s->cursorResetPending = s->cursorMoveReset = false;
+      s->cursorViewAcknowledged = steps > 0 && prefix.empty();
       scheduleCursorMove();
       return;
     }
@@ -860,6 +863,7 @@ class WeType : public InputMethodEngineV2 {
       s->cursorViewHash = std::hash<std::string>{}(surrounding.text());
       s->cursorViewCursor = surrounding.cursor();
       s->cursorMoveReset = false;
+      s->cursorViewAcknowledged = false;
       s->cursorDeadline = time + 250000;
       emitCursor(ic, steps);
       // Cursor keys and IM commits use different Wayland protocols. Give
@@ -875,6 +879,32 @@ class WeType : public InputMethodEngineV2 {
     if (!reset)
       replayDeferredKeys(ic, std::move(keys), true);
     return s->pendingCursorSteps || s->pendingClientKey;
+  }
+  void acknowledgeCursorView(InputContext *ic, State *s) {
+    if (!s->pendingCursorSteps || replayView_)
+      return;
+    const auto context = symbolContext(ic);
+    if (!context.valid || !context.selected.empty())
+      return;
+    const auto &view = ic->surroundingText();
+    const auto hash = std::hash<std::string>{}(view.text());
+    if (s->cursorReplayAt) {
+      if (s->cursorTarget >= 0 && int64_t(view.cursor()) == s->cursorTarget &&
+          hash == s->cursorViewHash)
+        s->cursorViewAcknowledged = true;
+    } else if (!s->cursorExpected.empty()) {
+      const bool changed = view.cursor() != s->cursorViewCursor ||
+                           view.anchor() != s->cursorViewAnchor ||
+                           hash != s->cursorViewHash;
+      const bool matches = s->pendingCursorSteps < 0
+                               ? previousTextIs(ic, s->cursorExpected)
+                               : nextSurroundingTextIs(ic, s->cursorExpected) &&
+                                     (s->cursorPrefix.empty() ||
+                                      previousTextIs(ic, s->cursorPrefix));
+      if (matches &&
+          (changed || (s->pendingCursorSteps > 0 && s->cursorPrefix.empty())))
+        s->cursorViewAcknowledged = true;
+    }
   }
   void startSync() {
     if (runtimePhase_ != RuntimePhase::Idle)
@@ -3683,8 +3713,10 @@ public:
         [this](Event &event) {
           auto *ic = static_cast<InputContextEvent &>(event).inputContext();
           const auto *entry = instance_->inputMethodEntry(ic);
+          if (entry && entry->uniqueName() == "wetypex")
+            acknowledgeCursorView(ic, state(ic));
           if (entry && entry->uniqueName() == "wetypex" &&
-              state(ic)->pendingClientKey)
+              (state(ic)->pendingClientKey || state(ic)->pendingCursorSteps))
             scheduleCursorMove();
         });
     cursorTimer_ = instance_->eventLoop().addTimeEvent(
@@ -3910,7 +3942,10 @@ public:
         !ic->capabilityFlags().test(CapabilityFlag::Password) &&
         !ic->capabilityFlags().test(CapabilityFlag::Sensitive) &&
         s->preedit.empty() && s->englishWord.empty() && !s->selectionPending;
+    // After the client acknowledges our edit, a later reset is a new
+    // cancellation (for example a mouse selection), not its commit echo.
     const bool cursorPending = editing && s->pendingCursorSteps &&
+        !s->cursorViewAcknowledged &&
         (!s->cursorDeadline || time <= s->cursorDeadline);
     const bool clientPending = editing && s->pendingClientKey && s->clientHadText &&
         ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
