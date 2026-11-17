@@ -259,7 +259,6 @@ struct State : InputContextProperty {
   std::vector<size_t> cursorStops;
   char pendingPairKey = 0;
   std::string pendingPairRight;
-  std::vector<std::pair<char, std::string>> outerPairs;
   uint8_t symbolAutoState = 0;
   std::string pendingNumericText, pendingNumericReplacement;
   uint64_t pendingNumericUntil = 0;
@@ -286,6 +285,7 @@ struct State : InputContextProperty {
   size_t clientTextHash = 0;
   unsigned clientCursor = 0, clientAnchor = 0;
   bool clientHadText = false, clientCursorReplay = false;
+  bool clientRequireChange = false;
   bool selectionPending = false;
   std::vector<DeferredKey> deferredKeys;
   VMenu vMenu = VMenu::None;
@@ -491,6 +491,7 @@ class WeType : public InputMethodEngineV2 {
     s->pendingClientKey = s->pendingNumericReplay = false;
     s->clientExpected.clear();
     s->clientCursorReplay = false;
+    s->clientRequireChange = false;
     s->cursorDeadline = 0;
     s->cursorReplayAt = 0;
     s->cursorTarget = -1;
@@ -509,13 +510,14 @@ class WeType : public InputMethodEngineV2 {
   // Prefer its text acknowledgement; clients without one get a client turn.
   void waitForClient(InputContext *ic, State *s,
                      const std::string &expected = {},
-                     bool cursorReplay = false) {
+                     bool cursorReplay = false, bool requireChange = false) {
     flushTextBatch(ic);
     const auto &text = ic->surroundingText();
     s->pendingClientKey = true;
     s->pendingNumericReplay = false;
     s->clientExpected = expected;
     s->clientCursorReplay = cursorReplay;
+    s->clientRequireChange = requireChange;
     s->clientHadText =
         ic->capabilityFlags().test(CapabilityFlag::SurroundingText) &&
         text.isValid();
@@ -711,14 +713,16 @@ class WeType : public InputMethodEngineV2 {
     const auto time = now(CLOCK_MONOTONIC);
     const auto &surrounding = ic->surroundingText();
     if (s->pendingClientKey) {
+      const bool viewChanged =
+          s->clientHadText && surrounding.isValid() &&
+          (surrounding.cursor() != s->clientCursor ||
+           surrounding.anchor() != s->clientAnchor ||
+           std::hash<std::string>{}(surrounding.text()) != s->clientTextHash);
       const bool acknowledged =
           !s->clientExpected.empty()
-              ? previousTextIs(ic, s->clientExpected)
-              : s->clientHadText && surrounding.isValid() &&
-                    (surrounding.cursor() != s->clientCursor ||
-                     surrounding.anchor() != s->clientAnchor ||
-                     std::hash<std::string>{}(surrounding.text()) !=
-                         s->clientTextHash);
+              ? previousTextIs(ic, s->clientExpected) &&
+                    (!s->clientRequireChange || viewChanged)
+              : viewChanged;
       if (!acknowledged && time < s->cursorReplayAt)
         return true;
       auto keys = std::move(s->cursorKeys);
@@ -915,12 +919,74 @@ class WeType : public InputMethodEngineV2 {
   bool nextSurroundingTextIs(InputContext *ic,
                              const std::string &expected) const {
     const auto &surrounding = ic->surroundingText();
-    if (!surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
+    if (!ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
+        !surrounding.isValid() || surrounding.cursor() != surrounding.anchor())
       return false;
     const auto &text = surrounding.text();
     auto byte = utf8::ncharByteLength(text.begin(), surrounding.cursor());
     return byte >= 0 && size_t(byte) <= text.size() &&
            text.compare(size_t(byte), expected.size(), expected) == 0;
+  }
+  struct SymbolContext {
+    bool valid = false;
+    std::string_view before, selected, after;
+  };
+  static SymbolContext symbolContext(InputContext *ic) {
+    const auto &view = ic->surroundingText();
+    if (!ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
+        !view.isValid())
+      return {};
+    const auto begin = std::min(view.cursor(), view.anchor());
+    const auto end = std::max(view.cursor(), view.anchor());
+    const auto length = view.text().empty() ? 0 : utf8::lengthValidated(view.text());
+    if (length == utf8::INVALID_LENGTH || end > length)
+      return {};
+    const auto first = begin ? utf8::ncharByteLength(view.text().begin(), begin) : 0;
+    const auto last = end ? utf8::ncharByteLength(view.text().begin(), end) : 0;
+    const std::string_view text(view.text());
+    return {true, text.substr(0, first), text.substr(first, last - first),
+            text.substr(last)};
+  }
+  static bool symbolWhitespace(char32_t c) {
+    // Foundation CharacterSet.whitespacesAndNewlines, used by the original
+    // isCursorEndOrSelected before enabling automatic symbol pairing.
+    return (c >= 0x9 && c <= 0xd) || c == 0x20 || c == 0x85 || c == 0xa0 ||
+           c == 0x1680 || (c >= 0x2000 && c <= 0x200a) || c == 0x2028 ||
+           c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000;
+  }
+  static bool symbolPairPosition(const SymbolContext &context) {
+    return !context.valid || !context.selected.empty() || context.after.empty() ||
+           symbolWhitespace(utf8::getChar(context.after.begin(), context.after.end()));
+  }
+  static bool quoteOpens(const SymbolContext &context, const std::string &left,
+                         const std::string &right, bool fallback) {
+    if (!context.valid)
+      return fallback;
+    // Original CharMapHelper searches backwards on the current line. An
+    // existing opening quote selects the closing form, which is inserted
+    // literally even when an automatically inserted closer follows it.
+    const auto opening = utf8::getChar(left.begin(), left.end());
+    const auto closing = utf8::getChar(right.begin(), right.end());
+    for (size_t end = context.before.size(); end;) {
+      auto begin = end - 1;
+      while (begin && (static_cast<unsigned char>(context.before[begin]) & 0xc0) == 0x80)
+        --begin;
+      const auto c = utf8::getChar(context.before.begin() + begin,
+                                   context.before.begin() + end);
+      if ((c >= 0xa && c <= 0xd) || c == 0x85 || c == 0x2028 || c == 0x2029)
+        return true;
+      // outputRightOfPair in the original retains a pending single opening
+      // quote. A new line overrides it; selections use that pending state
+      // without searching the text being replaced.
+      if (!context.selected.empty() || !fallback)
+        return fallback;
+      else if (c == closing)
+        return true;
+      else if (c == opening)
+        return false;
+      end = begin;
+    }
+    return true;
   }
   // Confirm a committed suffix at the actual, unselected caret. Numeric
   // replacement additionally requires its leading digit to be unchanged.
@@ -1249,39 +1315,34 @@ class WeType : public InputMethodEngineV2 {
     forwardCursor(ic, state(ic), -int(length - cursor), text);
     rememberSpacing(ic, state(ic), lastScalarBefore(text, cursor));
   }
-  void rememberPair(InputContext *ic, State *s, char opening,
-                    const std::string &right) {
-    if (s->pendingPairKey && (nextSurroundingTextIs(ic, s->pendingPairRight) ||
-                              (replayingCursor_ && legacyClientKeys(ic))))
-      s->outerPairs.emplace_back(s->pendingPairKey, s->pendingPairRight);
-    else
-      s->outerPairs.clear();
+  static void rememberPair(State *s, char opening,
+                           const std::string &right) {
     s->pendingPairKey = closingKey(opening);
     s->pendingPairRight = right;
   }
   static void finishPair(State *s) {
-    if (s->outerPairs.empty()) {
-      s->pendingPairKey = 0;
-      s->pendingPairRight.clear();
-    } else {
-      s->pendingPairKey = s->outerPairs.back().first;
-      s->pendingPairRight = std::move(s->outerPairs.back().second);
-      s->outerPairs.pop_back();
-    }
+    s->pendingPairKey = 0;
+    s->pendingPairRight.clear();
   }
   bool commitSymbol(InputContext *ic, State *s, char ascii, bool asciiMode) {
     const auto *entry = punctuationEntry(ascii);
     if (!entry)
       return false;
-    if (s->pendingPairKey == ascii && !s->pendingPairRight.empty() &&
-        (nextSurroundingTextIs(ic, s->pendingPairRight) ||
-         (replayingCursor_ && legacyClientKeys(ic)))) {
+    const auto context = symbolContext(ic);
+    if (!asciiMode && !entry->pairType && s->pendingPairKey == ascii &&
+        !s->pendingPairRight.empty() &&
+        mappedSymbol(s, ascii, false) == s->pendingPairRight &&
+        nextSurroundingTextIs(ic, s->pendingPairRight)) {
       forwardCursor(ic, s, 1, s->pendingPairRight);
       finishPair(s);
       clearNumericCorrection(s);
       s->symbolAutoState = 0;
       return true;
     }
+    // Chinese CharMapHelper remembers one most recently generated right
+    // symbol and clears it when processing another mapped Chinese symbol.
+    if (!asciiMode)
+      finishPair(s);
     const bool autoChangeActive = symbolAutoChange_ && !asciiMode &&
                                   !englishPunctuation(s) &&
                                   !s->fullWidth;
@@ -1309,22 +1370,30 @@ class WeType : public InputMethodEngineV2 {
       appendNumericCorrection(s, mapped);
     auto [left, right] = splitPair(mapped);
     if (entry->pairType && !right.empty()) {
-      if (*config_.input->symbolAutoPair) {
-        rememberPair(ic, s, ascii, right);
+      if (asciiMode) {
+        // getAppositeCharInEngMode returns the first mapped character only.
+        emit(left);
+      } else if (*config_.input->symbolAutoPair && symbolPairPosition(context)) {
+        mapped = left + std::string(context.selected) + right;
+        rememberPair(s, ascii, right);
         if (numeric && numericKeyTransport(ic)) {
           emit(mapped);
-          for (size_t i = 1; i < utf8::length(mapped); ++i) {
-            ic->forwardKey(Key(FcitxKey_Left));
-            ic->forwardKey(Key(FcitxKey_Left), true);
-          }
+          ic->forwardKey(Key(FcitxKey_Left));
+          ic->forwardKey(Key(FcitxKey_Left), true);
         } else {
-          commitStringAtCursor(ic, mapped, 1);
+          commitStringAtCursor(ic, mapped, utf8::length(mapped) - 1);
         }
       } else if (entry->pairType == 2) {
         bool &leftNext =
             ascii == '\"' ? s->doubleQuoteLeft : s->singleQuoteLeft;
-        emit(leftNext ? left : right);
-        leftNext = !leftNext;
+        const bool opening = quoteOpens(context, left, right, leftNext);
+        emit(opening ? left : right);
+        leftNext = !opening;
+        // Fast physical keys can arrive before a Wayland client applies the
+        // previous quote. Use its updated text for the next decision, even
+        // if the old suffix happens to be the same ASCII quote character.
+        if (context.valid && (virtualKeyboardCursor(ic) || replayingKeys_))
+          waitForClient(ic, s, opening ? left : right, replayingCursor_, true);
       } else {
         emit(left);
       }
@@ -2651,8 +2720,7 @@ class WeType : public InputMethodEngineV2 {
                         (sym >= FcitxKey_A && sym <= FcitxKey_Z);
     const bool apostrophe = sym == FcitxKey_apostrophe &&
                             !s->englishWord.empty() &&
-                            s->englishWord.back() != '\'' &&
-                            s->pendingPairKey != '\'';
+                            s->englishWord.back() != '\'';
     if (!commandModifiers && (letter || apostrophe)) {
       if (s->englishWord.empty() && !englishDictionary().available()) {
         auto *spell = spellAddon();
@@ -2711,6 +2779,8 @@ class WeType : public InputMethodEngineV2 {
         return true;
       }
     }
+    if (s->englishWord.empty())
+      return false;
     if (!commandModifiers && sym >= 0x20 && sym <= 0x7e) {
       const char ascii = char(sym);
       const auto *entry = punctuationEntry(ascii);
@@ -3064,7 +3134,6 @@ class WeType : public InputMethodEngineV2 {
         s->cloudPollUntil = 0;
         s->pendingPairKey = 0;
         s->pendingPairRight.clear();
-        s->outerPairs.clear();
         s->symbolAutoState = 0;
         if (s->active) {
           ic->inputPanel().reset();
@@ -3357,7 +3426,7 @@ class WeType : public InputMethodEngineV2 {
         cursorCommitPosition >= 0 &&
         size_t(cursorCommitPosition) <= utf8::length(cursorCommit);
     const bool mergeCursorCommit =
-        hasCursorCommit && std::string_view(ic->frontend()) == "ibus";
+        hasCursorCommit && virtualKeyboardCursor(ic);
     std::string cursorPrefix;
     const bool previousSpacingBypass = spacingBypass_;
     spacingBypass_ |= json_object_get_boolean(wire::get(j.get(), "preserve_spacing"));
@@ -3374,7 +3443,7 @@ class WeType : public InputMethodEngineV2 {
     if (!mergeCursorCommit)
       spacingBypass_ = previousSpacingBypass;
     if (hasCursorCommit) {
-      // GNOME's Wayland text-input client can replace pending text when
+      // Wayland clients can replace or recommit pending preedit when
       // multiple commits arrive before the next done event. Submit the
       // selected word and its bracket pair together, with the caret offset
       // adjusted for the prefix, so neither part can overwrite the other.
@@ -3844,7 +3913,6 @@ public:
     clearDisplayState(s);
     s->pendingPairKey = 0;
     s->pendingPairRight.clear();
-    s->outerPairs.clear();
     s->symbolAutoState = 0;
     s->vMode = false;
     s->vCalculator = false;
@@ -4517,8 +4585,7 @@ public:
       if (sym >= 0x20 && sym <= 0x7e) {
         const char ascii = char(sym);
         const auto *entry = punctuationEntry(ascii);
-        if (entry &&
-            (s->fullWidth || entry->pairType || s->pendingPairKey == ascii)) {
+        if (entry && s->fullWidth) {
           commitSymbol(ic, s, ascii, true);
           e.filterAndAccept();
         } else if (s->fullWidth) {
@@ -5012,18 +5079,24 @@ public:
       return;
     }
     if (composing && entry && !separator) {
+      finishPair(s);
       std::string mapped = mappedSymbol(s, asciiChar, false);
       int pairCursor = -1;
       auto [left, right] = splitPair(mapped);
       if (entry->pairType && !right.empty()) {
-        if (*config_.input->symbolAutoPair) {
-          pairCursor = 1;
-          rememberPair(ic, s, asciiChar, right);
+        auto context = symbolContext(ic);
+        // The selected candidate replaces the application's selection first.
+        // Do not wrap that old selection again after committing the word.
+        context.selected = {};
+        if (*config_.input->symbolAutoPair && symbolPairPosition(context)) {
+          pairCursor = utf8::length(mapped) - 1;
+          rememberPair(s, asciiChar, right);
         } else if (entry->pairType == 2) {
           bool &leftNext =
               asciiChar == '"' ? s->doubleQuoteLeft : s->singleQuoteLeft;
-          mapped = leftNext ? left : right;
-          leftNext = !leftNext;
+          const bool opening = quoteOpens(context, left, right, leftNext);
+          mapped = opening ? left : right;
+          leftNext = !opening;
         } else {
           mapped = left;
         }

@@ -114,6 +114,28 @@ env GTK_IM_MODULE=fcitx application --ozone-platform=x11
 
 Arch 的模块包为 `fcitx5-gtk`，Debian/Ubuntu 通常为 `fcitx5-frontend-gtk3`，版本应与当前 Fcitx 框架匹配。可把命令写入该应用的用户级 `.desktop` 启动项，保留原命令中的路径和占位参数。这些调整只作用于对应应用。
 
+### Chrome 的地址栏与网页引号行为不同
+
+先按[自动配对标点规则](input-handling.md#自动配对标点)逐次检查输入结果。原版会根据光标前后文字和选区决定是否配对；客户端提供的上下文不同，结果也可能不同。特别是 Chromium 的部分 GTK 输入法桥接不提供周边文本，此时输入法无法确认光标是否已经位于一对符号之间。
+
+在已配置 Fcitx5 的 KDE Plasma Wayland 会话中，可完整退出 Chrome，再用原生 Wayland 输入通道启动：
+
+```sh
+env -u GTK_IM_MODULE -u QT_IM_MODULE google-chrome-stable --ozone-platform=wayland --enable-wayland-ime
+```
+
+将 `google-chrome-stable` 换成实际使用的 Chrome 或 Chromium 命令。浏览器已有进程时，新命令可能复用旧进程，启动参数也就不会生效。以上命令只调整这次启动的浏览器环境。
+
+NixOS 的 Fcitx5 模块默认会设置 GTK 和 Qt 输入法环境变量；使用 Wayland 前端时，可在现有配置中设置：
+
+```nix
+i18n.inputMethod.fcitx5.waylandFrontend = true;
+```
+
+这一系统选项会影响 GTK 和 Qt 应用的通道选择，并保留 X11 使用的 `XMODIFIERS`；只调整 Chrome 时可使用上面的单应用启动命令，见 [NixOS 模块实现](https://github.com/NixOS/nixpkgs/blob/nixos-unstable/nixos/modules/i18n/input-method/fcitx5.nix)。KDE 中还需在“系统设置 → 键盘 → 虚拟键盘”选择 Fcitx 5。
+
+Qt 输入法模块的部分版本还会在只更新光标矩形时撤回周边文本能力。Fcitx Qt 的[上游修正](https://github.com/fcitx/fcitx5-qt/commit/357ded98b9958e77026ae072a7340d0cd20843a9)已限制为实际查询周边文本后才撤回；受影响的旧模块可使用桌面支持的原生 Wayland 通道。WeTypeX 尊重客户端当前声明的能力，避免用旧选区包裹或覆盖新的正文。
+
 ### Wayland 下 V 快捷栏不显示或闪退
 
 V 快捷栏在支持 `zwlr_layer_shell_v1` 的合成器上使用不接收键盘焦点的 layer-shell 表面，打开时原输入框保持焦点。Arch 和 rpm 构建包含 Qt6 的 LayerShellQt；运行时还会检查对应 Qt 主版本的 shell 插件是否存在。
