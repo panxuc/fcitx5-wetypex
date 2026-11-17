@@ -738,10 +738,11 @@ class WeType : public InputMethodEngineV2 {
       replayDeferredKeys(ic, std::move(keys), true);
       return s->pendingCursorSteps || s->pendingClientKey;
     }
-    // V1 forwards a keysym with an explicit empty modifier mask. Waiting
-    // for Shift here stalls paired quotes and every later key until release.
-    // V2 and IBus use virtual keyboards that inherit the physical mask.
-    if (std::string_view(ic->frontend()) != "wayland" &&
+    // Only virtual keyboards inherit the physical modifier mask. Wayland
+    // v1 and Qt D-Bus cursor events carry an explicit empty mask, including
+    // the Qt fallback used before a blank document has surrounding text.
+    const std::string_view frontend = ic->frontend();
+    if ((frontend == "wayland_v2" || frontend == "ibus") &&
         modifiersHeld(instance_, ic, s))
       return true;
     if (!s->cursorDeadline)
