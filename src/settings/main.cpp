@@ -1309,6 +1309,10 @@ int main(int argc, char **argv) {
            toggle(
                wetype::settingBool(settings.value("symbol_auto_change"), true),
                true, "symbol_auto_change")),
+       row("数字后的句号遇空格转为小数点",
+           "需开启符号自动转换。输入数字、句点、空格会得到小数点和空格。",
+           toggle(wetype::settingBool(settings.value("decimal_before_space"), false),
+                  true, "decimal_before_space")),
        row("符号自动补全", "自动补全成对符号的右半部分",
            toggle(wetype::settingBool(settings.value("symbol_auto_pair"), true),
                   true, "symbol_auto_pair")),

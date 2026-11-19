@@ -1601,6 +1601,7 @@ class WeType : public InputMethodEngineV2 {
     input->largeEmoji.setValue(boolSetting("large_emoji", true));
     input->symbolEmoji.setValue(boolSetting("symbol_emoji", true));
     input->slashPunctuation.setValue(slashPunctuation_);
+    input->decimalBeforeSpace.setValue(boolSetting("decimal_before_space", false));
     input->symbolAutoChange.setValue(
         !wire::get(j.get(), "symbol_auto_change") ||
         json_object_get_boolean(wire::get(j.get(), "symbol_auto_change")));
@@ -1796,6 +1797,7 @@ class WeType : public InputMethodEngineV2 {
     wire::put(json.get(), "remember_punctuation", bool(*input.rememberPunctuation));
     wire::put(json.get(), "slash_punctuation", bool(*input.slashPunctuation));
     wire::put(json.get(), "symbol_auto_change", bool(*input.symbolAutoChange));
+    wire::put(json.get(), "decimal_before_space", bool(*input.decimalBeforeSpace));
     wire::put(json.get(), "symbol_auto_pair", bool(*input.symbolAutoPair));
     wire::put(json.get(), "standalone", bool(*input.standalone));
     wire::put(json.get(), "default_language",
@@ -4345,7 +4347,11 @@ public:
         return;
       }
       if (!commands && sym == FcitxKey_space) {
-        const auto value = s->numericPreview + " ";
+        const auto separator = *config_.input->decimalBeforeSpace &&
+                                   !key.states().test(KeyState::Shift) &&
+                                   s->numericPreview == "。"
+                               ? "." : s->numericPreview;
+        const auto value = separator + " ";
         flushNumericPreview(ic, s, false);
         commitText(ic, value);
         e.filterAndAccept();
