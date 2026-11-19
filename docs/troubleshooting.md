@@ -134,7 +134,17 @@ i18n.inputMethod.fcitx5.waylandFrontend = true;
 
 这一系统选项会影响 GTK 和 Qt 应用的通道选择，并保留 X11 使用的 `XMODIFIERS`；只调整 Chrome 时可使用上面的单应用启动命令，见 [NixOS 模块实现](https://github.com/NixOS/nixpkgs/blob/nixos-unstable/nixos/modules/i18n/input-method/fcitx5.nix)。KDE 中还需在“系统设置 → 键盘 → 虚拟键盘”选择 Fcitx 5。
 
-Qt 输入法模块的部分版本还会在只更新光标矩形时撤回周边文本能力。Fcitx Qt 的[上游修正](https://github.com/fcitx/fcitx5-qt/commit/357ded98b9958e77026ae072a7340d0cd20843a9)已限制为实际查询周边文本后才撤回；受影响的旧模块可使用桌面支持的原生 Wayland 通道。WeTypeX 尊重客户端当前声明的能力，避免用旧选区包裹或覆盖新的正文。
+### KWrite 或 Kate 连续输入单引号时生成多对
+
+在支持原生输入法的 KDE Plasma Wayland 会话中，先在“系统设置 → 键盘 → 虚拟键盘”选择 Fcitx 5。保存并退出现有 KWrite 窗口，然后用原生 Wayland 通道启动：
+
+```sh
+env QT_QPA_PLATFORM=wayland QT_IM_MODULE=wayland kwrite
+```
+
+Kate 使用相同命令，将 `kwrite` 换成 `kate`。此设置只作用于启动的应用。在启用中文标点和自动配对的空白文档中，按三次单引号应得到 `‘’‘|’`，其中 `|` 表示光标。
+
+Fcitx Qt 5.1.16 的 D-Bus 模块会在只查询输入提示或光标矩形时撤回周边文本。KWrite 因此可能得到 `‘‘‘|’’’`。需要继续使用 `QT_IM_MODULE=fcitx` 时，可使用包含 [Fcitx Qt 上游修正](https://github.com/fcitx/fcitx5-qt/commit/357ded98b9958e77026ae072a7340d0cd20843a9)的模块。WeTypeX 依据客户端提供的有效上下文决定配对和选区包裹。
 
 ### Wayland 下 V 快捷栏不显示或闪退
 
