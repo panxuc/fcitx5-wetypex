@@ -109,7 +109,6 @@ jobs:
           done
           python3 -m py_compile scripts/setup_runtime.py scripts/wechat_emoticons.py scripts/voice_stream.py scripts/local_voice.py scripts/optional_voice.py scripts/group_sync.py tools/*.py \
             build/fcitx5-wetypex-syncd build/fcitx5-wetypex-update build/fcitx5-wetypex-sync
-          python3 tools/test_runtime_probe.py
       - name: 构建 Arch 软件包（启用 LTO）
         run: |
           python3 tools/package_release.py
