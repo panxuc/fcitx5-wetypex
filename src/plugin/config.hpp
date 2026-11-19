@@ -69,6 +69,8 @@ FCITX_CONFIGURATION(
                                   "输入中文时将 /? 替换为 、", true};
     Option<bool> symbolAutoChange{this, "SymbolAutoChange", "符号自动转换",
                                   true};
+    Option<bool> decimalBeforeSpace{this, "DecimalBeforeSpace",
+                                    "数字后的句号遇空格转为小数点", false};
     Option<bool> symbolAutoPair{this, "SymbolAutoPair", "符号自动补全", true};
     Option<DefaultLanguage> defaultLanguage{
         this, "DefaultLanguage", "默认输入语言", DefaultLanguage::Chinese};
