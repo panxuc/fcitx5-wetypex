@@ -163,6 +163,15 @@ def probe_core(command, work, user_snapshot=None, report=None, seed_common_phras
             source=pathlib.Path(user_snapshot)/name
             if source.is_dir():
                 shutil.copytree(source,pathlib.Path(work)/relative,symlinks=True)
+        # Match the regular backend startup without modifying the snapshot.
+        # The copy retains symlinks, so validate the parent before unlinking.
+        work_root = pathlib.Path(work).resolve()
+        marker = work_root / 'user/persistent_data/user_dict_clean_up.bin'
+        try:
+            marker.parent.resolve().relative_to(work_root)
+        except ValueError as error:
+            raise ValueError('probe cleanup marker escapes the temporary work directory') from error
+        marker.unlink(missing_ok=True)
     command=list(command)
     command[-1]='serve'
     with tempfile.TemporaryFile() as errors:
