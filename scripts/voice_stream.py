@@ -69,6 +69,22 @@ def peer_is_self(connection):
     return struct.unpack('3i', connection.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))[1] == os.getuid()
 
 
+def quiesce_running_service():
+    """Ask the existing daemon to release its locks if no audio job is active."""
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(1)
+            connection.connect(ADDRESS)
+            if not peer_is_self(connection):
+                return False
+            connection.sendall(b'{"op":"quiesce"}\n')
+            with connection.makefile('rb') as reply:
+                result = json.loads(reply.readline(4096))
+            return isinstance(result, dict) and result.get('ok') is True
+    except (OSError, ValueError):
+        return False
+
+
 def punctuation(text, mode):
     if mode in ('智能标点', '句末不加句号'):
         text = text.rstrip()
@@ -894,6 +910,8 @@ class Service:
                 self.clipboard_queue.put_nowait((job, self.latest.get('text', '')))
                 return {'ok': True}
             if op in ('start', 'transcribe'):
+                if self.shutdown:
+                    return {'ok': False, 'error': '语音服务正在退出，请稍后重试'}
                 stamp = str(request.get('token', '')).split('-', 1)
                 pid = int(request.get('pid', 0))
                 if len(stamp) == 2 and stamp[0] == str(pid) and stamp[1].isdigit():

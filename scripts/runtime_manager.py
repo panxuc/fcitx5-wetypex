@@ -755,10 +755,9 @@ class RuntimeManager:
     def stage(self, version=None, archive=None, download=False):
         with lock(self.setup_lock), lock(self.cache_lock, exclusive=False):
             if self.journal.exists():
-                with lock(self.use_lock, blocking=False), \
+                with self.activation_voice_lock(), lock(self.use_lock, blocking=False), \
                         lock(self.state / 'backend.lock', blocking=False), \
-                        lock(self.account / 'account.lock', blocking=False), \
-                        lock(self.state / 'voice/daemon.lock', blocking=False):
+                        lock(self.account / 'account.lock', blocking=False):
                     self.recover()
             self.check_existing_target()
             profile = self.profile(version)
@@ -860,32 +859,70 @@ class RuntimeManager:
         self.journal.unlink()
         sync_directory(self.root)
 
+    @contextlib.contextmanager
+    def activation_voice_lock(self):
+        path = self.state / 'voice/daemon.lock'
+        with contextlib.ExitStack() as locks:
+            try:
+                locks.enter_context(lock(path, blocking=False))
+            except BlockingIOError:
+                try:
+                    from voice_stream import quiesce_running_service
+                except ModuleNotFoundError as error:
+                    if error.name != 'voice_stream':
+                        raise
+                    raise BlockingIOError('voice daemon is still running') from error
+                if not quiesce_running_service():
+                    raise
+                # The acknowledgement precedes daemon cleanup and lock release.
+                deadline = time.monotonic() + 3
+                while True:
+                    try:
+                        locks.enter_context(lock(path, blocking=False))
+                        break
+                    except BlockingIOError:
+                        if time.monotonic() >= deadline:
+                            raise
+                        time.sleep(.05)
+            yield
+
     def activate(self, rollback=False):
         if not rollback and not self.pending.exists() and not self.journal.exists():
             font = self.target / 'assets' / FONT_ASSET
             warnings = self.register_font(font) if font.is_file() else []
             return dict(changed=False, warnings=warnings,
                         cleanup=self.cleanup(automatic=True), **self.status())
-        try:
-            with lock(self.setup_lock, blocking=False), lock(self.use_lock, blocking=False), \
-                    lock(self.state / 'backend.lock', blocking=False), \
-                    lock(self.account / 'account.lock', blocking=False), \
-                    lock(self.state / 'voice/daemon.lock', blocking=False):
+        with contextlib.ExitStack() as locks:
+            try:
+                locks.enter_context(lock(self.setup_lock, blocking=False))
+            except BlockingIOError:
+                return dict(changed=False, deferred=True, blocked_on='setup', **self.status())
+            blocked_on = 'voice'
+            try:
+                locks.enter_context(self.activation_voice_lock())
+                blocked_on = 'runtime'
+                for path in (self.use_lock, self.state / 'backend.lock', self.account / 'account.lock'):
+                    locks.enter_context(lock(path, blocking=False))
+            except BlockingIOError:
+                pending = read_json(self.pending)
+                if pending and pending.get('blocked_on') != blocked_on:
+                    pending['blocked_on'] = blocked_on
+                    atomic_json(self.pending, pending)
+                return dict(changed=False, deferred=True, blocked_on=blocked_on, **self.status())
+            self.recover()
+            try:
+                with lock(self.cache_lock, exclusive=False):
+                    result = self._activate_locked(rollback)
+                result['cleanup'] = self._auto_cleanup()
+                return result
+            except Exception as error:
                 self.recover()
-                try:
-                    with lock(self.cache_lock, exclusive=False):
-                        result = self._activate_locked(rollback)
-                    result['cleanup'] = self._auto_cleanup()
-                    return result
-                except Exception as error:
-                    self.recover()
-                    pending=read_json(self.pending)
-                    if pending:
-                        pending['error']=str(error)[:500]
-                        atomic_json(self.pending,pending)
-                    raise
-        except BlockingIOError:
-            return dict(changed=False, deferred=True, **self.status())
+                pending = read_json(self.pending)
+                if pending:
+                    pending.pop('blocked_on', None)
+                    pending['error'] = str(error)[:500]
+                    atomic_json(self.pending, pending)
+                raise
 
     def register_font(self, source):
         # Declarative desktops may link the XDG fonts directory into a
@@ -1033,6 +1070,25 @@ class RuntimeManager:
                     ready,error = self.validator(previous_runtime,Path(directory),reverse)
                     if not ready or before.get('hotword_sha256') != reverse.get('hotword_sha256'):
                         raise ValueError(error or 'previous runtime cannot read upgraded common phrases')
+        warnings = []
+        assets = []
+        for relative in ASSETS:
+            if relative == FONT_ASSET or not (target / 'assets' / relative).exists():
+                continue
+            current = self.data / relative
+            try:
+                current.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if not os.access(current.parent, os.W_OK | os.X_OK):
+                    raise PermissionError(errno.EACCES, 'directory is not writable', str(current.parent))
+            except OSError as error:
+                if not relative.startswith('fcitx5/themes/') or error.errno not in (
+                        errno.EACCES, errno.EPERM, errno.EROFS):
+                    raise
+                warning = 'Unable to install optional WeTypeX themes: ' + str(error)
+                if warning not in warnings:
+                    warnings.append(warning)
+                continue
+            assets.append((relative, current))
         transaction = dict(id=uuid.uuid4().hex, old=old, new=desired,
                            snapshot=snapshot_name, data_exchanges=[])
         atomic_json(self.journal, transaction)
@@ -1064,15 +1120,9 @@ class RuntimeManager:
                                                          candidate_inode=candidate.stat().st_ino))
                 atomic_json(self.journal, transaction)
                 exchange(path, candidate)
-        for relative in ASSETS:
-            current = self.data / relative
+        for relative, current in assets:
             source = self.target / 'assets' / relative
             # Both generations contain assets before these links switch.
-            if not (target / 'assets' / relative).exists():
-                continue
-            if relative == FONT_ASSET:
-                continue
-            current.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             if current.is_symlink() and current.resolve() == source.resolve():
                 continue
             backup = self.store / ('asset-' + uuid.uuid4().hex)
@@ -1080,9 +1130,10 @@ class RuntimeManager:
         preserved = self.store / ('original-' + uuid.uuid4().hex)
         point(self.target, target, preserved)
         font = self.target / 'assets' / FONT_ASSET
-        warnings = self.register_font(font) if font.is_file() else []
+        if font.is_file():
+            warnings.extend(self.register_font(font))
         atomic_json(self.history, dict(transaction=transaction['id'], current=desired, previous=old,
-                    snapshot=snapshot_name, changed_at=int(time.time())))
+                    snapshot=snapshot_name, changed_at=int(time.time()), warnings=warnings))
         self.journal.unlink()
         if self.pending.exists():
             self.pending.unlink()

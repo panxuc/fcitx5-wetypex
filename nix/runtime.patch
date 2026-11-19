@@ -152,8 +152,7 @@ index d563c57b..5d2817f4 100644
 +support="${WETYPE_SUPPORT_DIR:-@NIX_OUT@/lib/fcitx5-wetypex}"
  runtime_data="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex"
  if [ -f "$runtime_data/runtime-pending.json" ] || [ -f "$runtime_data/runtime-transaction.json" ]; then
--  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
-+  @NIX_PYTHON@ "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
+   "@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-setup" --activate-pending >/dev/null || true
  fi
  . "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
  test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
@@ -287,18 +286,6 @@ diff --git a/scripts/fcitx5-wetypex-voice.sh.in b/scripts/fcitx5-wetypex-voice.s
  export WETYPE_VOICE_REVISION="@WETYPE_VOICE_REVISION@"
 -exec python3 @CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/voice_stream.py "$@"
 +exec @NIX_PYTHON@ @NIX_OUT@/share/fcitx5-wetypex/voice_stream.py "$@"
-diff --git a/scripts/runtime_lease.sh.in b/scripts/runtime_lease.sh.in
-index d14cefa1..5754ddc6 100644
---- a/scripts/runtime_lease.sh.in
-+++ b/scripts/runtime_lease.sh.in
-@@ -9,6 +9,6 @@ while :; do
-     break
-   fi
-   exec 8>&-
--  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || exit 78
-+  @NIX_PYTHON@ "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || exit 78
-   test ! -f "$runtime_data/runtime-transaction.json" || exit 78
- done
 diff --git a/scripts/setup_runtime.py b/scripts/setup_runtime.py
 index 78db7df6..fcfee46c 100644
 --- a/scripts/setup_runtime.py

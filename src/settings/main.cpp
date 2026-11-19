@@ -2085,9 +2085,13 @@ int main(int argc, char **argv) {
       const auto client = readJsonObject(runtimeRoot + "/runtime-client.json");
       const bool liveClient = client.value("protocol").toInt() == 1 &&
           QDateTime::currentSecsSinceEpoch() - client.value("updated_at").toDouble() < 10;
-      detail += error.isEmpty() ? (liveClient ? QStringLiteral("\n已准备就绪，将在输入结束后切换")
-                                             : QStringLiteral("\n更新已准备。首次升级请重启 Fcitx5；之后可自动切换。"))
-                               : "\n更新未应用：" + error;
+      if (error.isEmpty() && pending.value("blocked_on").toString() == "voice")
+        detail += QStringLiteral("\n更新正在等待语音结束。录音或识别结束后将重试。");
+      else if (!error.isEmpty())
+        detail += "\n更新未应用：" + error;
+      else
+        detail += liveClient ? QStringLiteral("\n已准备就绪，将在输入结束后切换")
+                             : QStringLiteral("\n更新已准备。首次升级请重启 Fcitx5；之后可自动切换。");
     }
     else if (!operation.value("error").toString().isEmpty())
       detail += "\n上次操作失败：" + operation.value("error").toString();
@@ -2101,6 +2105,9 @@ int main(int argc, char **argv) {
         detail += QStringLiteral("\n已清理 %1 MiB 文件，保留当前版本和回退版本。")
             .arg(result.value("removed_bytes").toDouble() / (1024 * 1024), 0, 'f', 1);
     }
+    for (const auto &warning : history.value("warnings").toArray())
+      if (!warning.toString().isEmpty())
+        detail += "\n" + warning.toString();
     runtimeVersion->setText(detail);
   };
   auto runRuntime = [=, &window](const QString &operation) {

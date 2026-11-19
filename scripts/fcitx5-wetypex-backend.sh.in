@@ -8,7 +8,7 @@ config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
 support="${WETYPE_SUPPORT_DIR:-@WETYPE_SUPPORT_DIR@}"
 runtime_data="${XDG_DATA_HOME:-$HOME/.local/share}/fcitx5-wetypex"
 if [ -f "$runtime_data/runtime-pending.json" ] || [ -f "$runtime_data/runtime-transaction.json" ]; then
-  python3 "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/setup_runtime.py" --activate-pending >/dev/null || true
+  "@CMAKE_INSTALL_FULL_BINDIR@/fcitx5-wetypex-setup" --activate-pending >/dev/null || true
 fi
 . "@CMAKE_INSTALL_FULL_DATADIR@/fcitx5-wetypex/runtime-lease.sh"
 test -f "$runtime/manifest.txt" || { echo 'Run fcitx5-wetypex-setup first.' >&2; exit 78; }
