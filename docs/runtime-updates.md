@@ -201,10 +201,12 @@ fcitx5-wetypex-setup --cleanup
 | --- | --- |
 | `runtime-operation.log` | 设置界面启动的后台更新、回退或清理的输出 |
 | `runtime-operation.json` | 后台操作的进度、结果和错误 |
-| `runtime-pending.json` | 已准备但尚未应用的更新；`error` 字段记录应用失败原因 |
+| `runtime-pending.json` | 已准备但尚未应用的更新；`error` 记录失败原因，`blocked_on` 记录正在等待的组件 |
 | `runtime-history.json` | 当前版本代、上一版本代和数据快照 |
 | `runtime-policy.json` | 回退后暂停自动推进的默认版本 |
 | `runtime-transaction.json` | 切换日志；断电等中断后，下次操作先据此恢复 |
+
+激活时会让空闲的语音服务退出，正在录音或识别时则等待。命令返回 `blocked_on: "voice"` 时，先结束语音，再运行 `fcitx5-wetypex-setup --activate-pending` 重试。如果用户的 Fcitx 主题目录不可写，核心仍可激活，`warnings` 会列出跳过的主题和对应目录。
 
 适配层更新器的状态位于 `~/.cache/fcitx5-wetypex/updates/state.json` 和 `runtime-check.json`。
 
