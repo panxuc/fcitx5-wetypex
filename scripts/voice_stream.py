@@ -474,7 +474,10 @@ class Job:
         self.token = str(request['token'])
         self.session = int(request.get('session', 0))
         self.epoch = int(request.get('epoch', 0))
-        self.pid = int(request.get('pid', 0))
+        # A standalone microphone recording can be finished by a later CLI
+        # invocation. File transcription still belongs to its waiting caller.
+        detached = request['op'] == 'start' and not self.session
+        self.pid = 0 if detached else int(request.get('pid', 0))
         self.request = request
         self.config = read_json(CONFIG)
         self.provider = self.config.get('voice_provider', 'original')
@@ -1019,7 +1022,7 @@ def serve():
                         if service.clipboard_owner and service.clipboard_owner.poll() is not None:
                             service.clipboard_owner = None
                         job = service.job
-                        if job and not job.done.is_set() and job.pid and job.session:
+                        if job and not job.done.is_set() and job.pid:
                             try:
                                 os.kill(job.pid, 0)
                             except ProcessLookupError:
