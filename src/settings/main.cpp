@@ -1821,6 +1821,9 @@ int main(int argc, char **argv) {
                    {"shift + tab", "tab"}, {}, true, "page_shift_tab")}));
   shortcuts.body->addWidget(rowsCard(
       {row("候选词选择", {}, nullptr, 44),
+       row("左右中括号以词定字", "用 [ 或 ] 提交高亮词的首字或尾字。可定字时优先于括号翻页。",
+           toggle(wetype::settingBool(settings.value("candidate_edge_character"), false),
+                  true, "candidate_edge_character")),
        shortcutRow(
            "使用分号、引号选择第 2 位、第 3 位候选词",
            wetype::settingBool(settings.value("select_semicolon_quote"), false),
