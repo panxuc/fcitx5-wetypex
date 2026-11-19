@@ -1725,6 +1725,8 @@ class WeType : public InputMethodEngineV2 {
         boolSetting("traditional_switch", false));
     shortcuts->pageMinusEqual.setValue(boolSetting("page_minus_equal", true));
     shortcuts->pageBrackets.setValue(boolSetting("page_brackets", true));
+    shortcuts->candidateEdgeCharacter.setValue(
+        boolSetting("candidate_edge_character", false));
     shortcuts->pageCommaPeriod.setValue(
         boolSetting("page_comma_period", false));
     shortcuts->pageShiftTab.setValue(boolSetting("page_shift_tab", false));
@@ -1883,6 +1885,8 @@ class WeType : public InputMethodEngineV2 {
               bool(*shortcuts.traditionalSwitch));
     wire::put(json.get(), "page_minus_equal", bool(*shortcuts.pageMinusEqual));
     wire::put(json.get(), "page_brackets", bool(*shortcuts.pageBrackets));
+    wire::put(json.get(), "candidate_edge_character",
+              bool(*shortcuts.candidateEdgeCharacter));
     wire::put(json.get(), "page_comma_period",
               bool(*shortcuts.pageCommaPeriod));
     wire::put(json.get(), "page_shift_tab", bool(*shortcuts.pageShiftTab));
@@ -4069,6 +4073,37 @@ public:
     // response's empty preedit and refresh the panel.
     panel(ic, s);
   }
+  bool commitCandidateEdge(InputContext *ic, State *s, bool last) {
+    auto *candidates = s->candidates.get();
+    if (!candidates || !json_object_is_type(candidates, json_type_array) ||
+        s->candidateCursor < 0 ||
+        size_t(s->candidateCursor) >= json_object_array_length(candidates))
+      return false;
+    auto *word = json_object_array_get_idx(candidates, s->candidateCursor);
+    if (!json_object_is_type(word, json_type_string))
+      return false;
+    const std::string text(json_object_get_string(word),
+                           json_object_get_string_len(word));
+    const auto length = utf8::lengthValidated(text);
+    if (length == utf8::INVALID_LENGTH || length < 2)
+      return false;
+    const auto character = last ? lastScalar(text) : firstScalar(text);
+    if (!isCjk(character))
+      return false;
+    // Retain any selected prefix, then discard the remaining composition.
+    // Resetting avoids teaching the core a whole word the user did not enter.
+    auto commit = s->preedit.substr(0, std::min(s->editableBegin, s->preedit.size()));
+    commit += utf8::UCS4ToUTF8(character);
+    if (!send(ic, "reset"))
+      return false;
+    s->preedit.clear();
+    s->cursor = 0;
+    clearDisplayState(s);
+    ic->inputPanel().setCandidateList(nullptr);
+    commitText(ic, commit);
+    panel(ic, s);
+    return true;
+  }
   bool selectByKey(InputContext *ic, int pageIndex = -1) {
     auto *s = state(ic);
     if (pageIndex >= pageSize_)
@@ -4789,6 +4824,22 @@ public:
          doubleScheme == wetype_config::DoublePinyinScheme::Ziguang)) {
       typeCharacter(';');
       return;
+    }
+    if (*config_.shortcuts->candidateEdgeCharacter &&
+        !s->preedit.empty() && !s->vMode && s->vMenu == VMenu::None &&
+        !(key.states().toInteger() & uint32_t(KeyState::SimpleMask)) &&
+        (sym == FcitxKey_bracketleft || sym == FcitxKey_bracketright) &&
+        !compositionShortcutKey(key)) {
+      if (s->inputSeq > s->applied) {
+        s->deferredKeys.push_back({e.rawKey(), false, e.time(), replayingForwarded_});
+        s->selectionPending = true;
+        e.filterAndAccept();
+        return;
+      }
+      if (commitCandidateEdge(ic, s, sym == FcitxKey_bracketright)) {
+        e.filterAndAccept();
+        return;
+      }
     }
     bool pageDown =
         sym == FcitxKey_Page_Down ||

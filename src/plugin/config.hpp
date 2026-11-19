@@ -194,6 +194,8 @@ FCITX_CONFIGURATION(
         KeyListConstrain({KeyConstrainFlag::AllowModifierLess})};
     Option<bool> pageMinusEqual{this, "PageMinusEqual", "减号等号翻页", true};
     Option<bool> pageBrackets{this, "PageBrackets", "左右中括号翻页", true};
+    Option<bool> candidateEdgeCharacter{this, "CandidateEdgeCharacter",
+                                        "左右中括号以词定字", false};
     Option<bool> pageCommaPeriod{this, "PageCommaPeriod", "逗号句号翻页",
                                  false};
     Option<bool> pageShiftTab{this, "PageShiftTab", "Shift+Tab / Tab 翻页",
