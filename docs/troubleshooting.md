@@ -118,13 +118,14 @@ Arch 的模块包为 `fcitx5-gtk`，Debian/Ubuntu 通常为 `fcitx5-frontend-gtk
 
 先按[自动配对标点规则](input-handling.md#自动配对标点)逐次检查输入结果。原版会根据光标前后文字和选区决定是否配对；客户端提供的上下文不同，结果也可能不同。特别是 Chromium 的部分 GTK 输入法桥接不提供周边文本，此时输入法无法确认光标是否已经位于一对符号之间。
 
-在已配置 Fcitx5 的 KDE Plasma Wayland 会话中，可完整退出 Chrome，再用原生 Wayland 输入通道启动：
+在已配置 Fcitx5 且支持 text-input-v3 的 KDE Plasma Wayland 会话中，完整退出 Chrome 后，用原生 Wayland 输入通道启动新版 Chrome 或 Chromium：
 
 ```sh
-env -u GTK_IM_MODULE -u QT_IM_MODULE google-chrome-stable --ozone-platform=wayland --enable-wayland-ime
+env -u GTK_IM_MODULE -u QT_IM_MODULE google-chrome-stable \
+  --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 ```
 
-将 `google-chrome-stable` 换成实际使用的 Chrome 或 Chromium 命令。浏览器已有进程时，新命令可能复用旧进程，启动参数也就不会生效。以上命令只调整这次启动的浏览器环境。
+将 `google-chrome-stable` 换成实际使用的浏览器命令。已有浏览器进程可能复用旧环境，在测试夹杂标点的网页输入框前应完整退出。在 KWin 6.8 / Chrome 157 的网页输入框中，启用中文标点和自动配对后，三次单引号得到 `‘’‘|’`，其中 `|` 为光标。地址栏也可用同一方法对照检查，实际结果取决于它提供的上下文。
 
 NixOS 的 Fcitx5 模块默认会设置 GTK 和 Qt 输入法环境变量；使用 Wayland 前端时，可在现有配置中设置：
 
