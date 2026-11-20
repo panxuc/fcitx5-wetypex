@@ -93,6 +93,7 @@ target_compile_definitions(fcitx5-wetypex-settings PRIVATE
   WETYPE_BACKEND="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-backend"
   WETYPE_TRANSFER="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-transfer"
   WETYPE_SETUP="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-setup"
+  WETYPE_UPDATE="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-update"
   WETYPE_VOICE_TOOL="${CMAKE_INSTALL_FULL_BINDIR}/fcitx5-wetypex-voice"
   WETYPE_RUNTIME_PROFILES="${CMAKE_INSTALL_FULL_DATADIR}/fcitx5-wetypex/runtime-profiles.json"
   WETYPE_VERSION="${PROJECT_VERSION}-${WETYPE_PACKAGE_RELEASE}")
