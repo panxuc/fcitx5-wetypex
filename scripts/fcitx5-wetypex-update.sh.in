@@ -287,7 +287,70 @@ def notify_and_offer_install(package, version, family):
     return shown
 
 
+def apt_update_candidate():
+    """Read the local APT index for the installed Debian variant."""
+    environment = dict(os.environ, LC_ALL='C')
+    if not all(shutil.which(tool) for tool in ('apt-cache', 'dpkg-query', 'dpkg')):
+        return None
+    for name in ('fcitx5-wetypex', 'fcitx5-wetypex-legacy'):
+        installed = subprocess.run(
+            ['dpkg-query', '-W', '-f=${Status}\t${Version}', name],
+            env=environment, capture_output=True, text=True, timeout=5)
+        status, _, version = installed.stdout.strip().partition('\t')
+        if installed.returncode or status != 'install ok installed' or not version:
+            continue
+        policy = subprocess.run(['apt-cache', 'policy', name], env=environment,
+                                capture_output=True, text=True, timeout=5)
+        if policy.returncode:
+            continue
+        for line in policy.stdout.splitlines():
+            key, _, candidate = line.strip().partition(':')
+            if key != 'Candidate':
+                continue
+            candidate = candidate.strip()
+            if not candidate or candidate == '(none)':
+                break
+            newer = subprocess.run(['dpkg', '--compare-versions', candidate, 'gt', version],
+                                   env=environment, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=5)
+            if newer.returncode == 0:
+                return dict(status='available', source='apt', package=name,
+                            installed=version, version=candidate)
+            break
+    return None
+
+
+def check_only():
+    """Report the available adapter version without downloading or prompting."""
+    current = f'{CURRENT_VERSION}-{CURRENT_PACKAGE_RELEASE}'
+    family = linux_family()
+    if not PACKAGE_UPDATES or not family:
+        return dict(status='managed', installed=current)
+    if family == 'debian':
+        try:
+            candidate = apt_update_candidate()
+            if candidate:
+                return candidate
+        except (OSError, subprocess.SubprocessError):
+            # The GitHub download path also serves standalone .deb installs.
+            pass
+    try:
+        release = select_release(json.loads(request_bytes(RELEASE_API)), family)
+        tag = release['tag_name']
+        latest = version_tuple(tag)
+        installed = version_tuple(current)
+        if not latest or not installed:
+            raise ValueError('invalid release version')
+        return dict(status='available' if latest > installed else 'current',
+                    source='github', version=tag.lstrip('v'), installed=current)
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(status='error', installed=current)
+
+
 def main():
+    if '--check-only' in sys.argv:
+        print(json.dumps(check_only(), ensure_ascii=False))
+        return 0
     config_home = pathlib.Path(
         os.environ.get("XDG_CONFIG_HOME", pathlib.Path.home() / ".config")
     )

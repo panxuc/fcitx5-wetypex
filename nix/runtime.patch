@@ -527,8 +527,8 @@ diff --git a/src/settings/main.cpp b/src/settings/main.cpp
    if (pipewire.waitForFinished(2000)) {
      const auto nodes =
          QJsonDocument::fromJson(pipewire.readAllStandardOutput()).array();
-@@ -1961,7 +1964,7 @@
-         QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
+@@ -2090,8 +2093,8 @@
+         QUrl("https://github.com/panxuc/fcitx5-wetypex/releases/tag/v" + latest));
    });
    about.body->addWidget(rowsCard(
 -      {row("有新版本时自动更新", {},
@@ -536,6 +536,7 @@ diff --git a/src/settings/main.cpp b/src/settings/main.cpp
             toggle(wetype::settingBool(settings.value("auto_update"), true),
                    true, "auto_update"),
             48),
+        row("适配层更新", {}, checkUpdates, 48),
 diff --git a/tools/prepare_macos_runtime.py b/tools/prepare_macos_runtime.py
 index 9a2d3a16..1ece7a7d 100644
 --- a/tools/prepare_macos_runtime.py

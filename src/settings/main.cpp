@@ -2038,12 +2038,68 @@ int main(int argc, char **argv) {
     QDesktopServices::openUrl(
         QUrl("https://github.com/panxuc/fcitx5-wetypex/issues"));
   });
+  auto *checkUpdates = new QPushButton("检查更新");
+  checkUpdates->setObjectName("checkAdapterUpdates");
+  auto *viewRelease = new QPushButton("查看下载");
+  viewRelease->hide();
+  auto *updateStatus = new QLabel;
+  updateStatus->setObjectName("rowSubtitle");
+  updateStatus->setTextFormat(Qt::PlainText);
+  updateStatus->setWordWrap(true);
+  updateStatus->hide();
+  auto *updateProcess = new QProcess(&window);
+  QObject::connect(checkUpdates, &QPushButton::clicked, [=] {
+    if (updateProcess->state() != QProcess::NotRunning)
+      return;
+    checkUpdates->setEnabled(false);
+    viewRelease->hide();
+    updateStatus->setText("正在检查适配层更新…");
+    updateStatus->show();
+    updateProcess->start(qEnvironmentVariable("WETYPE_UPDATE_LAUNCHER", WETYPE_UPDATE),
+                         {"--check-only"});
+  });
+  wetype::onProcessDone(updateProcess, &window, [=](int code, QProcess::ExitStatus) {
+    checkUpdates->setEnabled(true);
+    const auto result = QJsonDocument::fromJson(updateProcess->readAllStandardOutput()).object();
+    const auto state = result.value("status").toString();
+    const auto latest = result.value("version").toString();
+    if (code || state == "error" || state.isEmpty()) {
+      updateStatus->setText("无法检查更新，请稍后重试。");
+    } else if (state == "managed") {
+      updateStatus->setText("此安装由发行渠道管理，请在包管理器中检查更新。");
+    } else if (state == "current") {
+      updateStatus->setText("当前已是最新版本。");
+    } else if (state == "available" && result.value("source").toString() == "apt") {
+      const auto package = result.value("package").toString();
+      updateStatus->setText("APT 有可用更新 " + latest +
+                            "。使用 sudo apt install --only-upgrade " + package + " 更新。");
+    } else if (state == "available" && result.value("source").toString() == "github") {
+      static const QRegularExpression releaseVersion(R"(^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+-[0-9]+$)");
+      if (!releaseVersion.match(latest).hasMatch()) {
+        updateStatus->setText("无法识别更新版本，请稍后重试。");
+        return;
+      }
+      updateStatus->setText("可更新到 " + latest + "。");
+      viewRelease->setProperty("releaseVersion", latest);
+      viewRelease->show();
+    } else {
+      updateStatus->setText("无法识别更新结果，请稍后重试。");
+    }
+  });
+  QObject::connect(viewRelease, &QPushButton::clicked, [=] {
+    const auto latest = viewRelease->property("releaseVersion").toString();
+    QDesktopServices::openUrl(
+        QUrl("https://github.com/panxuc/fcitx5-wetypex/releases/tag/v" + latest));
+  });
   about.body->addWidget(rowsCard(
       {row("有新版本时自动更新", {},
            toggle(wetype::settingBool(settings.value("auto_update"), true),
                   true, "auto_update"),
            48),
+       row("适配层更新", {}, checkUpdates, 48),
        row("我要反馈", {}, feedback, 48)}));
+  about.body->addWidget(updateStatus);
+  about.body->addWidget(viewRelease, 0, Qt::AlignRight);
   const auto runtimeRoot = QStandardPaths::writableLocation(
       QStandardPaths::GenericDataLocation) + "/fcitx5-wetypex";
   const auto runtimePath = qEnvironmentVariable("WETYPE_RUNTIME_DIR", runtimeRoot + "/runtime");
