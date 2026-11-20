@@ -88,6 +88,8 @@ fcitx5-wetypex-setup --update --version <版本> --download --accept-upstream-li
 
 设置“升级和反馈”页中的“有新版本时自动更新”（`wetypex.json` 字段 `auto_update`，默认开启）同时控制两层更新。
 
+“适配层更新 → 检查更新”会在设置内显示结果，关闭自动更新后仍可使用。Debian 或 Ubuntu 上会先读取已配置的 APT 索引。APT 提供较新版本时，按提示使用 APT 升级；普通手动安装的 deb 仍可通过 GitHub Release 检查并打开下载页。检查本身不会刷新系统索引、下载安装包或启动原版核心切换。
+
 | | 原版运行时 | 适配层软件包 |
 | --- | --- | --- |
 | 检查内容 | 已安装兼容清单的默认档案是否已安装 | GitHub 上是否有比当前适配层更高的完整正式版本 |
