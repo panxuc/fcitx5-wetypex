@@ -50,7 +50,7 @@ Fcitx5 输入插件和 Qt5/Qt6 配置插件安装到 `FCITX_INSTALL_ADDONDIR`，
 
 系统 OpenSSL 低于 3 时（legacy deb），构建私有静态 OpenSSL 3，源码与 SHA-256 固定在 `cmake/BundledOpenSSL.cmake`，许可证随包安装；系统的 OpenSSL 1.1 保持不变。CMake 3.16/3.17 使用 curl 发布源码中的 configure 构建，仍保持 WS/WSS、证书校验和 LTO 隔离。
 
-Arch 包在 `package()` 中为 `locale.so` 和 `wcwss_bridge.so` 设置可执行权限，使 makepkg 能解析其 SONAME 依赖，从而记录实际链接的 OpenSSL ABI。AUR 包在用户机器上针对本地库构建。
+Arch 包在 `package()` 中为 `locale.so` 和 `wcwss_bridge.so` 设置可执行权限，使 makepkg 能解析其 SONAME 依赖，从而记录实际链接的 OpenSSL ABI。AUR 包在用户机器上针对本地库构建。 AUR 的 x86-64 构建使用系统 libcurl，需支持 WS/WSS。ARM64 保留固定的 curl 源码和按 Apple 字符串布局编译的私有 libc++。构建使用系统 CMake 和 Clang，ARM64 的 LLVM 下载项是构建这些私有库所需的源码与 CMake 模块。
 
 ## ARM64
 
