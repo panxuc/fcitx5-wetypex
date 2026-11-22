@@ -125,7 +125,7 @@ env -u GTK_IM_MODULE -u QT_IM_MODULE google-chrome-stable \
   --ozone-platform=wayland --enable-wayland-ime --wayland-text-input-version=3
 ```
 
-将 `google-chrome-stable` 换成实际使用的浏览器命令。已有的浏览器进程可能继续使用原来的启动参数。在 KWin 6.8 和 Chrome 157 的网页输入框中，启用中文标点和自动配对后，连续按三次单引号得到 `‘’‘|’`，其中 `|` 为光标。
+将 `google-chrome-stable` 换成实际使用的浏览器命令。已有的浏览器进程可能继续使用原来的启动参数。启用中文标点和自动配对后，在空白地址栏或网页输入框连续按三次单引号，应得到 `‘’‘|’`，其中 `|` 为光标。
 
 NixOS 的 Fcitx5 模块默认会设置 GTK 和 Qt 输入法环境变量；使用 Wayland 前端时，可在现有配置中设置：
 

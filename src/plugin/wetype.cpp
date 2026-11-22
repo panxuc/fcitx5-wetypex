@@ -259,6 +259,17 @@ struct State : InputContextProperty {
   std::vector<size_t> cursorStops;
   char pendingPairKey = 0;
   std::string pendingPairRight;
+  struct UnreportedQuoteCaret {
+    size_t textHash;
+    unsigned reported, expected;
+    char key;
+    bool matches(const SurroundingText &view) const {
+      return view.isValid() && view.cursor() == reported &&
+             view.anchor() == reported &&
+             std::hash<std::string>{}(view.text()) == textHash;
+    }
+  };
+  std::optional<UnreportedQuoteCaret> unreportedQuoteCaret;
   uint8_t symbolAutoState = 0;
   bool validateNumericState = false;
   std::string numericPreview;
@@ -497,6 +508,7 @@ class WeType : public InputMethodEngineV2 {
     ic->forwardKey(key, release, time);
   }
   static void clearCursorMove(State *s) {
+    s->unreportedQuoteCaret.reset();
     s->pendingCursorSteps = 0;
     s->pendingClientKey = false;
     s->clientExpected.clear();
@@ -784,8 +796,20 @@ class WeType : public InputMethodEngineV2 {
           int64_t(surrounding.cursor()) == s->cursorTarget;
       if (!acknowledged && time < s->cursorReplayAt)
         return true;
+      // Chromium's address bar can apply the forwarded Left key without
+      // publishing its new caret. One matching quote can use the position
+      // inside our confirmed insertion while the reported view is identical.
+      const bool unreportedQuoteCaret = !acknowledged && sameText &&
+          !s->cursorResetPending && std::string_view(ic->frontend()) == "wayland" &&
+          s->pendingCursorSteps == -1 && s->cursorTarget >= 0 &&
+          surrounding.cursor() == s->cursorViewCursor &&
+          (s->pendingPairKey == '\'' || s->pendingPairKey == '"') &&
+          !s->pendingPairRight.empty() &&
+          s->cursorExpected.size() >= s->pendingPairRight.size() &&
+          s->cursorExpected.compare(s->cursorExpected.size() - s->pendingPairRight.size(),
+                                    s->pendingPairRight.size(), s->pendingPairRight) == 0;
       if (!acknowledged && s->cursorHadView && !s->cursorMoveReset &&
-          time < s->cursorDeadline)
+          !unreportedQuoteCaret && time < s->cursorDeadline)
         return true;
       ReplayView moved;
       if (acknowledged) {
@@ -803,7 +827,12 @@ class WeType : public InputMethodEngineV2 {
         return false;
       }
       auto keys = std::move(s->cursorKeys);
+      const State::UnreportedQuoteCaret quoteCaret{
+          s->cursorViewHash, s->cursorViewCursor, unsigned(s->cursorTarget),
+          s->pendingPairKey};
       clearCursorMove(s);
+      if (unreportedQuoteCaret)
+        s->unreportedQuoteCaret = quoteCaret;
       ScopedRestore<ReplayView *> restoreView(replayView_);
       if (moved.context)
         replayView_ = &moved;
@@ -1031,14 +1060,15 @@ class WeType : public InputMethodEngineV2 {
     bool valid = false;
     std::string_view before, selected, after;
   };
-  SymbolContext symbolContext(InputContext *ic) const {
+  SymbolContext symbolContext(InputContext *ic,
+                              std::optional<unsigned> caret = {}) const {
     const auto &view = ic->surroundingText();
     const bool replay = replayView_ && replayView_->context == ic;
     if (!ic->capabilityFlags().test(CapabilityFlag::SurroundingText) ||
         (!replay && !view.isValid()))
       return {};
-    const auto cursor = replay ? replayView_->cursor : view.cursor();
-    const auto anchor = replay ? cursor : view.anchor();
+    const auto cursor = replay ? replayView_->cursor : caret.value_or(view.cursor());
+    const auto anchor = replay || caret ? cursor : view.anchor();
     const auto &value = replay ? replayView_->text : view.text();
     const auto begin = std::min(cursor, anchor);
     const auto end = std::max(cursor, anchor);
@@ -1387,11 +1417,15 @@ class WeType : public InputMethodEngineV2 {
     s->pendingPairKey = 0;
     s->pendingPairRight.clear();
   }
-  bool commitSymbol(InputContext *ic, State *s, char ascii, bool asciiMode) {
+  bool commitSymbol(InputContext *ic, State *s, char ascii, bool asciiMode,
+                    const std::optional<State::UnreportedQuoteCaret> &quoteCaret = {}) {
     const auto *entry = punctuationEntry(ascii);
     if (!entry)
       return false;
-    const auto context = symbolContext(ic);
+    const bool sameView = quoteCaret && quoteCaret->key == ascii &&
+                          quoteCaret->matches(ic->surroundingText());
+    const auto context = symbolContext(
+        ic, sameView ? std::optional(quoteCaret->expected) : std::nullopt);
     if (!asciiMode && !entry->pairType && s->pendingPairKey == ascii &&
         !s->pendingPairRight.empty() &&
         mappedSymbol(s, ascii, false) == s->pendingPairRight &&
@@ -3719,10 +3753,14 @@ public:
         [this](Event &event) {
           auto *ic = static_cast<InputContextEvent &>(event).inputContext();
           const auto *entry = instance_->inputMethodEntry(ic);
-          if (entry && entry->uniqueName() == "wetypex")
-            acknowledgeCursorView(ic, state(ic));
-          if (entry && entry->uniqueName() == "wetypex" &&
-              (state(ic)->pendingClientKey || state(ic)->pendingCursorSteps))
+          if (!entry || entry->uniqueName() != "wetypex")
+            return;
+          auto *s = state(ic);
+          auto &quoteCaret = s->unreportedQuoteCaret;
+          if (quoteCaret && !quoteCaret->matches(ic->surroundingText()))
+            quoteCaret.reset();
+          acknowledgeCursorView(ic, s);
+          if (s->pendingClientKey || s->pendingCursorSteps)
             scheduleCursorMove();
         });
     cursorTimer_ = instance_->eventLoop().addTimeEvent(
@@ -4464,6 +4502,10 @@ public:
         replayDeferredKeys(ic, std::move(keys), true);
       }
     }
+    // Any other edit or navigation invalidates the one-shot quote position.
+    const auto quoteCaret = !e.isRelease() && !key.isModifier()
+                                ? std::exchange(s->unreportedQuoteCaret, std::nullopt)
+                                : std::nullopt;
     if (voiceAvailable() && e.rawKey().states().test(KeyState::Repeat) &&
         ((*config_.voice->launchShortcut &&
           key.checkKeyList(*config_.voice->launchKey)) ||
@@ -5176,7 +5218,7 @@ public:
       return;
     }
     if (!composing && entry) {
-      if (commitSymbol(ic, s, asciiChar, false))
+      if (commitSymbol(ic, s, asciiChar, false, quoteCaret))
         e.filterAndAccept();
       return;
     }
