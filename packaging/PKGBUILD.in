@@ -6,11 +6,12 @@ url='https://github.com/panxuc/fcitx5-wetypex'
 arch=('x86_64' 'aarch64')
 license=('MIT' 'ISC' 'BSD-2-Clause' 'curl' 'Apache-2.0 WITH LLVM-exception')
 options=('!debug')
-depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'libssl.so' 'libcrypto.so' 'bubblewrap' 'util-linux' 'python' 'python-fonttools' 'python-pillow' 'fontconfig' 'wayland' 'qt6-base' 'qt6-svg' 'qt6-webengine' 'layer-shell-qt' 'wl-clipboard' 'pipewire' 'ffmpeg' 'opencc' 'libnotify' 'polkit')
+depends=('fcitx5>=5.1.9' 'fcitx5-qt' 'libime>=1.1.15' 'libc++' 'json-c' 'bubblewrap' 'util-linux' 'python' 'python-fonttools' 'python-pillow' 'fontconfig' 'wayland' 'qt6-base' 'qt6-svg' 'qt6-webengine' 'layer-shell-qt' 'wl-clipboard' 'pipewire' 'ffmpeg' 'opencc' 'libnotify' 'polkit')
 depends_x86_64=('curl>=8.9' 'libcurl.so')
-depends_aarch64=('curl')
+depends_aarch64=('curl' 'libssl.so' 'libcrypto.so')
 
-makedepends=('rust' 'cmake' 'clang' 'git' 'boost' 'openssl')
+makedepends=('rust' 'cmake' 'clang' 'git' 'boost')
+makedepends_aarch64=('openssl')
 optdepends=('fcitx5-configtool: manage input methods'
             'zenity: update installation dialog when notification actions are unavailable'
             'kdialog: KDE update installation dialog when notification actions are unavailable'
