@@ -2,7 +2,8 @@
 
 pkgname=fcitx5-wetypex
 pkgver=3.0.1.684
-pkgrel=9
+pkgrel=10
+_source_revision=${pkgrel%%.*}
 pkgdesc="Native Linux compatibility layer for WeType on Fcitx5"
 arch=('x86_64' 'aarch64')
 url="https://github.com/panxuc/fcitx5-wetypex"
@@ -38,7 +39,7 @@ optdepends=('fcitx5-configtool: manage input methods'
             'kdialog: KDE update installation dialog when notification actions are unavailable'
             'qemu-user: original-engine compatibility for CPUs missing required instructions')
 source=(
-    "${pkgname}-${pkgver}-${pkgrel}.tar.gz::${url}/releases/download/v${pkgver}-${pkgrel}/${pkgname}-${pkgver}.tar.gz"
+    "${pkgname}-${pkgver}-${_source_revision}.tar.gz::${url}/releases/download/v${pkgver}-${_source_revision}/${pkgname}-${pkgver}.tar.gz"
     'libkqueue::git+https://github.com/mheily/libkqueue.git#commit=46a3e130f88b0b0742575dcb01d77e336538024b'
 )
 sha256sums=("SKIP" "SKIP") # first checksum is filled by the release workflow

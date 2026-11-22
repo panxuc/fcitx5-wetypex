@@ -73,6 +73,8 @@ ARM64 软件包由 `.github/workflows/packages-arm64.yml` 在原生 ARM64 运行
 
 源码包和 nFPM 元数据从 CMake 与 `pkgrel` 读取版本，Nix 包也从这两处读取。原版核心更新由 `tools/update_upstream.py` 自动生成上述改动，见[维护者自动化](maintainer-automation.md#规范的更新提交)。
 
+AUR 跟随 GitHub 发布版本。只修改 AUR 的依赖或构建参数时，在 AUR 仓库把 `pkgrel` 增为子修订号，例如 `10.1`，并用 `makepkg --printsrcinfo` 重新生成 `.SRCINFO`。`10` 与 `10.1` 使用同一份源码和 SHA-256，可共用下载缓存。pacman 会依次从 `10` 升到 `10.1`、`11`。重跑 GitHub 的 `10` 发布时会保留 AUR 上的 `10.1`。参见 [Arch PKGBUILD 手册](https://man.archlinux.org/man/PKGBUILD.5.en)。
+
 ## GitHub Release
 
 推送 `v<版本>-<修订>` 标签会启动 `release.yml`。x86-64 与 ARM64 并行构建，发布作业随后检查源码来源、两种架构的包元数据和全部 SHA-256。所有文件校验通过后才公开草稿，最后同步 AUR。也可以为已有标签手动触发：
