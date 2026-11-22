@@ -14,8 +14,6 @@ depends=(
     'libime>=1.1.15'
     'libc++'
     'json-c'
-    'libssl.so'
-    'libcrypto.so'
     'bubblewrap'
     'util-linux'
     'python'
@@ -34,7 +32,7 @@ depends=(
     'polkit'
 )
 
-makedepends=('rust' 'cmake' 'clang' 'git' 'boost' 'openssl')
+makedepends=('rust' 'cmake' 'clang' 'git' 'boost')
 optdepends=('fcitx5-configtool: manage input methods'
             'zenity: update installation dialog when notification actions are unavailable'
             'kdialog: KDE update installation dialog when notification actions are unavailable'
@@ -48,7 +46,8 @@ install=fcitx5-wetypex.install
 
 
 depends_x86_64=('curl>=8.9' 'libcurl.so')
-depends_aarch64=('curl')
+depends_aarch64=('curl' 'libssl.so' 'libcrypto.so')
+makedepends_aarch64=('openssl')
 
 source_aarch64=(
   'https://curl.se/download/curl-8.22.0.tar.xz'
