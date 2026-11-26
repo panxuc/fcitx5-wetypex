@@ -2285,11 +2285,8 @@ class WeType : public InputMethodEngineV2 {
       } else
         voicePhase_.clear();
       panel(ic, s);
-      if (phase == "final" && !text.empty()) {
-        spacingBypass_ = true;
-        ic->commitString(text);
-        spacingBypass_ = false;
-      }
+      // voice_card.py pastes the final text, so it also lands where no input
+      // context is focused. Committing here would insert it a second time.
     } else
       panel(ic, s);
   }
@@ -2961,8 +2958,10 @@ class WeType : public InputMethodEngineV2 {
       s->initialPanelDeadline = 0;
     }
     Text aux;
+    // Live speech is drawn by voice_card.py. Leaving it in the candidate
+    // strip both fills the text field early and does not match WeChat.
     if (voice)
-      aux = Text("🎙 语音输入 " + std::string(voiceLevel_ / 12, '|'));
+      aux = Text();
     else if (s->vMenu != VMenu::None)
       aux = Text(s->vMenuTitle);
     else if (s->vCalculator)
@@ -2971,7 +2970,7 @@ class WeType : public InputMethodEngineV2 {
       aux = Text("空格打开快捷工具，继续输入英文或计算式；Enter 输入 v");
     ic->inputPanel().setAuxUp(aux);
     const std::string displayed =
-        voice ? voiceText_
+        voice ? std::string{}
         : !s->numericPreview.empty() ? s->numericPreview
         : englishPreedit ? s->englishWord
         : !s->displayPreedit.empty() ? s->displayPreedit
@@ -2997,13 +2996,7 @@ class WeType : public InputMethodEngineV2 {
     // to see the composition in the input panel.
     ic->inputPanel().setPreedit(inlinePreedit ? Text() : text);
     Text status;
-    if (voice)
-      status.append(voicePhase_ == "polishing"
-                        ? "正在整理… Enter 立即上屏 · Esc 取消"
-                    : voiceRecording_
-                        ? "正在聆听… 空格结束 · Esc 取消"
-                        : "正在识别… Enter 立即上屏 · Esc 取消");
-    else if (voiceSession_ == s->id && voiceStatusUntil_)
+    if (!voice && voiceSession_ == s->id && voiceStatusUntil_)
       status.append(voiceError_);
     else if (!englishPreedit && s->numericPreview.empty() &&
              !displayed.empty() && (failed_ || !ready_))

@@ -1011,6 +1011,31 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
+def ensure_voice_card():
+    if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
+        return
+    script = Path(__file__).with_name('voice_card.py')
+    if not script.is_file():
+        return
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pidfile = STATE / 'voice-card.pid'
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+        return
+    except (OSError, ValueError):
+        pass
+    process = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pidfile.write_text(str(process.pid))
+    pidfile.chmod(0o600)
+
+
 def serve():
     def terminate(_signum, _frame):
         raise KeyboardInterrupt
@@ -1023,6 +1048,7 @@ def serve():
             raise RuntimeError('输入法更新尚未恢复，请稍后重试')
     VOICE.mkdir(mode=0o700, parents=True, exist_ok=True)
     VOICE.chmod(0o700)
+    ensure_voice_card()
     with (VOICE / 'daemon.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
