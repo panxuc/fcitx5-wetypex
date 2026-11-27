@@ -302,13 +302,6 @@ class VoicePill:
             if geometry and geometry[0] > -800:
                 self.anchor = geometry
             subprocess.run(
-                [
-                    "xprop", "-id", window_id, "-f", "_NET_WM_WINDOW_OPACITY", "32c",
-                    "-set", "_NET_WM_WINDOW_OPACITY", "0",
-                ],
-                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            subprocess.run(
                 ["xdotool", "windowunmap", window_id],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -317,7 +310,11 @@ class VoicePill:
     def restore_fcitx_panel(self):
         for window_id in list(self.parked):
             subprocess.run(
-                ["xdotool", "windowunmap", window_id],
+                ["xprop", "-id", window_id, "-remove", "_NET_WM_WINDOW_OPACITY"],
+                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            subprocess.run(
+                ["xdotool", "windowmap", window_id],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         self.parked.clear()
