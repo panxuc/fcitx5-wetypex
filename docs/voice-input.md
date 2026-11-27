@@ -1,6 +1,6 @@
 # 流式语音输入
 
-WeTypeX 边录音边识别。PipeWire 或 PulseAudio 采集 16 kHz、单声道、16 位 PCM，Fcitx5 在当前输入框中显示预编辑并提交最终文字。在线、离线识别共用快捷键、麦克风、标点、取消和上屏流程。
+WeTypeX 边录音边识别。PipeWire 或 PulseAudio 采集 16 kHz、单声道、16 位 PCM。输入法自己的按住说话仍走本文后面的流程；F10 和 Ctrl+F11 是另一条路，不经过输入框，说明在[快捷键语音](voice-shortcut.md)。
 
 ## 选择识别方式
 
