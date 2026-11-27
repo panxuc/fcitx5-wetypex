@@ -23,6 +23,8 @@ static int width = 122, height = 42;
 static int visible = 0;
 static int use_argb = 0;
 static GC draw_gc = 0;
+static Window held_stream = 0;
+static unsigned long held_bypass = 1;
 
 static int x_error(Display *display, XErrorEvent *event) {
   (void)display;
@@ -56,6 +58,74 @@ static Visual *argb_visual(Display *display, int screen) {
   if (infos)
     XFree(infos);
   return visual;
+}
+
+static int class_has_moonlight(Display *display, Window win) {
+  XClassHint hint = {0};
+  if (!XGetClassHint(display, win, &hint))
+    return 0;
+  int match = (hint.res_class && strcasestr(hint.res_class, "moonlight")) ||
+              (hint.res_name && strcasestr(hint.res_name, "moonlight"));
+  if (hint.res_name)
+    XFree(hint.res_name);
+  if (hint.res_class)
+    XFree(hint.res_class);
+  return match;
+}
+
+static void consider_stream(Display *display, Window root, Window win) {
+  if (!class_has_moonlight(display, win))
+    return;
+  XWindowAttributes attrs;
+  if (!XGetWindowAttributes(display, win, &attrs) || attrs.map_state != IsViewable)
+    return;
+  if (attrs.width < 400 || attrs.height < 300)
+    return;
+  Atom bypass = XInternAtom(display, "_NET_WM_BYPASS_COMPOSITOR", False);
+  Atom actual = None;
+  int format = 0;
+  unsigned long n = 0, left = 0;
+  unsigned char *data = NULL;
+  unsigned long value = 1;
+  if (XGetWindowProperty(display, win, bypass, 0, 1, False, XA_CARDINAL, &actual, &format, &n, &left, &data) == Success && data) {
+    if (n)
+      value = *(unsigned long *)data;
+    XFree(data);
+  }
+  if (!held_stream) {
+    held_stream = win;
+    held_bypass = value;
+  }
+  if (value != 0) {
+    unsigned long off = 0;
+    XChangeProperty(display, win, bypass, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&off, 1);
+  }
+}
+
+static void walk_streams(Display *display, Window root, Window win, int depth) {
+  consider_stream(display, root, win);
+  if (depth <= 0)
+    return;
+  Window root_return, parent, *children = NULL;
+  unsigned count = 0;
+  if (!XQueryTree(display, win, &root_return, &parent, &children, &count))
+    return;
+  for (unsigned i = 0; i < count; i++)
+    walk_streams(display, root, children[i], depth - 1);
+  if (children)
+    XFree(children);
+}
+
+static void hold_stream(Display *display, int screen) {
+  walk_streams(display, RootWindow(display, screen), RootWindow(display, screen), 4);
+}
+
+static void release_stream(Display *display) {
+  if (!held_stream)
+    return;
+  Atom bypass = XInternAtom(display, "_NET_WM_BYPASS_COMPOSITOR", False);
+  XChangeProperty(display, held_stream, bypass, XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&held_bypass, 1);
+  held_stream = 0;
 }
 
 static void monitor_of_focus(Display *display, int screen, int *x, int *y, int *w, int *h) {
@@ -283,6 +353,7 @@ int main(void) {
       if (strcmp(line, "hide") == 0) {
         if (visible) {
           XUnmapWindow(display, window);
+          release_stream(display);
           XFlush(display);
           visible = 0;
         }
@@ -329,6 +400,7 @@ int main(void) {
     }
     if (!visible)
       continue;
+    hold_stream(display, screen);
     int origin_x = 0, origin_y = 0, area_w = 0, area_h = 0;
     monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
     int x = origin_x + (area_w - width) / 2;
