@@ -24,6 +24,17 @@ from gi.repository import Gdk, GLib, Gtk, Pango, PangoCairo
 
 DATA = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
 INBOX = DATA / "fcitx5-wetypex/state/voice-inbox.json"
+OVERLAY_BIN = next(
+    (
+        path
+        for path in (
+            Path(__file__).with_name("wetypex-voice-overlay"),
+            Path.home() / ".local/bin/wetypex-voice-overlay",
+        )
+        if path.is_file()
+    ),
+    None,
+)
 VOICE_STATES = ("recording", "recognizing", "polishing")
 _last_status = {}
 
@@ -197,6 +208,7 @@ class VoicePill:
         self.seen_token = ""
         self.pasted_token = ""
         self.suppress_until = 0
+        self.overlay = None
         self.pill_w = 160
         self.pill_h = 42
         self.outer_width = 176
@@ -236,14 +248,9 @@ class VoicePill:
             self.state = state
             self.text = text
             self.park_fcitx_panel()
-            self.resize_for_text()
-            self.place()
-            if not self.visible:
-                self.window.show_all()
-                self.visible = True
-                self.pass_clicks()
-            self.raise_card()
-            self.window.queue_draw()
+            self.visible = True
+            safe = text.replace("\t", " ").replace("\n", " ")
+            self.overlay_send("show\t%s\t%s\n" % (state or "recording", safe))
             return True
         if time.monotonic() < self.suppress_until:
             self.park_fcitx_panel()
@@ -342,9 +349,25 @@ class VoicePill:
         except (AttributeError, TypeError):
             pass
 
+    def overlay_send(self, line):
+        if OVERLAY_BIN is None:
+            return
+        if self.overlay is None or self.overlay.poll() is not None:
+            self.overlay = subprocess.Popen(
+                [str(OVERLAY_BIN)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        try:
+            self.overlay.stdin.write(line.encode())
+            self.overlay.stdin.flush()
+        except (OSError, BrokenPipeError):
+            self.overlay = None
+
     def hide_card(self):
         self.visible = False
-        self.window.hide()
+        self.overlay_send("hide\n")
         self.restore_fcitx_panel()
 
     def on_draw(self, _widget, cr):
