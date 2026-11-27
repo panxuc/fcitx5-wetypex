@@ -1,0 +1,11 @@
+[Unit]
+Description=WeTypeX voice overlay that records without a text field
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/wetypex-voice-pad serve
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

@@ -4,7 +4,9 @@
    A 32-bit window stays invisible when nothing is compositing. */
 #define _GNU_SOURCE
 #include <cairo/cairo.h>
+#include <cairo/cairo-ft.h>
 #include <cairo/cairo-xlib.h>
+#include <fontconfig/fontconfig.h>
 #include <locale.h>
 #include <math.h>
 #include <stdio.h>
@@ -12,6 +14,8 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/select.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -25,6 +29,10 @@ static int use_argb = 0;
 static GC draw_gc = 0;
 static Window held_stream = 0;
 static unsigned long held_bypass = 1;
+static double theme_bg[3] = {0x25 / 255.0, 0x25 / 255.0, 0x25 / 255.0};
+static double theme_text[3] = {0xee / 255.0, 0xee / 255.0, 0xee / 255.0};
+static double theme_accent[3] = {0x2b / 255.0, 0xd8 / 255.0, 0x9b / 255.0};
+static time_t theme_mtime = (time_t)-1;
 
 static int x_error(Display *display, XErrorEvent *event) {
   (void)display;
@@ -164,7 +172,12 @@ static void monitor_of_focus(Display *display, int screen, int *x, int *y, int *
 }
 
 static void apply_shape(Display *display, Window window) {
+  /* Capsule, same as just-talk: the corner radius is half the height. */
   int radius = height / 2;
+  if (radius > width / 2)
+    radius = width / 2;
+  if (radius < 1)
+    radius = 1;
   int stride = (width + 7) / 8;
   char *bits = calloc((size_t)stride * (size_t)height, 1);
   if (!bits)
@@ -174,11 +187,9 @@ static void apply_shape(Display *display, Window window) {
       int inside = 1;
       if (x < radius || x >= width - radius) {
         int cx = x < radius ? radius : width - radius - 1;
-        int cy = y < radius ? radius : (y >= height - radius ? height - radius - 1 : y);
-        if (y < radius || y >= height - radius) {
-          int dx = x - cx, dy = y - cy;
-          inside = dx * dx + dy * dy <= radius * radius;
-        }
+        int cy = y < height / 2 ? radius : height - radius - 1;
+        int dx = x - cx, dy = y - cy;
+        inside = dx * dx + dy * dy <= radius * radius;
       }
       if (inside)
         bits[y * stride + x / 8] |= (char)(1 << (x % 8));
@@ -205,56 +216,390 @@ static void rounded(cairo_t *cr, double x, double y, double w, double h, double 
   cairo_close_path(cr);
 }
 
-static void use_font(cairo_t *cr) {
-  cairo_select_font_face(cr, "Noto Sans CJK SC", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
-  cairo_set_font_size(cr, 14);
+/* Same size the candidate bar uses: the configured point size at Xft.dpi.
+   "Sans 13" at 144 DPI is 26 pixels, not 13. */
+static double font_px = 26;
+static char font_family[128] = "Sans";
+static cairo_font_face_t *font_face = NULL;
+static time_t font_mtime = (time_t)-1;
+
+static double screen_dpi(Display *display) {
+  double dpi = 96;
+  const char *resources = XResourceManagerString(display);
+  if (!resources)
+    return dpi;
+  const char *hit = strstr(resources, "Xft.dpi:");
+  if (!hit)
+    return dpi;
+  hit += strlen("Xft.dpi:");
+  while (*hit == ' ' || *hit == '\t')
+    hit++;
+  double value = strtod(hit, NULL);
+  if (value >= 72 && value <= 400)
+    return value;
+  return dpi;
 }
 
-static void measure(const char *text, int *text_w, int *text_h) {
-  *text_w = 0;
-  *text_h = 0;
-  if (!text || !text[0])
+/* Cairo's toy font API draws the same pixel size with a heavier stroke than
+   the Pango layout fcitx uses. A fontconfig face with slight hinting matches
+   that stroke. */
+static void build_font_face(void) {
+  if (font_face) {
+    cairo_font_face_destroy(font_face);
+    font_face = NULL;
+  }
+  FcInit();
+  FcPattern *pat = FcPatternCreate();
+  if (!pat)
     return;
+  FcPatternAddString(pat, FC_FAMILY, (const FcChar8 *)font_family);
+  FcPatternAddDouble(pat, FC_PIXEL_SIZE, font_px);
+  FcPatternAddBool(pat, FC_ANTIALIAS, FcTrue);
+  FcPatternAddInteger(pat, FC_HINT_STYLE, FC_HINT_SLIGHT);
+  FcPatternAddBool(pat, FC_HINTING, FcTrue);
+  FcCharSet *han = FcCharSetCreate();
+  if (han) {
+    FcCharSetAddChar(han, 0x4e2d);
+    FcPatternAddCharSet(pat, FC_CHARSET, han);
+    FcCharSetDestroy(han);
+  }
+  FcConfigSubstitute(NULL, pat, FcMatchPattern);
+  FcDefaultSubstitute(pat);
+  FcResult result;
+  FcPattern *match = FcFontMatch(NULL, pat, &result);
+  if (match) {
+    font_face = cairo_ft_font_face_create_for_pattern(match);
+    FcPatternDestroy(match);
+  }
+  FcPatternDestroy(pat);
+}
+
+static void load_font(Display *display) {
+  const char *home = getenv("HOME");
+  char path[512];
+  snprintf(path, sizeof path, "%s/.config/fcitx5/conf/classicui.conf", home ? home : "");
+  struct stat st;
+  int have = stat(path, &st) == 0;
+  if (have && st.st_mtime == font_mtime && font_face)
+    return;
+  font_mtime = have ? st.st_mtime : 0;
+  double pt = 13;
+  snprintf(font_family, sizeof font_family, "Sans");
+  FILE *file = fopen(path, "r");
+  if (file) {
+    char line[256];
+    while (fgets(line, sizeof line, file)) {
+      if (strncmp(line, "Font=", 5) != 0)
+        continue;
+      char *cursor = line + 5;
+      while (*cursor == ' ' || *cursor == '\t')
+        cursor++;
+      size_t n = strcspn(cursor, "\r\n");
+      while (n && (cursor[n - 1] == ' ' || cursor[n - 1] == '\t'))
+        n--;
+      char spec[128];
+      if (n >= sizeof spec)
+        n = sizeof spec - 1;
+      memcpy(spec, cursor, n);
+      spec[n] = 0;
+      char *size = spec + n;
+      while (size > spec && ((size[-1] >= '0' && size[-1] <= '9') || size[-1] == '.'))
+        size--;
+      if (size < spec + n && size > spec && size[-1] == ' ') {
+        double value = strtod(size, NULL);
+        if (value >= 8 && value <= 72)
+          pt = value;
+        size--;
+        while (size > spec && (size[-1] == ' ' || size[-1] == '\t'))
+          size--;
+        *size = 0;
+        if (spec[0])
+          snprintf(font_family, sizeof font_family, "%s", spec);
+      }
+    }
+    fclose(file);
+  }
+  font_px = pt * screen_dpi(display) / 72.0;
+  build_font_face();
+}
+
+static int parse_hex(const char *s, double out[3]) {
+  if (*s == '#')
+    s++;
+  unsigned value = 0;
+  for (int i = 0; i < 6; i++) {
+    char c = s[i];
+    int digit = -1;
+    if (c >= '0' && c <= '9')
+      digit = c - '0';
+    else if (c >= 'a' && c <= 'f')
+      digit = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F')
+      digit = c - 'A' + 10;
+    if (digit < 0)
+      return 0;
+    value = (value << 4) | (unsigned)digit;
+  }
+  out[0] = ((value >> 16) & 255) / 255.0;
+  out[1] = ((value >> 8) & 255) / 255.0;
+  out[2] = (value & 255) / 255.0;
+  return 1;
+}
+
+static void conf_color(const char *path, const char *key, double out[3]) {
+  FILE *file = fopen(path, "r");
+  if (!file)
+    return;
+  char line[256];
+  size_t key_len = strlen(key);
+  while (fgets(line, sizeof line, file)) {
+    if (strncmp(line, key, key_len) != 0 || line[key_len] != '=')
+      continue;
+    parse_hex(line + key_len + 1, out);
+  }
+  fclose(file);
+}
+
+static void load_panel(const char *path) {
+  FILE *file = fopen(path, "r");
+  if (!file)
+    return;
+  char buf[4096];
+  size_t n = fread(buf, 1, sizeof buf - 1, file);
+  fclose(file);
+  buf[n] = 0;
+  char *stroke = strstr(buf, "stroke=\"#");
+  if (!stroke)
+    return;
+  char *fill = NULL;
+  for (char *p = buf; p < stroke; p++) {
+    if (strncmp(p, "fill=\"#", 7) == 0)
+      fill = p;
+  }
+  if (fill)
+    parse_hex(fill + 6, theme_bg);
+}
+
+static int theme_path(const char *name, const char *file, char *out, size_t out_len) {
+  const char *home = getenv("HOME");
+  if (home) {
+    snprintf(out, out_len, "%s/.local/share/fcitx5/themes/%s/%s", home, name, file);
+    if (access(out, R_OK) == 0)
+      return 1;
+  }
+  snprintf(out, out_len, "/usr/share/fcitx5/themes/%s/%s", name, file);
+  return access(out, R_OK) == 0;
+}
+
+static void load_theme(void) {
+  const char *home = getenv("HOME");
+  char classic[512];
+  snprintf(classic, sizeof classic, "%s/.config/fcitx5/conf/classicui.conf", home ? home : "");
+  struct stat st;
+  if (stat(classic, &st) == 0 && st.st_mtime == theme_mtime)
+    return;
+  theme_mtime = stat(classic, &st) == 0 ? st.st_mtime : 0;
+  char theme_name[128] = "wetypex-dark";
+  char dark_name[128] = "wetypex-dark";
+  int follow = 0;
+  FILE *file = fopen(classic, "r");
+  if (file) {
+    char line[256];
+    while (fgets(line, sizeof line, file)) {
+      if (strncmp(line, "Theme=", 6) == 0)
+        sscanf(line + 6, "%127s", theme_name);
+      else if (strncmp(line, "DarkTheme=", 10) == 0)
+        sscanf(line + 10, "%127s", dark_name);
+      else if (strncmp(line, "UseDarkTheme=True", 17) == 0)
+        follow = 1;
+    }
+    fclose(file);
+  }
+  const char *name = theme_name;
+  if (follow) {
+    int dark = 0;
+    if (home) {
+      char gtk[512];
+      snprintf(gtk, sizeof gtk, "%s/.config/gtk-3.0/settings.ini", home);
+      FILE *settings = fopen(gtk, "r");
+      if (settings) {
+        char line[256];
+        while (fgets(line, sizeof line, settings))
+          if (strstr(line, "gtk-application-prefer-dark-theme") && strstr(line, "1"))
+            dark = 1;
+        fclose(settings);
+      }
+    }
+    if (dark)
+      name = dark_name;
+  }
+  char path[512];
+  if (theme_path(name, "theme.conf", path, sizeof path)) {
+    conf_color(path, "NormalColor", theme_text);
+    conf_color(path, "HighlightCandidateColor", theme_accent);
+  }
+  if (theme_path(name, "panel.svg", path, sizeof path))
+    load_panel(path);
+}
+
+static void use_font(cairo_t *cr) {
+  if (!font_face)
+    build_font_face();
+  if (font_face)
+    cairo_set_font_face(cr, font_face);
+  cairo_set_font_size(cr, font_px);
+}
+
+#define MAX_KEEP 3
+#define LINE_CAP 4096
+
+typedef struct {
+  char text[MAX_KEEP][LINE_CAP];
+  int count;
+  int text_w;
+  int text_h;
+  int line_h;
+  int ascent;
+} TextLayout;
+
+static TextLayout laid;
+
+static int codepoint_len(const unsigned char *s) {
+  if ((*s & 0x80) == 0)
+    return 1;
+  if ((*s & 0xe0) == 0xc0)
+    return 2;
+  if ((*s & 0xf0) == 0xe0)
+    return 3;
+  if ((*s & 0xf8) == 0xf0)
+    return 4;
+  return 1;
+}
+
+static void push_line(TextLayout *layout, const char *s, int n) {
+  if (n <= 0)
+    return;
+  if (n >= LINE_CAP)
+    n = LINE_CAP - 1;
+  if (layout->count == MAX_KEEP) {
+    memmove(layout->text[0], layout->text[1], (size_t)(MAX_KEEP - 1) * LINE_CAP);
+    layout->count = MAX_KEEP - 1;
+  }
+  memcpy(layout->text[layout->count], s, (size_t)n);
+  layout->text[layout->count][n] = 0;
+  layout->count++;
+}
+
+static int text_width(cairo_t *cr, const char *s) {
+  if (!s || !s[0])
+    return 0;
+  cairo_text_extents_t extents;
+  cairo_text_extents(cr, s, &extents);
+  int width_px = (int)(extents.x_advance + 0.5);
+  return width_px > 0 ? width_px : 0;
+}
+
+/* just-talk keeps the newest three wrapped lines and lets the older ones scroll off. */
+static void layout_text(const char *src, int max_w) {
+  memset(&laid, 0, sizeof laid);
   cairo_surface_t *surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 8, 8);
   cairo_t *cr = cairo_create(surface);
   use_font(cr);
-  cairo_text_extents_t extents;
-  cairo_text_extents(cr, text, &extents);
-  *text_w = (int)(extents.x_advance + 0.5);
-  if (*text_w > 464)
-    *text_w = 464;
-  *text_h = 18;
+  cairo_font_extents_t font;
+  cairo_font_extents(cr, &font);
+  laid.ascent = (int)(font.ascent + 0.5);
+  laid.line_h = (int)(font.height + font_px * 0.22 + 0.5);
+  if (laid.line_h < laid.ascent + 4)
+    laid.line_h = laid.ascent + 4;
+  if (src && src[0]) {
+    char current[LINE_CAP];
+    int current_n = 0;
+    const unsigned char *p = (const unsigned char *)src;
+    while (*p) {
+      if (*p == '\n' || *p == '\r') {
+        current[current_n] = 0;
+        push_line(&laid, current, current_n);
+        current_n = 0;
+        if (*p == '\r' && p[1] == '\n')
+          p++;
+        p++;
+        continue;
+      }
+      int n = codepoint_len(p);
+      char trial[LINE_CAP];
+      if (current_n + n >= LINE_CAP) {
+        current[current_n] = 0;
+        push_line(&laid, current, current_n);
+        current_n = 0;
+      }
+      memcpy(trial, current, (size_t)current_n);
+      memcpy(trial + current_n, p, (size_t)n);
+      trial[current_n + n] = 0;
+      if (current_n > 0 && text_width(cr, trial) > max_w) {
+        current[current_n] = 0;
+        push_line(&laid, current, current_n);
+        memcpy(current, p, (size_t)n);
+        current_n = n;
+      } else {
+        memcpy(current + current_n, p, (size_t)n);
+        current_n += n;
+      }
+      p += n;
+    }
+    current[current_n] = 0;
+    push_line(&laid, current, current_n);
+    for (int i = 0; i < laid.count; i++) {
+      int line_w = text_width(cr, laid.text[i]);
+      if (line_w > laid.text_w)
+        laid.text_w = line_w;
+    }
+  }
+  laid.text_h = laid.line_h * (laid.count > 0 ? laid.count : 1);
   cairo_destroy(cr);
   cairo_surface_destroy(surface);
 }
 
 static void draw_pill(cairo_t *cr, const char *state, const char *text, int opaque) {
+  (void)state;
+  /* just-talk draws one fill. A separate border sits inside the window edge,
+     so the right side shows the stroke and the window edge as two borders. */
   cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
   if (opaque) {
-    cairo_set_source_rgb(cr, 20 / 255.0, 20 / 255.0, 20 / 255.0);
+    cairo_set_source_rgb(cr, theme_bg[0], theme_bg[1], theme_bg[2]);
     cairo_paint(cr);
   } else {
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     rounded(cr, 0, 0, width, height, height / 2.0);
-    cairo_set_source_rgba(cr, 20 / 255.0, 20 / 255.0, 20 / 255.0, 215 / 255.0);
+    cairo_set_source_rgb(cr, theme_bg[0], theme_bg[1], theme_bg[2]);
     cairo_fill(cr);
   }
-  if (state && strcmp(state, "recording") == 0)
-    cairo_set_source_rgb(cr, 1, 65 / 255.0, 65 / 255.0);
-  else if (state && strcmp(state, "polishing") == 0)
-    cairo_set_source_rgb(cr, 1, 140 / 255.0, 60 / 255.0);
-  else
-    cairo_set_source_rgb(cr, 1, 160 / 255.0, 70 / 255.0);
-  cairo_arc(cr, 21, height / 2.0, 7, 0, 2 * M_PI);
+  cairo_set_source_rgb(cr, theme_accent[0], theme_accent[1], theme_accent[2]);
+  double pad = font_px * 0.7;
+  if (pad < 6)
+    pad = 6;
+  double dot = font_px * 0.22;
+  if (dot < 3.5)
+    dot = 3.5;
+  cairo_arc(cr, pad + dot, height / 2.0, dot, 0, 2 * M_PI);
   cairo_fill(cr);
-  if (text && text[0]) {
+  if (laid.count > 0) {
     use_font(cr);
-    cairo_set_source_rgb(cr, 245 / 255.0, 245 / 255.0, 245 / 255.0);
-    cairo_move_to(cr, 42, height / 2.0 + 5);
-    cairo_show_text(cr, text);
+    cairo_set_source_rgb(cr, theme_text[0], theme_text[1], theme_text[2]);
+    double x = pad + dot * 2 + font_px * 0.45;
+    double block = laid.line_h * laid.count;
+    double top = (height - block) / 2.0;
+    if (top < pad * 0.35)
+      top = pad * 0.35;
+    double y = top + laid.ascent;
+    for (int i = 0; i < laid.count; i++) {
+      cairo_move_to(cr, x, y);
+      cairo_show_text(cr, laid.text[i]);
+      y += laid.line_h;
+    }
   }
+  (void)text;
 }
 
 static void paint(Display *display, Window window, Visual *visual, const char *state, const char *text) {
@@ -367,51 +712,66 @@ int main(void) {
           snprintf(state, sizeof state, "%s", line + 5);
           text[0] = 0;
         }
-        int text_w = 0, text_h = 0;
-        measure(text, &text_w, &text_h);
-        int next_w = text[0] ? text_w + 56 : 122;
-        int next_h = text[0] ? text_h + 28 : 42;
-        if (next_w < 122)
-          next_w = 122;
-        if (next_w > 520)
-          next_w = 520;
-        if (next_h < 42)
-          next_h = 42;
+        load_font(display);
+        load_theme();
+        int max_text_w = (int)(font_px * 18);
+        if (max_text_w < 180)
+          max_text_w = 180;
+        if (max_text_w > 640)
+          max_text_w = 640;
+        layout_text(text, max_text_w);
+        double pad = font_px * 0.7;
+        if (pad < 6)
+          pad = 6;
+        double dot = font_px * 0.46;
+        if (dot < 8)
+          dot = 8;
+        double gap = font_px * 0.4;
+        int chrome = (int)(pad * 2 + dot + gap);
+        int next_w = chrome + (text[0] ? laid.text_w : (int)(font_px * 2.2));
+        int next_h = laid.text_h + (int)(pad * 1.15);
+        if (text[0] && (laid.count > 1 || laid.text_w > max_text_w - (int)font_px))
+          next_w = chrome + max_text_w;
+        if (next_w < chrome + 40)
+          next_w = chrome + 40;
+        if (next_h < (int)(font_px + pad))
+          next_h = (int)(font_px + pad);
         int resized = next_w != width || next_h != height;
         if (resized) {
           width = next_w;
           height = next_h;
-          XResizeWindow(display, window, (unsigned)width, (unsigned)height);
-          if (!use_argb)
-            apply_shape(display, window);
         }
         /* just-talk maps once. Mapping again on every update makes Mutter
            drop the window under Moonlight's unredirected stream. */
         int first = !visible;
         visible = 1;
+        if (first)
+          hold_stream(display, screen);
+        int origin_x = 0, origin_y = 0, area_w = 0, area_h = 0;
+        monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
+        int x = origin_x + (area_w - width) / 2;
+        int y = origin_y + area_h - height - 100;
+        if (x < origin_x)
+          x = origin_x;
+        if (y < origin_y)
+          y = origin_y;
+        XWindowChanges changes;
+        changes.x = x;
+        changes.y = y;
+        changes.width = width;
+        changes.height = height;
+        XConfigureWindow(display, window, CWX | CWY | CWWidth | CWHeight, &changes);
+        if (resized && !use_argb) {
+          apply_shape(display, window);
+          XClearWindow(display, window);
+        }
         if (first) {
           XMapRaised(display, window);
           XChangeProperty(display, window, wm_state, wm_state, 32, PropModeReplace, (unsigned char *)withdrawn, 2);
-        } else {
-          XRaiseWindow(display, window);
         }
         paint(display, window, visual, state, text);
       }
     }
-    if (!visible)
-      continue;
-    hold_stream(display, screen);
-    int origin_x = 0, origin_y = 0, area_w = 0, area_h = 0;
-    monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
-    int x = origin_x + (area_w - width) / 2;
-    int y = origin_y + area_h - height - 100;
-    if (x < origin_x)
-      x = origin_x;
-    if (y < origin_y)
-      y = origin_y;
-    XMoveWindow(display, window, x, y);
-    XRaiseWindow(display, window);
-    XFlush(display);
   }
   XCloseDisplay(display);
   return 0;

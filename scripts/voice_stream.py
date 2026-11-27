@@ -756,6 +756,8 @@ class Service:
                                limit_reached=job.limit_reached,
                                truncated=job.limit_reached and bool(job.request.get('file')),
                                timings=dict(job.timing), **extra)
+            if job.request.get('source'):
+                self.latest['source'] = str(job.request.get('source'))
             self.last_activity = time.monotonic()
             self.last_native_activity = self.last_activity
             if job.session:
@@ -848,8 +850,8 @@ class Service:
                 text = punctuation(event.get('text', ''), job.config.get('voice_punctuation', '智能标点'))
                 if job.stopped_at is not None:
                     job.timing['stop_to_final_ms'] = round((time.monotonic() - job.stopped_at) * 1000)
-                self.publish(job, 'final' if text else 'error', text,
-                             error='' if text else (job.error or '没有识别到语音'),
+                self.publish(job, 'final' if text else ('error' if job.error else 'cancelled'), text,
+                             error='' if text else job.error,
                              reason='duration_limit' if job.limit_reached else event.get('reason'))
                 job.done.set()
                 # The focused input context acknowledges an accepted final
@@ -1197,6 +1199,8 @@ def main():
                        epoch=int(args[1]) if len(args) > 1 else 0,
                        token=args[2] if len(args) > 2 else uuid.uuid4().hex,
                        traditional=options.traditional or (len(args) > 3 and args[3] == '1'), pid=os.getppid())
+        if os.environ.get('WETYPE_VOICE_SOURCE'):
+            request['source'] = os.environ['WETYPE_VOICE_SOURCE']
         stamp = request['token'].split('-', 1)
         if request['session'] and len(stamp) == 2 and all(part.isdigit() for part in stamp):
             # A helper can be reparented before Python starts. The input

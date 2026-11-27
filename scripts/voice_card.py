@@ -239,6 +239,10 @@ class VoicePill:
 
     def update(self):
         status = voice_status()
+        if status.get("source") == "pad":
+            if self.visible or self.parked:
+                self.hide_card()
+            return True
         state = status.get("state") or ""
         token = str(status.get("token") or "")
         text = (status.get("text") or "").strip()
