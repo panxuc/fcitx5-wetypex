@@ -756,6 +756,8 @@ class Service:
                                limit_reached=job.limit_reached,
                                truncated=job.limit_reached and bool(job.request.get('file')),
                                timings=dict(job.timing), **extra)
+            if job.request.get('source'):
+                self.latest['source'] = str(job.request.get('source'))
             self.last_activity = time.monotonic()
             self.last_native_activity = self.last_activity
             if job.session:
@@ -848,8 +850,8 @@ class Service:
                 text = punctuation(event.get('text', ''), job.config.get('voice_punctuation', '智能标点'))
                 if job.stopped_at is not None:
                     job.timing['stop_to_final_ms'] = round((time.monotonic() - job.stopped_at) * 1000)
-                self.publish(job, 'final' if text else 'error', text,
-                             error='' if text else (job.error or '没有识别到语音'),
+                self.publish(job, 'final' if text else ('error' if job.error else 'cancelled'), text,
+                             error='' if text else job.error,
                              reason='duration_limit' if job.limit_reached else event.get('reason'))
                 job.done.set()
                 # The focused input context acknowledges an accepted final
@@ -1011,6 +1013,31 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
 
 
+def ensure_voice_card():
+    if not os.environ.get('DISPLAY') and not os.environ.get('WAYLAND_DISPLAY'):
+        return
+    script = Path(__file__).with_name('voice_card.py')
+    if not script.is_file():
+        return
+    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pidfile = STATE / 'voice-card.pid'
+    try:
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
+        return
+    except (OSError, ValueError):
+        pass
+    process = subprocess.Popen(
+        [sys.executable, str(script)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pidfile.write_text(str(process.pid))
+    pidfile.chmod(0o600)
+
+
 def serve():
     def terminate(_signum, _frame):
         raise KeyboardInterrupt
@@ -1023,6 +1050,7 @@ def serve():
             raise RuntimeError('输入法更新尚未恢复，请稍后重试')
     VOICE.mkdir(mode=0o700, parents=True, exist_ok=True)
     VOICE.chmod(0o700)
+    ensure_voice_card()
     with (VOICE / 'daemon.lock').open('a') as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1171,6 +1199,8 @@ def main():
                        epoch=int(args[1]) if len(args) > 1 else 0,
                        token=args[2] if len(args) > 2 else uuid.uuid4().hex,
                        traditional=options.traditional or (len(args) > 3 and args[3] == '1'), pid=os.getppid())
+        if os.environ.get('WETYPE_VOICE_SOURCE'):
+            request['source'] = os.environ['WETYPE_VOICE_SOURCE']
         stamp = request['token'].split('-', 1)
         if request['session'] and len(stamp) == 2 and all(part.isdigit() for part in stamp):
             # A helper can be reparented before Python starts. The input

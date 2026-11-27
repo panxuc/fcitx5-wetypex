@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""Ctrl+F11 dictation that talks to the WeTypeX voice service directly.
+
+The first trigger starts recording. The second one stops it. Text stays in
+the bottom overlay until the result is ready, then it is copied and pasted.
+Nothing here focuses a text field or asks Fcitx to draw its own panel, so it
+works inside Moonlight the same way it works everywhere else.
+"""
+
+import json
+import os
+import select
+import socket
+import subprocess
+import sys
+import threading
+import time
+
+
+def _session_defaults():
+    uid = os.getuid()
+    runtime = os.environ.get("XDG_RUNTIME_DIR") or "/run/user/{}".format(uid)
+    os.environ.setdefault("DISPLAY", ":0")
+    os.environ.setdefault("DBUS_SESSION_BUS_ADDRESS", "unix:path={}/bus".format(runtime))
+    if os.environ.get("XAUTHORITY"):
+        return
+    for path in ("{}/gdm/Xauthority".format(runtime), os.path.expanduser("~/.Xauthority")):
+        if os.path.exists(path):
+            os.environ["XAUTHORITY"] = path
+            return
+
+
+_session_defaults()
+
+SOCK = os.path.expanduser("~/.local/share/fcitx5-wetypex/voice-pad.sock")
+
+
+def overlay_bin():
+    here = os.path.dirname(os.path.realpath(__file__))
+    candidates = [
+        os.environ.get("WETYPE_VOICE_OVERLAY", ""),
+        os.path.join(here, "wetypex-voice-overlay"),
+        os.path.expanduser("~/.local/bin/wetypex-voice-overlay"),
+        "/usr/share/fcitx5-wetypex/wetypex-voice-overlay",
+    ]
+    for path in candidates:
+        if path and os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return os.path.expanduser("~/.local/bin/wetypex-voice-overlay")
+
+
+INBOX = os.path.expanduser("~/.local/share/fcitx5-wetypex/state/voice-inbox.json")
+LOG = os.path.expanduser("~/.local/share/fcitx5-wetypex/voice-pad.log")
+VOICE = "fcitx5-wetypex-voice"
+# Non-zero so the daemon writes this session into the inbox. The input method
+# ignores it because the token belongs to this process, not to Fcitx.
+SESSION = "1"
+
+
+def log(message):
+    try:
+        os.makedirs(os.path.dirname(LOG), mode=0o700, exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as handle:
+            handle.write(time.strftime("%H:%M:%S ") + message + "\n")
+    except OSError:
+        pass
+
+
+def read_inbox():
+    try:
+        with open(INBOX, encoding="utf-8") as handle:
+            data = json.load(handle)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def active_window():
+    try:
+        return subprocess.check_output(["xdotool", "getactivewindow"], text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+
+
+def window_class(window_id):
+    if not window_id:
+        return ""
+    try:
+        props = subprocess.check_output(["xprop", "-id", window_id, "WM_CLASS"], text=True)
+    except (OSError, subprocess.CalledProcessError):
+        return ""
+    return props.rsplit('"', 2)[-2] if '"' in props else ""
+
+
+def active_class():
+    return window_class(active_window())
+
+
+def voice_cli(command, token):
+    argv = [VOICE, command]
+    if command == "start":
+        argv += [SESSION, "1", token]
+    else:
+        argv += [token]
+    env = os.environ.copy()
+    env["WETYPE_VOICE_SOURCE"] = "pad"
+    return subprocess.run(argv, capture_output=True, text=True, timeout=8, env=env)
+
+
+def voice_request(payload):
+    """Talk to the already-running voice daemon. Spawning the CLI costs about 60ms."""
+    path = os.path.expanduser("~/.local/share/fcitx5-wetypex/state/voice/control.json")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            address = json.load(handle).get("address") or ""
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not address:
+        return None
+    client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    client.settimeout(2)
+    try:
+        client.connect("\0" + address)
+        client.sendall((json.dumps(payload) + "\n").encode())
+        data = b""
+        while b"\n" not in data:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+        line = data.split(b"\n", 1)[0]
+        return json.loads(line) if line else None
+    except (OSError, json.JSONDecodeError):
+        return None
+    finally:
+        client.close()
+
+
+def sync_clipboard(text):
+    try:
+        subprocess.run(
+            ["fcitx5-wetypex-clipboard-set"],
+            input=text.encode(),
+            timeout=1,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def paste_text(text, window_id="", moonlight=None):
+    text = text.strip()
+    if not text:
+        return
+    holders = []
+    for selection in ("clipboard", "primary"):
+        try:
+            holders.append(subprocess.Popen(
+                ["xclip", "-selection", selection, "-quiet"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            ))
+            holders[-1].stdin.write(text.encode())
+            holders[-1].stdin.close()
+        except OSError:
+            pass
+    if moonlight is None:
+        moonlight = "moonlight" in window_class(window_id or active_window()).lower()
+    # Moonlight already owns the keyboard. Activating it again drops that grab,
+    # and --clearmodifiers inserts extra key-ups that break its shortcut.
+    if window_id and not moonlight and active_window() != window_id:
+        subprocess.run(
+            ["xdotool", "windowactivate", "--sync", window_id],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    key = "ctrl+alt+shift+v" if moonlight else "shift+Insert"
+    subprocess.run(
+        ["xdotool", "key", key],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    time.sleep(0.3)
+    threading.Thread(target=sync_clipboard, args=(text,), daemon=True).start()
+    for holder in holders:
+        if holder.poll() is None:
+            holder.kill()
+            holder.wait()
+
+
+class Overlay:
+    def __init__(self):
+        self.process = None
+        self.shown = None
+
+    def send(self, line):
+        if self.process is None or self.process.poll() is not None:
+            try:
+                self.process = subprocess.Popen(
+                    [overlay_bin()],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except OSError as error:
+                log("overlay failed: {}".format(error))
+                self.process = None
+                self.shown = None
+                return
+        try:
+            self.process.stdin.write(line.encode())
+            self.process.stdin.flush()
+        except (OSError, AttributeError):
+            self.process = None
+            self.shown = None
+
+    def show(self, state, text):
+        clean = " ".join((text or "").split())
+        key = (state or "recording", clean)
+        if key == self.shown:
+            return
+        self.shown = key
+        self.send("show\t{}\t{}\n".format(key[0], clean))
+
+    def hide(self):
+        if self.shown is None and self.process is None:
+            return
+        self.shown = None
+        self.send("hide\n")
+
+
+class Session:
+    def __init__(self):
+        self.overlay = Overlay()
+        self.token = None
+        self.started = 0
+        self.ending = 0
+        self.last_toggle = 0
+        self.target = ""
+        self.moonlight = False
+        self.pasted = set()
+
+    def toggle(self):
+        now = time.monotonic()
+        if now - self.last_toggle < 0.35:
+            return
+        self.last_toggle = now
+        if self.token is not None:
+            self.end()
+            return
+        self.start()
+
+    def start(self):
+        token = "{}-{}".format(os.getpid(), int(time.monotonic() * 1000000))
+        self.token = token
+        self.started = time.monotonic()
+        self.target = active_window()
+        self.moonlight = "moonlight" in window_class(self.target).lower()
+        self.overlay.show("recording", "")
+        reply = voice_request({
+            "op": "start",
+            "session": int(SESSION),
+            "epoch": 1,
+            "token": token,
+            "pid": os.getpid(),
+            "source": "pad",
+        })
+        if reply is not None:
+            if reply.get("ok", True):
+                return
+            log("start rejected: {}".format(reply.get("error") or reply))
+            self.give_up()
+            return
+        try:
+            result = voice_cli("start", token)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log("start failed: {}".format(error))
+            self.give_up()
+            return
+        if result.returncode != 0:
+            log("start rejected: {}".format((result.stdout or result.stderr).strip()))
+            self.give_up()
+
+    def end(self):
+        token = self.token
+        if not token or self.ending:
+            return
+        # Stop the microphone and let the engine polish. The pill stays up
+        # until that polished final is published, then it is pasted once.
+        self.ending = time.monotonic()
+        threading.Thread(target=self.stop_voice, args=(token,), daemon=True).start()
+
+    def stop_voice(self, token):
+        if voice_request({"op": "stop", "token": token}) is not None:
+            return
+        try:
+            voice_cli("stop", token)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            log("stop failed: {}".format(error))
+
+    def give_up(self):
+        self.token = None
+        self.ending = 0
+        self.overlay.hide()
+
+    def commit(self, text):
+        token = self.token
+        window = self.target
+        self.token = None
+        self.ending = 0
+        self.overlay.hide()
+        if token and text.strip() and token not in self.pasted:
+            self.pasted.add(token)
+            threading.Thread(
+                target=paste_text, args=(text, window, self.moonlight), daemon=True
+            ).start()
+
+    def tick(self):
+        token = self.token
+        if not token:
+            return
+        status = read_inbox()
+        if status.get("token") != token:
+            now = time.monotonic()
+            if self.ending and now - self.ending > 8:
+                self.give_up()
+            elif not self.ending and now - self.started > 8:
+                log("no status for {}".format(token))
+                self.give_up()
+            return
+        state = status.get("state") or ""
+        text = status.get("text") or ""
+        if self.ending:
+            waited = time.monotonic() - self.ending
+            if state == "final" or waited >= 8:
+                if text.strip():
+                    self.commit(text)
+                else:
+                    self.give_up()
+                return
+            if state in ("error", "cancelled"):
+                self.give_up()
+                return
+        if state in ("recording", "recognizing", "polishing"):
+            shown = "recognizing" if state == "recognizing" else state
+            self.overlay.show(shown, text)
+            return
+        if state == "final":
+            self.commit(text)
+            return
+        if state in ("error", "cancelled"):
+            log("{} {}".format(state, status.get("error") or ""))
+            self.give_up()
+
+
+def serve():
+    os.makedirs(os.path.dirname(SOCK), mode=0o700, exist_ok=True)
+    try:
+        os.remove(SOCK)
+    except FileNotFoundError:
+        pass
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(SOCK)
+    os.chmod(SOCK, 0o600)
+    server.listen(4)
+    server.setblocking(False)
+    session = Session()
+    log("ready pid={}".format(os.getpid()))
+    while True:
+        # While a sentence is in flight, wake often enough that the paste is
+        # not sitting behind a 50ms poll after the engine writes the result.
+        timeout = 0.01 if session.token else 0.05
+        ready, _, _ = select.select([server], [], [], timeout)
+        if ready:
+            connection, _address = server.accept()
+            try:
+                data = connection.recv(64)
+                if data.startswith(b"trigger"):
+                    session.toggle()
+                    connection.sendall(b"ok\n")
+                else:
+                    connection.sendall(b"no\n")
+            finally:
+                connection.close()
+        session.tick()
+
+
+def trigger():
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(1)
+            client.connect(SOCK)
+            client.sendall(b"trigger\n")
+            client.recv(16)
+            return
+        except (OSError, socket.timeout):
+            time.sleep(0.05)
+    script = os.path.abspath(__file__)
+    subprocess.Popen(
+        [script, "serve"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    time.sleep(0.3)
+    try:
+        client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        client.settimeout(1)
+        client.connect(SOCK)
+        client.sendall(b"trigger\n")
+        client.recv(16)
+    except OSError as error:
+        log("trigger failed: {}".format(error))
+
+
+def main():
+    command = sys.argv[1] if len(sys.argv) > 1 else "trigger"
+    if command == "serve":
+        serve()
+    elif command == "trigger":
+        trigger()
+    else:
+        sys.stderr.write("usage: wetypex-voice-pad [trigger|serve]\n")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
