@@ -56,6 +56,33 @@ def display_size():
         return 1920, 1080
 
 
+def monitor_rect():
+    """Monitor that contains the focused window, same placement just-talk uses."""
+    display = Gdk.Display.get_default()
+    geo = None
+    try:
+        window_id = subprocess.check_output(["xdotool", "getactivewindow"], text=True).strip()
+        geo = window_geometry(window_id)
+    except (OSError, subprocess.CalledProcessError):
+        geo = None
+    if geo:
+        cx, cy = geo[0] + geo[2] // 2, geo[1] + geo[3] // 2
+    else:
+        cx, cy = 0, 0
+    monitor = None
+    try:
+        monitor = display.get_monitor_at_point(cx, cy)
+    except Exception:
+        monitor = None
+    if monitor is None and display.get_n_monitors():
+        monitor = display.get_monitor(0)
+    if monitor is None:
+        width, height = display_size()
+        return 0, 0, width, height
+    rect = monitor.get_geometry()
+    return rect.x, rect.y, rect.width, rect.height
+
+
 def window_geometry(window_id):
     try:
         raw = subprocess.check_output(["xdotool", "getwindowgeometry", window_id], text=True)
@@ -150,7 +177,7 @@ class VoicePill:
         self.pill_h = 42
         self.outer_width = 176
         self.outer_height = 58
-        self.window = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
+        self.window = Gtk.Window(type=Gtk.WindowType.POPUP)
         self.window.set_decorated(False)
         self.window.set_keep_above(True)
         self.window.set_skip_taskbar_hint(True)
@@ -166,7 +193,7 @@ class VoicePill:
             self.window.set_visual(visual)
         self.window.set_default_size(self.outer_width, self.outer_height)
         self.window.connect("draw", self.on_draw)
-        self.window.connect("realize", lambda *_args: self.pass_clicks())
+        self.window.connect("realize", self.on_realize)
 
     def tick(self):
         try:
@@ -221,10 +248,18 @@ class VoicePill:
             self.outer_width, self.outer_height = outer_w, outer_h
             self.window.resize(outer_w, outer_h)
 
+    def on_realize(self, widget):
+        gdk_window = widget.get_window()
+        if gdk_window is not None:
+            gdk_window.set_override_redirect(True)
+        self.pass_clicks()
+
     def place(self):
-        screen_w, screen_h = display_size()
-        x = max(8, (screen_w - self.outer_width) // 2)
-        y = max(8, screen_h - self.outer_height - 100)
+        origin_x, origin_y, width, height = monitor_rect()
+        x = origin_x + max(0, (width - self.outer_width) // 2)
+        y = origin_y + height - self.outer_height - 100
+        if y < origin_y:
+            y = origin_y
         self.window.move(x, y)
 
     def park_fcitx_panel(self):
