@@ -83,6 +83,29 @@ def monitor_rect():
     return rect.x, rect.y, rect.width, rect.height
 
 
+def moonlight_rect():
+    """Visible Moonlight stream, so the pill sits inside the picture."""
+    try:
+        ids = subprocess.check_output(["xdotool", "search", "--class", "moonlight"], text=True).split()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    best = None
+    for window_id in ids:
+        geo = window_geometry(window_id)
+        if not geo:
+            continue
+        x, y, width, height = geo
+        if width < 400 or height < 300:
+            continue
+        info = subprocess.run(["xwininfo", "-id", window_id], capture_output=True, text=True)
+        if "IsViewable" not in info.stdout:
+            continue
+        area = width * height
+        if best is None or area > best[0]:
+            best = (area, x, y, width, height)
+    return None if best is None else best[1:]
+
+
 def window_geometry(window_id):
     try:
         raw = subprocess.check_output(["xdotool", "getwindowgeometry", window_id], text=True)
@@ -259,7 +282,11 @@ class VoicePill:
         self.pass_clicks()
 
     def place(self):
-        origin_x, origin_y, width, height = monitor_rect()
+        stream = moonlight_rect()
+        if stream:
+            origin_x, origin_y, width, height = stream
+        else:
+            origin_x, origin_y, width, height = monitor_rect()
         x = origin_x + max(0, (width - self.outer_width) // 2)
         y = origin_y + height - self.outer_height - 100
         if y < origin_y:
