@@ -289,11 +289,7 @@ class VoicePill:
         self.pass_clicks()
 
     def place(self):
-        stream = moonlight_rect()
-        if stream:
-            origin_x, origin_y, width, height = stream
-        else:
-            origin_x, origin_y, width, height = monitor_rect()
+        origin_x, origin_y, width, height = monitor_rect()
         x = origin_x + max(0, (width - self.outer_width) // 2)
         y = origin_y + height - self.outer_height - 100
         if y < origin_y:

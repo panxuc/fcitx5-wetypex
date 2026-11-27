@@ -58,55 +58,6 @@ static Visual *argb_visual(Display *display, int screen) {
   return visual;
 }
 
-static void consider_moonlight(Display *display, Window root, Window win, int *best, int *x, int *y, int *w, int *h) {
-  XClassHint hint = {0};
-  if (!XGetClassHint(display, win, &hint))
-    return;
-  int match = (hint.res_class && strcasestr(hint.res_class, "moonlight")) ||
-              (hint.res_name && strcasestr(hint.res_name, "moonlight"));
-  if (hint.res_name)
-    XFree(hint.res_name);
-  if (hint.res_class)
-    XFree(hint.res_class);
-  if (!match)
-    return;
-  XWindowAttributes attrs;
-  if (!XGetWindowAttributes(display, win, &attrs) || attrs.map_state != IsViewable)
-    return;
-  if (attrs.width < 400 || attrs.height < 300)
-    return;
-  if (attrs.width * attrs.height <= *best)
-    return;
-  Window child = 0;
-  int abs_x = 0, abs_y = 0;
-  XTranslateCoordinates(display, win, root, 0, 0, &abs_x, &abs_y, &child);
-  *best = attrs.width * attrs.height;
-  *x = abs_x;
-  *y = abs_y;
-  *w = attrs.width;
-  *h = attrs.height;
-}
-
-static void walk_moonlight(Display *display, Window root, Window win, int depth, int *best, int *x, int *y, int *w, int *h) {
-  consider_moonlight(display, root, win, best, x, y, w, h);
-  if (depth <= 0)
-    return;
-  Window root_return, parent, *children = NULL;
-  unsigned count = 0;
-  if (!XQueryTree(display, win, &root_return, &parent, &children, &count))
-    return;
-  for (unsigned i = 0; i < count; i++)
-    walk_moonlight(display, root, children[i], depth - 1, best, x, y, w, h);
-  if (children)
-    XFree(children);
-}
-
-static int moonlight_rect(Display *display, int screen, int *x, int *y, int *w, int *h) {
-  int best = 0;
-  walk_moonlight(display, RootWindow(display, screen), RootWindow(display, screen), 3, &best, x, y, w, h);
-  return best > 0;
-}
-
 static void monitor_of_focus(Display *display, int screen, int *x, int *y, int *w, int *h) {
   *x = 0;
   *y = 0;
@@ -368,8 +319,7 @@ int main(void) {
     if (!visible)
       continue;
     int origin_x = 0, origin_y = 0, area_w = 0, area_h = 0;
-    if (!moonlight_rect(display, screen, &origin_x, &origin_y, &area_w, &area_h))
-      monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
+    monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
     int x = origin_x + (area_w - width) / 2;
     int y = origin_y + area_h - height - 100;
     if (x < origin_x)
