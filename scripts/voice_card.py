@@ -173,6 +173,7 @@ class VoicePill:
         self.parked = set()
         self.seen_token = ""
         self.pasted_token = ""
+        self.suppress_until = 0
         self.pill_w = 160
         self.pill_h = 42
         self.outer_width = 176
@@ -207,6 +208,7 @@ class VoicePill:
         token = str(status.get("token") or "")
         text = (status.get("text") or "").strip()
         if state in VOICE_STATES:
+            self.suppress_until = time.monotonic() + 1.5
             self.seen_token = token
             self.state = state
             self.text = text
@@ -220,6 +222,8 @@ class VoicePill:
             self.raise_card()
             self.window.queue_draw()
             return True
+        if time.monotonic() < self.suppress_until:
+            self.park_fcitx_panel()
         if state == "final" and text and token and token == self.seen_token and token != self.pasted_token:
             self.pasted_token = token
             self.hide_card()
@@ -275,21 +279,15 @@ class VoicePill:
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             subprocess.run(
-                ["xdotool", "windowmove", window_id, "-3000", "-3000"],
+                ["xdotool", "windowunmap", window_id],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             self.parked.add(window_id)
 
     def restore_fcitx_panel(self):
-        anchor = getattr(self, "anchor", None)
         for window_id in list(self.parked):
-            if anchor:
-                subprocess.run(
-                    ["xdotool", "windowmove", window_id, str(anchor[0]), str(anchor[1])],
-                    check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                )
             subprocess.run(
-                ["xprop", "-id", window_id, "-remove", "_NET_WM_WINDOW_OPACITY"],
+                ["xdotool", "windowunmap", window_id],
                 check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
         self.parked.clear()
