@@ -260,7 +260,10 @@ int main(void) {
   draw_gc = XCreateGC(display, window, 0, NULL);
   XSelectInput(display, window, 0);
   XShapeCombineRectangles(display, window, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
-  XStoreName(display, window, "wetypex-voice-card");
+  /* Same withdrawn state Mutter records for the just-talk overlay. */
+  Atom wm_state = XInternAtom(display, "WM_STATE", False);
+  unsigned long withdrawn[2] = {0, 0};
+  XChangeProperty(display, window, wm_state, wm_state, 32, PropModeReplace, (unsigned char *)withdrawn, 2);
 
   char line[8192];
   char state[64] = "recording";
@@ -311,8 +314,16 @@ int main(void) {
           if (!use_argb)
             apply_shape(display, window);
         }
+        /* just-talk maps once. Mapping again on every update makes Mutter
+           drop the window under Moonlight's unredirected stream. */
+        int first = !visible;
         visible = 1;
-        XMapRaised(display, window);
+        if (first) {
+          XMapRaised(display, window);
+          XChangeProperty(display, window, wm_state, wm_state, 32, PropModeReplace, (unsigned char *)withdrawn, 2);
+        } else {
+          XRaiseWindow(display, window);
+        }
         paint(display, window, visual, state, text);
       }
     }
