@@ -6,7 +6,7 @@
 
 ## 使用时会发生什么
 
-按 `F10`，或按 `Ctrl+F11`。两次按键做的是同一件事。
+按 `Ctrl+F11`。再按一次做的是结束，不是另一条命令。
 
 1. 第一次按下开始录音。屏幕底部正中出现一条胶囊形悬浮条，此时条里还没有字。
 2. 说话期间，识别出的文字只写在这条悬浮条上，不写进当前输入框，也不走输入法候选条。这就是不做「边说边上屏」。
@@ -58,7 +58,7 @@
 
 | 部分 | 改动 |
 | --- | --- |
-| `scripts/wetypex-voice-pad` | 新增。响应 F10 / Ctrl+F11，显示悬浮条，整理完成后粘贴一次 |
+| `scripts/wetypex-voice-pad` | 新增。响应 Ctrl+F11，显示悬浮条，整理完成后粘贴一次 |
 | `scripts/wetypex-voice-overlay.c` | 胶囊条、主题色、与候选条相同的字体粗细，不再描边 |
 | `scripts/voice_stream.py` | 没识别到内容时记为取消，错误文字留空；快捷键录音带上来源标记 |
 | `scripts/voice_card.py` | 遇到快捷键录音时不显示、不粘贴，避免和悬浮条各贴一次 |
@@ -141,14 +141,13 @@ systemctl --user status wetypex-voice-pad.service
 
 日志在 `~/.local/share/fcitx5-wetypex/voice-pad.log`。
 
-### 4. 装上 keymapper 并写上两行
+### 4. 装上 keymapper 并写上这一行
 
-快捷键不在 WeTypeX 里。按下一节安装 keymapper，再把下面两行放进 `~/.config/keymapper.conf`，并且放在所有 `[class = ...]` 窗口块外面，这样 Moonlight 里也同样生效：
+快捷键不在 WeTypeX 里。按下一节安装 keymapper，再把下面这一行放进 `~/.config/keymapper.conf`，并且放在所有 `[class = ...]` 窗口块外面，这样 Moonlight 里也同样生效：
 
 ```ini
-# 任何窗口：Ctrl+F11 / F10 开始或结束 WeTypeX 语音
+# 任何窗口：Ctrl+F11 开始或结束 WeTypeX 语音
 ControlLeft {F11} >> $(/usr/bin/wetypex-voice-pad trigger)
-F10 >> $(/usr/bin/wetypex-voice-pad trigger)
 ```
 
 路径用 `/usr/bin/wetypex-voice-pad`。不要写成某一台电脑主目录里的路径。
@@ -177,7 +176,7 @@ systemctl --user restart wetypex-voice-pad.service
 
 ## keymapper
 
-[keymapper](https://github.com/houmain/keymapper) 是一套按键重映射工具。它在按键进入窗口之前就把键拿到，可以换成别的键，也可以运行一条命令。它不是输入法，也不看当前有没有文本框。Moonlight、全屏游戏把键盘独占之后，Fcitx 的快捷键进不去，keymapper 仍然能接到 `F10` 和 `Ctrl+F11`，所以语音快捷键放在这里。
+[keymapper](https://github.com/houmain/keymapper) 是一套按键重映射工具。它在按键进入窗口之前就把键拿到，可以换成别的键，也可以运行一条命令。它不是输入法，也不看当前有没有文本框。Moonlight、全屏游戏把键盘独占之后，Fcitx 的快捷键进不去，keymapper 仍然能接到 `Ctrl+F11`，所以语音快捷键放在这里。
 
 它由两个进程组成：
 
@@ -222,7 +221,7 @@ sudo systemctl restart keymapperd
 
 只重启服务、用户侧的 `keymapper` 仍拿着旧配置时，新快捷键不会出现。
 
-### 配置文件里这两行是什么意思
+### 配置文件里这一行是什么意思
 
 文件一般是 `~/.config/keymapper.conf`。一行的左边是按下的键，`>>` 右边是要做的事。键名区分大小写，`F11` 不能写成 `f11`。
 
@@ -230,15 +229,13 @@ sudo systemctl restart keymapperd
 ControlLeft {F11} >> $(/usr/bin/wetypex-voice-pad trigger)
 ```
 
-`ControlLeft {F11}` 表示按住左边的 Ctrl，再按 F11。`$()` 表示运行里面的命令，而不是发出另一个按键。`wetypex-voice-pad trigger` 通知已经在后台的悬浮条：没在录音就开始，正在录音就结束。
+`ControlLeft {F11}` 表示按住左边的 Ctrl，再按 F11。`$()` 表示运行里面的命令，而不是发出另一个按键。`wetypex-voice-pad trigger` 通知已经在后台的悬浮条：没在录音就开始，正在录音就结束。单独的 `F10` 不绑定语音。
 
-`F10` 那一行没有修饰键，单独按 F10 就是同一次开始或结束。
+这一行要写在窗口条件的外面。文件里的 `[class = 'moonlight']` 只对 Moonlight 生效，下一段 `[default]` 结束这段条件。语音这一行放在所有这种块之后，任何窗口都会走到。
 
-这两行要写在窗口条件的外面。文件里的 `[class = 'moonlight']` 只对 Moonlight 生效，下一段 `[default]` 结束这段条件。语音这两行放在所有这种块之后，任何窗口都会走到。
+`keymapper.conf` 里通常还有这台电脑自己的其他快捷键。换机器时只复制语音这一行，不要把整份文件原样拿过去。原文件里的命令路径、屏幕布局和需要密码的命令都是这一台机器的。
 
-`keymapper.conf` 里通常还有这台电脑自己的其他快捷键。换机器时只复制语音这两行，不要把整份文件原样拿过去。原文件里的命令路径、屏幕布局和需要密码的命令都是这一台机器的。
-
-按住的键会重复触发命令。语音这两行没有在结尾加 `^`，所以按住不放可能连着触发几次；0.35 秒内的重复会被悬浮条丢掉。点按即可。
+按住的键会重复触发命令。这一行没有在结尾加 `^`，所以按住不放可能连着触发几次；0.35 秒内的重复会被悬浮条丢掉。点按即可。
 
 ### 和 just-talk 不要同时占用 Ctrl+F11
 
@@ -249,7 +246,7 @@ ControlLeft {F11} >> $(/usr/bin/wetypex-voice-pad trigger)
 GitHub 上的 fork 已经包含上面的源码。这台电脑当前跑的仍是主目录里的副本：
 
 - 快捷键程序：`~/.local/bin/wetypex-voice-pad`
-- 配置里的两行指向这个主目录路径
+- 配置里的 Ctrl+F11 指向这个主目录路径
 - 语音服务由 `~/.local/bin/fcitx5-wetypex-voice` 转到 `~/.local/lib/fcitx5-wetypex/voice_stream.py`
 
 所以这台电脑在重新编译安装之前，行为不会因为 GitHub 更新而改变。装好 `/usr` 里的版本后，把配置里的路径改成 `/usr/bin/wetypex-voice-pad`，删掉那两份 `~/.local` 副本，再让 `keymapper -u` 重新读配置。

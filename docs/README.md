@@ -13,7 +13,7 @@
 | 修改输入方式、外观、快捷键或同步开关 | [配置参考](configuration.md) |
 | 查询某个按键在不同模式下的行为 | [按键与输入模式](input-handling.md) |
 | 使用或排查语音输入 | [流式语音输入](voice-input.md) |
-| 在任意窗口用 F10 / Ctrl+F11 语音，或把这套改动装到另一台电脑 | [快捷键语音](voice-shortcut.md) |
+| 在任意窗口用 Ctrl+F11 语音，或把这套改动装到另一台电脑 | [快捷键语音](voice-shortcut.md) |
 | 在微信中使用原版表情 | [Linux 微信表情](wechat-emoticons.md) |
 | 输入日期和时间 | [日期、时间候选](date-time-input.md) |
 | 在 Hyprland 中配置窗口规则 | [Hyprland 兼容](hyprland.md) |

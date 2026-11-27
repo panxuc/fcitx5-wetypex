@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""F10 dictation that talks to the WeTypeX voice service directly.
+"""Ctrl+F11 dictation that talks to the WeTypeX voice service directly.
 
 The first trigger starts recording. The second one stops it. Text stays in
 the bottom overlay until the result is ready, then it is copied and pasted.
