@@ -260,7 +260,7 @@ install(PROGRAMS scripts/setup_runtime.py tools/prepare_macos_runtime.py DESTINA
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/runtime-lease.sh DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES scripts/wechat_emoticons.py scripts/runtime_catalog.py scripts/runtime_manager.py scripts/group_sync.py data/runtime-profiles.json DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
 install(FILES scripts/voice_stream.py scripts/voice_card.py DESTINATION ${CMAKE_INSTALL_DATADIR}/fcitx5-wetypex)
-pkg_check_modules(VOICE_OVERLAY cairo x11 xrender xext)
+pkg_check_modules(VOICE_OVERLAY cairo x11 xrender xext xinerama)
 if(VOICE_OVERLAY_FOUND)
   add_executable(wetypex-voice-overlay scripts/wetypex-voice-overlay.c)
   target_compile_options(wetypex-voice-overlay PRIVATE ${VOICE_OVERLAY_CFLAGS_OTHER})

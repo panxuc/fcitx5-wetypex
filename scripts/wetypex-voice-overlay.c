@@ -1,4 +1,7 @@
-/* Same kind of X11 overlay as just-talk: override-redirect, drawn with real pixels. */
+/* Same X11 overlay as just-talk.
+   With a compositor: 32-bit premultiplied pixels via XPutImage.
+   Without one (this machine): 24-bit window plus a rounded shape mask.
+   A 32-bit window stays invisible when nothing is compositing. */
 #define _GNU_SOURCE
 #include <cairo/cairo.h>
 #include <cairo/cairo-xlib.h>
@@ -12,16 +15,26 @@
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/extensions/Xinerama.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/shape.h>
 
 static int width = 122, height = 42;
 static int visible = 0;
+static int use_argb = 0;
+static GC draw_gc = 0;
 
 static int x_error(Display *display, XErrorEvent *event) {
   (void)display;
   (void)event;
   return 0;
+}
+
+static int compositor_running(Display *display, int screen) {
+  char name[32];
+  snprintf(name, sizeof name, "_NET_WM_CM_S%d", screen);
+  Atom atom = XInternAtom(display, name, False);
+  return XGetSelectionOwner(display, atom) != None;
 }
 
 static Visual *argb_visual(Display *display, int screen) {
@@ -45,45 +58,117 @@ static Visual *argb_visual(Display *display, int screen) {
   return visual;
 }
 
-static int moonlight_rect(Display *display, int screen, int *x, int *y, int *w, int *h) {
-  Window root = RootWindow(display, screen);
-  Window root_return, parent;
-  Window *children = NULL;
+static void consider_moonlight(Display *display, Window root, Window win, int *best, int *x, int *y, int *w, int *h) {
+  XClassHint hint = {0};
+  if (!XGetClassHint(display, win, &hint))
+    return;
+  int match = (hint.res_class && strcasestr(hint.res_class, "moonlight")) ||
+              (hint.res_name && strcasestr(hint.res_name, "moonlight"));
+  if (hint.res_name)
+    XFree(hint.res_name);
+  if (hint.res_class)
+    XFree(hint.res_class);
+  if (!match)
+    return;
+  XWindowAttributes attrs;
+  if (!XGetWindowAttributes(display, win, &attrs) || attrs.map_state != IsViewable)
+    return;
+  if (attrs.width < 400 || attrs.height < 300)
+    return;
+  if (attrs.width * attrs.height <= *best)
+    return;
+  Window child = 0;
+  int abs_x = 0, abs_y = 0;
+  XTranslateCoordinates(display, win, root, 0, 0, &abs_x, &abs_y, &child);
+  *best = attrs.width * attrs.height;
+  *x = abs_x;
+  *y = abs_y;
+  *w = attrs.width;
+  *h = attrs.height;
+}
+
+static void walk_moonlight(Display *display, Window root, Window win, int depth, int *best, int *x, int *y, int *w, int *h) {
+  consider_moonlight(display, root, win, best, x, y, w, h);
+  if (depth <= 0)
+    return;
+  Window root_return, parent, *children = NULL;
   unsigned count = 0;
-  if (!XQueryTree(display, root, &root_return, &parent, &children, &count))
-    return 0;
-  int best = 0;
-  for (unsigned i = 0; i < count; i++) {
-    XClassHint hint = {0};
-    if (!XGetClassHint(display, children[i], &hint))
-      continue;
-    int match = (hint.res_class && strcasestr(hint.res_class, "moonlight")) ||
-                (hint.res_name && strcasestr(hint.res_name, "moonlight"));
-    if (hint.res_name)
-      XFree(hint.res_name);
-    if (hint.res_class)
-      XFree(hint.res_class);
-    if (!match)
-      continue;
-    XWindowAttributes attrs;
-    if (!XGetWindowAttributes(display, children[i], &attrs) || attrs.map_state != IsViewable)
-      continue;
-    if (attrs.width < 400 || attrs.height < 300)
-      continue;
-    if (attrs.width * attrs.height <= best)
-      continue;
-    Window child = 0;
-    int abs_x = 0, abs_y = 0;
-    XTranslateCoordinates(display, children[i], root, 0, 0, &abs_x, &abs_y, &child);
-    best = attrs.width * attrs.height;
-    *x = abs_x;
-    *y = abs_y;
-    *w = attrs.width;
-    *h = attrs.height;
-  }
+  if (!XQueryTree(display, win, &root_return, &parent, &children, &count))
+    return;
+  for (unsigned i = 0; i < count; i++)
+    walk_moonlight(display, root, children[i], depth - 1, best, x, y, w, h);
   if (children)
     XFree(children);
+}
+
+static int moonlight_rect(Display *display, int screen, int *x, int *y, int *w, int *h) {
+  int best = 0;
+  walk_moonlight(display, RootWindow(display, screen), RootWindow(display, screen), 3, &best, x, y, w, h);
   return best > 0;
+}
+
+static void monitor_of_focus(Display *display, int screen, int *x, int *y, int *w, int *h) {
+  *x = 0;
+  *y = 0;
+  *w = DisplayWidth(display, screen);
+  *h = DisplayHeight(display, screen);
+  Window focus = None;
+  int revert = 0;
+  XGetInputFocus(display, &focus, &revert);
+  if (focus == None || focus == PointerRoot)
+    return;
+  XWindowAttributes attrs;
+  if (!XGetWindowAttributes(display, focus, &attrs))
+    return;
+  Window child = 0;
+  int fx = 0, fy = 0;
+  if (!XTranslateCoordinates(display, focus, RootWindow(display, screen), attrs.width / 2, attrs.height / 2, &fx, &fy, &child))
+    return;
+  int count = 0;
+  XineramaScreenInfo *screens = XineramaQueryScreens(display, &count);
+  if (!screens)
+    return;
+  for (int i = 0; i < count; i++) {
+    int sx = screens[i].x_org, sy = screens[i].y_org;
+    int sw = screens[i].width, sh = screens[i].height;
+    if (fx >= sx && fx < sx + sw && fy >= sy && fy < sy + sh) {
+      *x = sx;
+      *y = sy;
+      *w = sw;
+      *h = sh;
+      break;
+    }
+  }
+  XFree(screens);
+}
+
+static void apply_shape(Display *display, Window window) {
+  int radius = height / 2;
+  int stride = (width + 7) / 8;
+  char *bits = calloc((size_t)stride * (size_t)height, 1);
+  if (!bits)
+    return;
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      int inside = 1;
+      if (x < radius || x >= width - radius) {
+        int cx = x < radius ? radius : width - radius - 1;
+        int cy = y < radius ? radius : (y >= height - radius ? height - radius - 1 : y);
+        if (y < radius || y >= height - radius) {
+          int dx = x - cx, dy = y - cy;
+          inside = dx * dx + dy * dy <= radius * radius;
+        }
+      }
+      if (inside)
+        bits[y * stride + x / 8] |= (char)(1 << (x % 8));
+    }
+  }
+  Pixmap mask = XCreateBitmapFromData(display, window, bits, (unsigned)width, (unsigned)height);
+  free(bits);
+  if (!mask)
+    return;
+  XShapeCombineMask(display, window, ShapeBounding, 0, 0, mask, ShapeSet);
+  XFreePixmap(display, mask);
 }
 
 static void rounded(cairo_t *cr, double x, double y, double w, double h, double radius) {
@@ -122,16 +207,19 @@ static void measure(const char *text, int *text_w, int *text_h) {
   cairo_surface_destroy(surface);
 }
 
-static void paint(Display *display, Window window, Visual *visual, const char *state, const char *text) {
-  cairo_surface_t *surface = cairo_xlib_surface_create(display, window, visual, width, height);
-  cairo_t *cr = cairo_create(surface);
+static void draw_pill(cairo_t *cr, const char *state, const char *text, int opaque) {
   cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-  cairo_set_source_rgba(cr, 0, 0, 0, 0);
-  cairo_paint(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-  rounded(cr, 0, 0, width, height, height / 2.0);
-  cairo_set_source_rgba(cr, 20 / 255.0, 20 / 255.0, 20 / 255.0, 215 / 255.0);
-  cairo_fill(cr);
+  if (opaque) {
+    cairo_set_source_rgb(cr, 20 / 255.0, 20 / 255.0, 20 / 255.0);
+    cairo_paint(cr);
+  } else {
+    cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    rounded(cr, 0, 0, width, height, height / 2.0);
+    cairo_set_source_rgba(cr, 20 / 255.0, 20 / 255.0, 20 / 255.0, 215 / 255.0);
+    cairo_fill(cr);
+  }
   if (state && strcmp(state, "recording") == 0)
     cairo_set_source_rgb(cr, 1, 65 / 255.0, 65 / 255.0);
   else if (state && strcmp(state, "polishing") == 0)
@@ -146,8 +234,31 @@ static void paint(Display *display, Window window, Visual *visual, const char *s
     cairo_move_to(cr, 42, height / 2.0 + 5);
     cairo_show_text(cr, text);
   }
+}
+
+static void paint(Display *display, Window window, Visual *visual, const char *state, const char *text) {
+  if (!use_argb) {
+    cairo_surface_t *surface = cairo_xlib_surface_create(display, window, visual, width, height);
+    cairo_t *cr = cairo_create(surface);
+    draw_pill(cr, state, text, 1);
+    cairo_destroy(cr);
+    cairo_surface_destroy(surface);
+    XFlush(display);
+    return;
+  }
+  cairo_surface_t *image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
+  cairo_t *cr = cairo_create(image);
+  draw_pill(cr, state, text, 0);
   cairo_destroy(cr);
-  cairo_surface_destroy(surface);
+  cairo_surface_flush(image);
+  char *data = (char *)cairo_image_surface_get_data(image);
+  XImage *ximg = XCreateImage(display, visual, 32, ZPixmap, 0, data, (unsigned)width, (unsigned)height, 32, 0);
+  if (ximg) {
+    XPutImage(display, window, draw_gc, ximg, 0, 0, 0, 0, (unsigned)width, (unsigned)height);
+    ximg->data = NULL;
+    XDestroyImage(ximg);
+  }
+  cairo_surface_destroy(image);
   XFlush(display);
 }
 
@@ -158,16 +269,22 @@ int main(void) {
   if (!display)
     return 1;
   int screen = DefaultScreen(display);
-  Visual *visual = argb_visual(display, screen);
-  int depth = 32;
-  Colormap colormap = 0;
   Window root = RootWindow(display, screen);
-  if (!visual) {
-    visual = DefaultVisual(display, screen);
-    depth = DefaultDepth(display, screen);
-    colormap = DefaultColormap(display, screen);
-  } else {
+  Visual *visual = NULL;
+  int depth = 0;
+  Colormap colormap = 0;
+  use_argb = compositor_running(display, screen);
+  if (use_argb)
+    visual = argb_visual(display, screen);
+  if (!visual)
+    use_argb = 0;
+  if (use_argb) {
+    depth = 32;
     colormap = XCreateColormap(display, root, visual, AllocNone);
+  } else {
+    depth = DefaultDepth(display, screen);
+    visual = DefaultVisual(display, screen);
+    colormap = DefaultColormap(display, screen);
   }
   XSetWindowAttributes attrs;
   memset(&attrs, 0, sizeof attrs);
@@ -177,11 +294,19 @@ int main(void) {
   attrs.background_pixel = 0;
   attrs.border_pixel = 0;
   Window window = XCreateWindow(
-      display, root, 0, 0, width, height, 0, depth, InputOutput, visual,
+      display, root, 0, 0, (unsigned)width, (unsigned)height, 0, depth, InputOutput, visual,
       CWColormap | CWOverrideRedirect | CWSaveUnder | CWBackPixel | CWBorderPixel, &attrs);
+  if (!use_argb) {
+    XSetWindowAttributes again;
+    again.override_redirect = True;
+    again.save_under = True;
+    XChangeWindowAttributes(display, window, CWOverrideRedirect | CWSaveUnder, &again);
+    apply_shape(display, window);
+  }
   Atom type = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
   Atom utility = XInternAtom(display, "_NET_WM_WINDOW_TYPE_UTILITY", False);
   XChangeProperty(display, window, type, XA_ATOM, 32, PropModeReplace, (unsigned char *)&utility, 1);
+  draw_gc = XCreateGC(display, window, 0, NULL);
   XSelectInput(display, window, 0);
   XShapeCombineRectangles(display, window, ShapeInput, 0, 0, NULL, 0, ShapeSet, Unsorted);
   XStoreName(display, window, "wetypex-voice-card");
@@ -227,10 +352,13 @@ int main(void) {
           next_w = 520;
         if (next_h < 42)
           next_h = 42;
-        if (next_w != width || next_h != height) {
+        int resized = next_w != width || next_h != height;
+        if (resized) {
           width = next_w;
           height = next_h;
-          XResizeWindow(display, window, width, height);
+          XResizeWindow(display, window, (unsigned)width, (unsigned)height);
+          if (!use_argb)
+            apply_shape(display, window);
         }
         visible = 1;
         XMapRaised(display, window);
@@ -239,8 +367,9 @@ int main(void) {
     }
     if (!visible)
       continue;
-    int origin_x = 0, origin_y = 0, area_w = DisplayWidth(display, screen), area_h = DisplayHeight(display, screen);
-    moonlight_rect(display, screen, &origin_x, &origin_y, &area_w, &area_h);
+    int origin_x = 0, origin_y = 0, area_w = 0, area_h = 0;
+    if (!moonlight_rect(display, screen, &origin_x, &origin_y, &area_w, &area_h))
+      monitor_of_focus(display, screen, &origin_x, &origin_y, &area_w, &area_h);
     int x = origin_x + (area_w - width) / 2;
     int y = origin_y + area_h - height - 100;
     if (x < origin_x)
